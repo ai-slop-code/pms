@@ -1,0 +1,271 @@
+/*
+ * PMS Base stylesheet
+ * Global reset + typography defaults + focus rule + motion preference + legacy support.
+ * See spec/PMS_07_Design_Language.md §2 tokens and §9 accessibility.
+ */
+
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+html {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: inherit;
+  color: inherit;
+  background: inherit;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-weight: 600;
+  line-height: var(--line-height-tight);
+  color: var(--color-text);
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: 700;
+}
+h2 {
+  font-size: var(--font-size-h2);
+}
+h3 {
+  font-size: var(--font-size-h3);
+}
+h4 {
+  font-size: var(--font-size-h4);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+  color: var(--color-primary-hover);
+}
+
+small,
+.muted {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-family-mono);
+  font-size: 0.95em;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin: var(--space-5) 0;
+}
+
+/* ───── Utility: tabular figures for money / counts ───── */
+.num,
+.money,
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* ───── Focus ring (global) ───── */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* ───── Skip link ───── */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  z-index: 1000;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  left: var(--space-3);
+  top: var(--space-3);
+}
+
+/* ───── Screen-reader only ───── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ───── Reduced motion ───── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* =========================================================================
+ * LEGACY support.
+ * These rules keep the pre-refactor module views working until each is
+ * migrated to the Ui* primitives. New views MUST use the primitives and
+ * MUST NOT depend on these.
+ * ========================================================================= */
+
+button,
+.btn {
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-4);
+  min-height: 36px;
+  font: 500 var(--font-size-md) / 1 var(--font-family-sans);
+  background: var(--color-primary);
+  color: #fff;
+  transition: background var(--motion-1) var(--ease-standard);
+}
+button:hover:not(:disabled),
+.btn:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+button:disabled,
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+button.secondary,
+.btn.secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+button.secondary:hover:not(:disabled),
+.btn.secondary:hover:not(:disabled) {
+  background: var(--color-sunken);
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 0 var(--space-3);
+  min-height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font: var(--font-size-md) / 1.4 var(--font-family-sans);
+  color: var(--color-text);
+  background: var(--color-surface);
+  transition: border-color var(--motion-1) var(--ease-standard),
+    box-shadow var(--motion-1) var(--ease-standard);
+}
+textarea {
+  padding: var(--space-2) var(--space-3);
+  min-height: 72px;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.field {
+  margin-bottom: var(--space-4);
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  box-shadow: var(--shadow-0);
+}
+
+.error {
+  color: var(--danger-fg);
+  font-size: var(--font-size-sm);
+  margin-top: var(--space-2);
+}
+
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+th,
+td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-md);
+}
+th {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: var(--color-sunken);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--color-border-strong);
+}

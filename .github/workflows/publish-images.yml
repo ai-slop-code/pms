@@ -1,0 +1,142 @@
+name: Publish images
+
+# Builds the backend and frontend container images and pushes them to the
+# repository's GitHub Container Registry (ghcr.io/<owner>/<repo>-{backend,frontend}).
+#
+# Triggers:
+#   - push to main           -> tag `main` and `sha-<short>` (rolling latest dev build)
+#   - tag v*                 -> semver tags + `latest`
+#   - manual workflow_dispatch
+#
+# Pull the published image with:
+#   docker pull ghcr.io/<owner>/<repo>-backend:latest
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write     # required to attach assets to GitHub Releases
+  packages: write     # required to push to ghcr.io
+  id-token: write     # required by build-push-action provenance
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build & push (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: backend
+            dockerfile: deploy/Dockerfile.backend
+          - image: frontend
+            dockerfile: deploy/Dockerfile.frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-${{ matrix.image }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') || startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: true
+          sbom: true
+
+  frontend-bundle:
+    name: Frontend static bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build SPA
+        working-directory: frontend
+        run: npm run build
+
+      - name: Compute version label
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package bundle
+        run: |
+          mkdir -p out
+          tar -C frontend -czf "out/pms-frontend-${{ steps.ver.outputs.version }}.tar.gz" dist
+          (cd out && sha256sum "pms-frontend-${{ steps.ver.outputs.version }}.tar.gz" \
+            > "pms-frontend-${{ steps.ver.outputs.version }}.tar.gz.sha256")
+
+      - name: Upload as workflow artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pms-frontend-${{ steps.ver.outputs.version }}
+          path: out/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/pms-frontend-${{ steps.ver.outputs.version }}.tar.gz
+            out/pms-frontend-${{ steps.ver.outputs.version }}.tar.gz.sha256
+          fail_on_unmatched_files: true
+          # Auto-generate the release body from PR titles + contributors
+          # since the previous tag. You can still edit the text afterwards
+          # in the Releases UI; re-running the workflow will not overwrite
+          # manual edits.
+          generate_release_notes: true

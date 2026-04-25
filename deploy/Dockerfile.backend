@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.7
+#
+# Backend-only image. Serves the JSON API on :8080. The SPA is NOT bundled;
+# run the nginx image (deploy/Dockerfile.frontend) alongside it.
+#
+# Build from the repo root:
+#   docker build -f deploy/Dockerfile.backend -t pms-backend .
+
+FROM golang:1.26-bookworm AS build
+
+WORKDIR /src
+
+# Copy only module files first to maximise build-cache reuse.
+COPY backend/go.mod backend/go.sum ./backend/
+WORKDIR /src/backend
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
+# Now copy the source tree and build a fully-static binary. CGO is kept off
+# because modernc.org/sqlite is a pure-Go driver.
+WORKDIR /src
+COPY backend ./backend
+WORKDIR /src/backend
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" -o /out/pms-server ./cmd/server
+
+# Tiny healthcheck binary used by HEALTHCHECK below. Distroless static has
+# no shell/wget/curl, so we ship a self-contained Go probe instead.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" -o /out/pms-healthcheck ./cmd/healthcheck
+
+# ---- runtime stage (distroless, non-root) ---------------------------------
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+
+WORKDIR /app
+COPY --from=build /out/pms-server /app/pms-server
+COPY --from=build /out/pms-healthcheck /app/pms-healthcheck
+
+ENV PMS_ENV=production \
+    DATABASE_PATH=/var/lib/pms/pms.db
+
+EXPOSE 8080
+USER nonroot:nonroot
+
+# Probe /readyz so the container is marked unhealthy when the SQLite handle
+# or required env (e.g. SESSION_KEY) is missing. start-period gives the
+# server time to run migrations on first boot.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD ["/app/pms-healthcheck"]
+
+ENTRYPOINT ["/app/pms-server"]

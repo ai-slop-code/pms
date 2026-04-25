@@ -1,0 +1,38 @@
+# Caddy config for the PMS stack.
+#
+# {$PMS_DOMAIN} is substituted from the docker-compose environment.
+# Caddy handles HTTPS automatically via Let's Encrypt. The upstream
+# already emits strict security headers, but we add HSTS here so it
+# applies before any future non-PMS handlers are added.
+
+{$PMS_DOMAIN} {
+    encode zstd gzip
+
+    # HSTS for one year, include subdomains, and opt in to the preload list.
+    # Browsers only honour preload when `includeSubDomains; preload` is set.
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Defence in depth: the app already sets these, but setting them
+        # at the edge guards against misconfiguration.
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    # Health probe for external load balancers / uptime checks.
+    handle /healthz {
+        reverse_proxy pms-frontend:80
+    }
+
+    # Everything else goes to the nginx container, which serves the SPA
+    # and reverse-proxies /api/* to the backend.
+    reverse_proxy pms-frontend:80 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-For   {remote_host}
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
