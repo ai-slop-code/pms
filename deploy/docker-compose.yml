@@ -66,6 +66,12 @@ services:
     depends_on:
       pms-backend:
         condition: service_healthy
+    environment:
+      # Empty = same-origin (this container's nginx proxies /api/* to
+      # pms-backend). Set to an absolute URL to retarget the SPA at a
+      # backend on a different hostname; the entrypoint regenerates
+      # /usr/share/nginx/html/config.js on every start.
+      PMS_API_BASE_URL: ${PMS_API_BASE_URL:-}
     expose:
       - "80"
     logging:
