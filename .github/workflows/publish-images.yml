@@ -5,7 +5,7 @@ name: Publish images
 #
 # Triggers:
 #   - push to main           -> tag `main` and `sha-<short>` (rolling latest dev build)
-#   - tag v*                 -> semver tags + `latest`
+#   - tag release/v*         -> semver tags + `latest`
 #   - manual workflow_dispatch
 #
 # Pull the published image with:
@@ -14,7 +14,7 @@ name: Publish images
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
+    tags: ["release/v*.*.*"]
   workflow_dispatch:
 
 permissions:
