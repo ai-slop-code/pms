@@ -16,7 +16,10 @@ import (
 //     account whose password an admin has just reset).
 //  2. user.Role == "super_admin" and the user has not yet enrolled in TOTP.
 //     Super-admins are the highest-privilege accounts; we refuse to let
-//     them operate without a second factor (PMS_11 follow-up #6).
+//     them operate without a second factor (PMS_11 follow-up #6). The
+//     enrolment requirement is short-circuited when TOTPDevBypass is set
+//     (PMS_2FA_DEV_BYPASS=true, only valid for PMS_ENV ∈ {dev,test}) so
+//     that smoke tests and local development do not have to scan a QR.
 //
 // Allowlist below covers the endpoints required to *clear* the gate
 // (rotate password, enrol 2FA), plus the read-only context endpoints the
@@ -36,7 +39,7 @@ func (s *Server) ProvisioningGate(next http.Handler) http.Handler {
 			WriteError(w, http.StatusForbidden, "password_change_required")
 			return
 		}
-		if u.Role == "super_admin" {
+		if u.Role == "super_admin" && !s.TOTPDevBypass {
 			_, enrolled, err := s.Store.GetUserTOTPSecret(r.Context(), u.ID)
 			if err == nil && !enrolled {
 				WriteError(w, http.StatusForbidden, "two_factor_enrolment_required")

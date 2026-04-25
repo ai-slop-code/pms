@@ -18,17 +18,24 @@ type userResponse struct {
 // loginResponse is what POST /api/auth/login returns.
 // If MFARequired is true, User is omitted — the caller must POST the TOTP
 // code to /api/auth/2fa/verify before the session can be used.
+// ProvisioningRequired mirrors meResponse so the SPA can route to the
+// /provisioning view immediately after login without an extra round-trip.
 type loginResponse struct {
-	User        *userDTO `json:"user,omitempty"`
-	MFARequired bool     `json:"mfa_required,omitempty"`
+	User                 *userDTO `json:"user,omitempty"`
+	MFARequired          bool     `json:"mfa_required,omitempty"`
+	ProvisioningRequired bool     `json:"provisioning_required,omitempty"`
 }
 
 // meResponse is what GET /api/auth/me returns. When a session is pending
 // its 2FA challenge, User is nil and MFARequired is true so the SPA can
-// redirect to the challenge screen.
+// redirect to the challenge screen. ProvisioningRequired mirrors the
+// server-side gate so the SPA can render the rotation/enrolment flow
+// without having to second-guess the backend (e.g. when the dev bypass
+// is on).
 type meResponse struct {
-	User        *userDTO `json:"user,omitempty"`
-	MFARequired bool     `json:"mfa_required,omitempty"`
+	User                  *userDTO `json:"user,omitempty"`
+	MFARequired           bool     `json:"mfa_required,omitempty"`
+	ProvisioningRequired  bool     `json:"provisioning_required,omitempty"`
 }
 
 type userWithPermissionsResponse struct {
