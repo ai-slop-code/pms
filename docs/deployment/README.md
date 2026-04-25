@@ -4,10 +4,16 @@ Four supported layouts, in order of simplicity:
 
 1. **Docker Compose + Caddy** — one host, automatic TLS, zero config beyond DNS. Recommended.
 2. **systemd binary** — single host, no container runtime.
+2b. **Standalone backend container** (`podman run` / `docker run`) — just the API, no frontend, no compose. Useful when the SPA lives elsewhere.
 3. **Static frontend + your own infra** — ship `frontend/dist` to any static host (S3, nginx, Apache, Cloudflare Pages, GitHub Pages behind a proxy, …) and point it at a separately hosted backend.
 4. **Manual Go build** — local development or custom orchestration.
 
-All layouts share the same env vars; see [`deploy/.env.example`](../../deploy/.env.example).
+All layouts share the same env vars. The canonical, exhaustive list with
+defaults and inline comments lives in
+[`deploy/.env.example`](../../deploy/.env.example) — copy it and edit in
+place rather than rebuilding the file from snippets in this doc. Sections
+below only highlight the variables that *change meaning* between layouts
+(e.g. `PMS_TRUSTED_PROXY`, `PMS_API_BASE_URL`, `PMS_COOKIE_SAMESITE`).
 
 ## 1. Docker Compose (recommended)
 
@@ -72,6 +78,93 @@ sudo journalctl -u pms-server -f
 
 The unit is locked down (`ProtectSystem=strict`, `NoNewPrivileges`, seccomp
 filter). Writable paths are limited to `/var/lib/pms`.
+
+## 2b. Standalone backend container (Podman / `docker run`)
+
+Use this when you only want the API container — for example, you already
+host the SPA elsewhere (S3, Cloudflare Pages, the static tarball on
+nginx) and you just need somewhere to run `pms-server` with a persistent
+volume. No compose, no frontend container, no Caddy.
+
+The published image is a distroless static binary running as `nonroot`
+(uid/gid 65532), so it works the same with rootless Podman and Docker.
+
+```bash
+# 1. Pull the published image (or build locally with podman build -f deploy/Dockerfile.backend).
+podman pull ghcr.io/<owner>/<repo>-backend:latest
+
+# 2. Persistent volume for the SQLite DB, audit logs, invoice PDFs.
+podman volume create pms-data
+
+# 3. Start from the canonical env template and edit in place. This file
+#    contains every supported variable (secrets, observability, OTel,
+#    Nuki, audit retention, 2FA issuer, …) with comments — do NOT
+#    cherry-pick a hand-rolled subset.
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/deploy/.env.example -o pms.env
+# Or, if you cloned the repo: cp deploy/.env.example pms.env
+$EDITOR pms.env
+chmod 600 pms.env
+
+# 4. Generate the secrets the file asks for:
+openssl rand -hex 32       # paste into SESSION_SECRET
+openssl rand -base64 32    # paste into DB_ENCRYPTION_KEY
+
+# 5. For this topology specifically, set:
+#    PMS_TRUSTED_PROXY=true   if a reverse proxy fronts the API
+#                              (so per-IP rate limiting keys on X-Forwarded-For)
+#    PMS_TRUSTED_PROXY=false  if the container is the public ingress
+#    PMS_API_BASE_URL is not used by the backend itself (it's read by
+#    the frontend container); ignore it here.
+#    PMS_COOKIE_SAMESITE=none + PMS_COOKIE_SECURE=true if the SPA lives
+#    on a different origin (see section 3b).
+
+# 6. Run.
+podman run -d --name pms-backend \
+    --restart=unless-stopped \
+    --read-only --tmpfs /tmp \
+    --cap-drop=ALL --security-opt=no-new-privileges \
+    -p 127.0.0.1:8080:8080 \
+    -v pms-data:/data:Z \
+    --env-file ./pms.env \
+    --health-cmd '/app/pms-healthcheck' \
+    --health-interval=30s --health-timeout=5s --health-retries=3 \
+    ghcr.io/<owner>/<repo>-backend:latest
+```
+
+A few container-specific notes:
+
+- `-p 127.0.0.1:8080:8080` keeps the API loopback-only. Put nginx, Caddy,
+  or an ALB in front to terminate TLS and forward `/api/*` (or all paths)
+  to it. If you want to expose it directly, use `-p 8080:8080` and run
+  the backend behind something that handles HTTPS — never publish the
+  raw HTTP port to the internet.
+- `:Z` on the volume mount is the SELinux relabel hint and is harmless
+  on systems without SELinux (Docker on Ubuntu/macOS). On Podman with
+  SELinux enabled it is mandatory.
+- The image already declares a `HEALTHCHECK` running `/app/pms-healthcheck`,
+  but `podman run --health-cmd` re-asserts it for clarity and so
+  `podman healthcheck run pms-backend` works.
+- The first start runs migrations and creates the bootstrap super-admin
+  account. The user must change the password and (for super-admins)
+  enrol TOTP on first login — see the *First-boot checklist* below.
+
+To replace the binary on a new release:
+
+```bash
+podman pull ghcr.io/<owner>/<repo>-backend:latest
+podman stop pms-backend && podman rm pms-backend
+# re-run the `podman run` command above
+```
+
+The data volume is reused; migrations run on every boot and are idempotent.
+
+For systemd-managed Podman, generate a unit with:
+
+```bash
+podman generate systemd --new --name pms-backend > ~/.config/systemd/user/pms-backend.service
+systemctl --user enable --now pms-backend.service
+loginctl enable-linger $USER   # keeps the unit running after logout
+```
 
 ## 3. Static frontend + your own infra
 

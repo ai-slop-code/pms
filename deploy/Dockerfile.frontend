@@ -21,6 +21,10 @@ FROM nginx:1.27-alpine AS runtime
 
 # Static assets.
 COPY --from=build /src/frontend/dist /usr/share/nginx/html
+# Pristine copy of index.html so the entrypoint can regenerate the file
+# from a known-good source on every start (idempotent CSP patching).
+RUN install -d /etc/pms-frontend \
+    && cp /usr/share/nginx/html/index.html /etc/pms-frontend/index.html.tmpl
 # Custom nginx config: SPA history fallback + /api reverse proxy.
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 # Render /usr/share/nginx/html/config.js from PMS_API_BASE_URL at start.

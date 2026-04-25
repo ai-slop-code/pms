@@ -47,7 +47,11 @@ func Load() (*Config, error) {
 	if v := os.Getenv("CORS_ORIGINS"); v != "" {
 		origins = strings.Split(v, ",")
 		for i := range origins {
-			origins[i] = strings.TrimSpace(origins[i])
+			// Trim whitespace and any trailing slashes. Browser `Origin`
+			// headers never include a path, so a configured value of
+			// "https://app.example.com/" would never match and every
+			// write request would be rejected by the CSRF guard.
+			origins[i] = strings.TrimRight(strings.TrimSpace(origins[i]), "/")
 		}
 	}
 	ttl := 7 * 24 * time.Hour
