@@ -8,11 +8,19 @@
  *   set `CORS_ORIGINS` to include the SPA's origin and issue the session
  *   cookie with `SameSite=None; Secure` (both sides must be on HTTPS).
  *
- * Configured at build time via `VITE_API_BASE_URL`. Trailing slashes are
- * stripped so callers can continue passing paths that start with `/api/...`.
+ * Resolution order (first match wins):
+ *   1. Runtime config: `window.__PMS_CONFIG__.apiBaseUrl` from `public/config.js`.
+ *      Operators can edit this file after deployment without rebuilding.
+ *   2. Build-time env: `VITE_API_BASE_URL` baked in via `npm run build`.
+ *
+ * Trailing slashes are stripped so callers can continue passing paths that
+ * start with `/api/...`.
  */
 function resolveBase(): string {
-  const raw = (import.meta.env?.VITE_API_BASE_URL ?? '').toString().trim()
+  const runtime =
+    typeof window !== 'undefined' ? window.__PMS_CONFIG__?.apiBaseUrl : undefined
+  const buildTime = import.meta.env?.VITE_API_BASE_URL
+  const raw = (runtime ?? buildTime ?? '').toString().trim()
   if (!raw) return ''
   return raw.replace(/\/+$/, '')
 }

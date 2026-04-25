@@ -97,4 +97,27 @@ describe('api()', () => {
       vi.resetModules()
     }
   })
+
+  it('prefers window.__PMS_CONFIG__.apiBaseUrl over VITE_API_BASE_URL (runtime config)', async () => {
+    vi.resetModules()
+    vi.stubEnv('VITE_API_BASE_URL', 'https://build-time.example.com')
+    const previous = window.__PMS_CONFIG__
+    window.__PMS_CONFIG__ = { apiBaseUrl: 'https://runtime.example.com/' }
+    try {
+      const spy = vi.fn<typeof fetch>(async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '{}',
+      } as unknown as Response))
+      globalThis.fetch = spy as unknown as typeof fetch
+      const mod = await import('./http')
+      await mod.api('/api/auth/me')
+      expect(spy.mock.calls[0]?.[0]).toBe('https://runtime.example.com/api/auth/me')
+    } finally {
+      window.__PMS_CONFIG__ = previous
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
+  })
 })
