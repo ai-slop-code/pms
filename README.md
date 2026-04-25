@@ -149,12 +149,21 @@ curl -LO https://github.com/<owner>/<repo>/releases/download/v1.2.3/pms-frontend
 curl -LO https://github.com/<owner>/<repo>/releases/download/v1.2.3/pms-frontend-v1.2.3.tar.gz.sha256
 sha256sum -c pms-frontend-v1.2.3.tar.gz.sha256
 tar -xzf pms-frontend-v1.2.3.tar.gz       # extracts to ./dist/
+# (optional) point the SPA at a backend on a different origin
+#   $EDITOR dist/config.js   # set apiBaseUrl: 'https://api.example.com'
 # upload ./dist/* to your static host
 ```
 
-The reverse-proxy rule that the static host needs (route `/api/*` to the
-backend, fall back to `index.html` for the SPA) is documented in
-[docs/deployment/README.md](docs/deployment/README.md#3-static-frontend--your-own-infra).
+The bundle ships with a `dist/config.js` that holds the runtime
+configuration (currently just `apiBaseUrl`). Leave it empty for the
+recommended same-origin setup (the static host reverse-proxies `/api/*`
+to the backend) or edit it in place to point at a backend on a
+different origin — no rebuild required, the change takes effect on the
+next browser refresh. Cross-origin deployments also need
+`CORS_ORIGINS`, `PMS_COOKIE_SAMESITE=none`, and `PMS_COOKIE_SECURE=true`
+on the backend; see
+[docs/deployment/README.md](docs/deployment/README.md#3-static-frontend--your-own-infra)
+for the full checklist.
 
 ## Development
 

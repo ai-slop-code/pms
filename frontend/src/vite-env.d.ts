@@ -13,3 +13,20 @@ interface ImportMeta {
   readonly env: ImportMetaEnv
 }
 
+/**
+ * Runtime configuration injected by `public/config.js` (loaded from
+ * `index.html` before the app bundle). Operators can edit that file after
+ * extracting the release tarball to retarget the API without rebuilding.
+ */
+interface PmsRuntimeConfig {
+  apiBaseUrl?: string
+}
+
+declare global {
+  interface Window {
+    __PMS_CONFIG__?: PmsRuntimeConfig
+  }
+}
+
+export {}
+

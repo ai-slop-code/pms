@@ -8,6 +8,12 @@
       content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     />
     <title>PMS</title>
+    <!--
+      Runtime configuration. Loaded before the app bundle so operators can
+      tweak settings (e.g. apiBaseUrl) after deployment without rebuilding.
+      See public/config.js for the available options.
+    -->
+    <script src="/config.js"></script>
   </head>
   <body>
     <div id="app"></div>

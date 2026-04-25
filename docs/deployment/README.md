@@ -77,13 +77,24 @@ filter). Writable paths are limited to `/var/lib/pms`.
 
 If you already have a way to serve static files (S3 + CloudFront, nginx,
 Apache, Caddy on a shared host, Cloudflare Pages, etc.), you only need
-the built SPA bundle and a reverse-proxy rule that forwards `/api/*` to a
-running backend. All frontend code calls same-origin `/api/...`, so the
-only requirement is that the static host and the API share an origin
-(either the same domain, or the static host proxies `/api/*` to the
-backend).
+the built SPA bundle and somewhere to run the `pms-server` binary.
+
+There are **two supported topologies** — pick whichever matches your
+infrastructure. The choice is purely operational; both are equally
+secure when configured correctly.
+
+| Mode | SPA host | API host | Cookie scope | Browser sees |
+| ---- | -------- | -------- | ------------ | ------------ |
+| **3a — Same-origin** (recommended) | `pms.example.com` | `pms.example.com` (proxied to backend) | `SameSite=Lax` | one origin |
+| **3b — Cross-origin** | `app.example.com` | `api.example.com` | `SameSite=None; Secure` | two origins, CORS preflight |
 
 ### Build the bundle
+
+The SPA reads its API base URL from `dist/config.js` at runtime, so a
+**single build works for both topologies**. You only need to override
+`VITE_API_BASE_URL` at build time if you want to bake a default into the
+bundle (e.g. for an immutable CDN deployment where editing files
+post-upload is awkward).
 
 ```bash
 cd frontend
@@ -92,18 +103,46 @@ npm run build
 # output: frontend/dist/  (static HTML/JS/CSS only, no Node runtime needed)
 ```
 
-Or from the repo root:
+Or, from the repo root:
 
 ```bash
 make frontend-build
 ```
 
+After uploading, point the SPA at the right backend by editing
+`dist/config.js` on the static host:
+
+```js
+// dist/config.js
+window.__PMS_CONFIG__ = {
+  apiBaseUrl: '',                            // mode 3a: same-origin (default)
+  // apiBaseUrl: 'https://api.example.com',  // mode 3b: cross-origin
+}
+```
+
+The change takes effect on the next browser refresh. If you prefer to
+bake the value in at build time instead, set
+`VITE_API_BASE_URL=https://api.example.com` before `npm run build`;
+runtime config (`config.js`) still wins if both are set.
+
 Upload the contents of `frontend/dist/` to your static host.
 
-### Reverse-proxy rule
+### 3a. Same-origin (SPA and API share a hostname)
 
-Point `/api/*` at a `pms-server` binary running on any reachable host.
-Minimal nginx snippet:
+The static host serves the SPA and proxies `/api/*` to the backend on
+the same hostname. Browsers see a single origin, so the session cookie
+remains `SameSite=Lax` and no CORS preflight is required. This is the
+simplest option and the default the SPA assumes.
+
+Backend env:
+
+```dotenv
+CORS_ORIGINS=https://pms.example.com
+# PMS_COOKIE_SAMESITE defaults to "lax" — leave unset.
+# PMS_COOKIE_SECURE   defaults to true in production — leave unset.
+```
+
+Reverse-proxy snippets:
 
 ```nginx
 server {
@@ -139,8 +178,6 @@ server {
 }
 ```
 
-Caddyfile equivalent:
-
 ```caddy
 pms.example.com {
     root * /var/www/pms
@@ -152,14 +189,68 @@ pms.example.com {
 }
 ```
 
-Run the backend using layout #2 (systemd) or any process supervisor you
-prefer. The static host does not need Node at runtime.
+Run the backend using layout #2 (systemd) or any process supervisor.
+The static host does not need Node at runtime.
 
-> **Cross-origin note:** if the static bundle is served from a _different_
-> origin than the API (e.g. `app.example.com` for the SPA, `api.example.com`
-> for the backend), set `CORS_ORIGINS=https://app.example.com` in the
-> backend env and ensure your reverse proxy does not strip the session
-> cookie. Same-origin hosting avoids this entirely.
+### 3b. Cross-origin (SPA and API on different domains)
+
+Use this when the API runs on its own hostname — typically `app.example.com`
+serving the SPA and `api.example.com` serving the backend. The SPA reads
+the API origin from `dist/config.js` at runtime; alternatively you can
+bake it in at build time via `VITE_API_BASE_URL=https://api.example.com`.
+
+Required configuration:
+
+| Setting | Value | Why |
+| ------- | ----- | --- |
+| `dist/config.js` `apiBaseUrl` | `https://api.example.com` | Sends API calls to the right origin (or use `VITE_API_BASE_URL` at build time). |
+| `dist/index.html` CSP `connect-src` | add `https://api.example.com` | The bundle ships with `connect-src 'self'`; without this the browser blocks every cross-origin XHR. |
+| `CORS_ORIGINS` | `https://app.example.com` | Backend allows the SPA's origin and emits the CORS headers needed for credentialed requests. |
+| `PMS_COOKIE_SAMESITE` | `none` | Browsers refuse to send `SameSite=Lax` cookies on cross-site fetches. |
+| `PMS_COOKIE_SECURE` | `true` | Required by browsers whenever `SameSite=None`. Both hosts MUST be HTTPS. |
+
+Backend env (`.env` on the API host):
+
+```dotenv
+CORS_ORIGINS=https://app.example.com
+PMS_COOKIE_SAMESITE=none
+PMS_COOKIE_SECURE=true
+```
+
+The SPA host is just a static-file host — no `/api/*` proxy needed.
+A minimal nginx config for `app.example.com`:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name app.example.com;
+
+    root /var/www/pms;
+    index index.html;
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    location = /index.html {
+        add_header Cache-Control "no-store";
+    }
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+The API host (`api.example.com`) terminates TLS and forwards to
+`pms-server:8080` using whichever proxy you prefer; no additional rules
+are required beyond preserving the `Host`, `X-Forwarded-For` and
+`X-Forwarded-Proto` headers (the same headers used in 3a).
+
+> **Why mode 3a is recommended.** Cross-origin deployment works, but it
+> exposes the cookie to a wider browser/network surface (a misconfigured
+> proxy that strips `Set-Cookie` on cross-site responses, third-party
+> cookie blocking in some browsers, the need for both hosts to be HTTPS).
+> Same-origin avoids all of this.
 
 ## 4. Manual / local development
 
