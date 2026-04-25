@@ -1,0 +1,1 @@
+-- SQLite pre-3.35 lacks ALTER TABLE DROP COLUMN. Column left in place on downgrade.

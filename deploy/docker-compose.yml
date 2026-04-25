@@ -1,0 +1,100 @@
+# Docker compose stack for a production-style PMS deployment.
+#
+# Topology:
+#   caddy (TLS, :443)  ->  pms-frontend (nginx, :80)  ->  pms-backend (:8080)
+#
+# The backend container only exposes :8080 on the internal compose network;
+# it is never reachable from the host. The frontend container serves the
+# Vue SPA and reverse-proxies /api/* to the backend. Caddy in front handles
+# Let's Encrypt certificates.
+#
+# Secrets (SESSION_SECRET, DB_ENCRYPTION_KEY, FIRST_SUPERADMIN_PASSWORD,
+# SENTRY_DSN, NUKI_API_TOKEN) must be supplied via the .env file that
+# sits next to this compose file. Never commit that file.
+
+services:
+  pms-backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: pms-backend:latest
+    restart: unless-stopped
+    environment:
+      PMS_ENV: production
+      PMS_LISTEN_ADDR: ":8080"
+      DATABASE_PATH: /var/lib/pms/pms.db
+      PMS_INVOICE_DIR: /var/lib/pms/invoices
+      SESSION_SECRET: ${SESSION_SECRET}
+      DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY}
+      FIRST_SUPERADMIN_EMAIL: ${FIRST_SUPERADMIN_EMAIL}
+      FIRST_SUPERADMIN_PASSWORD: ${FIRST_SUPERADMIN_PASSWORD}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://${PMS_DOMAIN}}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PMS_LOG_FORMAT: json
+      AUDIT_LOG_RETENTION_DAYS: ${AUDIT_LOG_RETENTION_DAYS:-365}
+      PMS_2FA_ISSUER: ${PMS_2FA_ISSUER:-PMS}
+      PMS_2FA_DEV_BYPASS: ${PMS_2FA_DEV_BYPASS:-false}
+      PMS_TRUSTED_PROXY: ${PMS_TRUSTED_PROXY:-true}
+      NUKI_API_TOKEN: ${NUKI_API_TOKEN:-}
+    volumes:
+      - pms-data:/var/lib/pms
+    expose:
+      - "8080"
+    # HEALTHCHECK is also baked into the image; this block tightens the
+    # interval for compose-aware orchestration. depends_on:condition uses it.
+    healthcheck:
+      test: ["CMD", "/app/pms-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # Cap container log volume so a noisy bug can't fill /var on a small
+    # VPS. 7 x 50 MB ≈ 350 MB total per service.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "7"
+
+  pms-frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    image: pms-frontend:latest
+    restart: unless-stopped
+    depends_on:
+      pms-backend:
+        condition: service_healthy
+    expose:
+      - "80"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - pms-frontend
+    environment:
+      PMS_DOMAIN: ${PMS_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  pms-data:
+  caddy-data:
+  caddy-config:

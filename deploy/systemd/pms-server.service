@@ -1,0 +1,61 @@
+# systemd unit for running the pms-server binary directly (no Docker).
+#
+# Install:
+#   sudo cp pms-server.service /etc/systemd/system/
+#   sudo useradd -r -s /usr/sbin/nologin -d /var/lib/pms pms
+#   sudo install -d -o pms -g pms -m 750 /var/lib/pms /etc/pms
+#   sudo install -m 640 -o root -g pms pms.env /etc/pms/pms.env
+#   sudo install -m 755 pms-server /usr/local/bin/pms-server
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pms-server
+#
+# Logs: journalctl -u pms-server -f
+
+[Unit]
+Description=PMS (Property Management System) server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pms
+Group=pms
+# Secrets (SESSION_SECRET, DB_ENCRYPTION_KEY, FIRST_SUPERADMIN_*) live here.
+EnvironmentFile=/etc/pms/pms.env
+Environment=PMS_ENV=production
+Environment=DATABASE_PATH=/var/lib/pms/pms.db
+Environment=PMS_INVOICE_DIR=/var/lib/pms/invoices
+Environment=PMS_LOG_FORMAT=json
+ExecStart=/usr/local/bin/pms-server
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+TimeoutStopSec=30
+
+# Hardening. PMS only ever writes into /var/lib/pms; everything else is
+# locked down.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ReadWritePaths=/var/lib/pms
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

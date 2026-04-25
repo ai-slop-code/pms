@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_finance_booking_payouts_property_occupancy;
+DROP INDEX IF EXISTS idx_finance_booking_payouts_property_payout_date;
+DROP TABLE IF EXISTS finance_booking_payouts;

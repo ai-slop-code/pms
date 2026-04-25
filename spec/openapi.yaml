@@ -1,0 +1,378 @@
+openapi: 3.1.0
+info:
+  title: PMS Backend API
+  description: |
+    OpenAPI contract for the PMS backend. This spec is the source of truth for
+    the public HTTP surface consumed by the Vue frontend and external clients.
+
+    Coverage is incremental: authentication, users/permissions, properties, and
+    system endpoints are fully specified here. Module-specific endpoints
+    (occupancy, cleaning, finance, invoices, messages, analytics, nuki) are
+    progressively migrated from the hand-authored TypeScript types under
+    `frontend/src/api/types/*` — see `README.md` in that folder.
+  version: 1.0.0
+  contact:
+    name: PMS Engineering
+
+servers:
+  - url: /api
+    description: Primary API prefix (also served at site root paths like `/healthz`)
+
+tags:
+  - name: System
+  - name: Auth
+  - name: Users
+  - name: Properties
+
+security:
+  - SessionCookie: []
+
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Service is alive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /readyz:
+    get:
+      tags: [System]
+      summary: Readiness probe (checks DB connectivity).
+      security: []
+      responses:
+        "200":
+          description: Service is ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+        "503":
+          description: Not ready — dependency unhealthy.
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate and start a session.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Logged in. Session cookie set.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Invalidate current session.
+      responses:
+        "204": { description: Logged out. }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Return current authenticated user.
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List users (admin).
+      responses:
+        "200":
+          description: User list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Users]
+      summary: Create a user (admin).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUserRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Users]
+      summary: Get user by ID.
+      responses:
+        "200":
+          description: User.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Users]
+      summary: Update user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateUserRequest" }
+      responses:
+        "200":
+          description: Updated user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /users/{id}/property-permissions:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    post:
+      tags: [Users]
+      summary: Grant a property-scoped permission to the user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GrantPermissionRequest" }
+      responses:
+        "201":
+          description: Permission grant created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserPermission" }
+
+  /users/{id}/property-permissions/{permissionId}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - in: path
+        name: permissionId
+        required: true
+        schema: { type: integer, format: int64 }
+    delete:
+      tags: [Users]
+      summary: Revoke a property-scoped permission.
+      responses:
+        "204": { description: Revoked. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /properties:
+    get:
+      tags: [Properties]
+      summary: List properties visible to the caller.
+      responses:
+        "200":
+          description: Property list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Property" }
+    post:
+      tags: [Properties]
+      summary: Create a property (admin).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePropertyRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Property" }
+
+  /properties/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Properties]
+      summary: Get property by ID.
+      responses:
+        "200":
+          description: Property.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Property" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Properties]
+      summary: Update property.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdatePropertyRequest" }
+      responses:
+        "200":
+          description: Updated property.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Property" }
+
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: pms_session
+
+  parameters:
+    IdPath:
+      in: path
+      name: id
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+
+  responses:
+    BadRequest:
+      description: Invalid request payload.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Authentication required.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Caller lacks permission.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: Too many requests.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, error]
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+        code:
+          type: string
+          description: Optional machine-readable code.
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 1, writeOnly: true }
+
+    User:
+      type: object
+      required: [id, email, role]
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        role:
+          type: string
+          description: Role slug (e.g. `admin`, `manager`, `cleaner`).
+
+    CreateUserRequest:
+      type: object
+      required: [email, password, role]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12, writeOnly: true }
+        role: { type: string }
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12, writeOnly: true }
+        role: { type: string }
+
+    UserPermission:
+      type: object
+      required: [id, property_id, module, permission_level]
+      properties:
+        id: { type: integer, format: int64 }
+        property_id: { type: integer, format: int64 }
+        module: { type: string }
+        permission_level: { type: string }
+
+    GrantPermissionRequest:
+      type: object
+      required: [property_id, module, permission_level]
+      properties:
+        property_id: { type: integer, format: int64 }
+        module: { type: string }
+        permission_level: { type: string }
+
+    Property:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        address: { type: string, nullable: true }
+        timezone: { type: string, nullable: true }
+
+    CreatePropertyRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1 }
+        address: { type: string, nullable: true }
+        timezone: { type: string, nullable: true }
+
+    UpdatePropertyRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        address: { type: string, nullable: true }
+        timezone: { type: string, nullable: true }

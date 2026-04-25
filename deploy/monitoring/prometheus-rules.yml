@@ -1,0 +1,98 @@
+# Prometheus alerting rules for the PMS backend.
+#
+# Wire into Prometheus by setting:
+#   rule_files:
+#     - /etc/prometheus/pms-rules.yml
+# then point scrape_configs at the backend `/metrics` endpoint (protected by
+# PMS_METRICS_TOKEN or exposed on a loopback bind — see deployment docs).
+
+groups:
+  - name: pms-availability
+    interval: 30s
+    rules:
+      - alert: PMSHigh5xxRate
+        # Ratio of 5xx responses over total responses across the last 5 minutes.
+        # The backend's counter is pms_http_requests_total{status="…"}.
+        expr: |
+          sum(rate(pms_http_requests_total{status=~"5.."}[5m]))
+            /
+          clamp_min(sum(rate(pms_http_requests_total[5m])), 1) > 0.01
+        for: 5m
+        labels:
+          severity: page
+          service: pms
+        annotations:
+          summary: "PMS 5xx rate above 1% for 5m"
+          description: |
+            {{ $value | humanizePercentage }} of HTTP responses are 5xx.
+            Check recent logs: `journalctl -u pms-server --since '-10min'`
+            or `docker compose logs pms-backend --since 10m`.
+
+      - alert: PMSNoTraffic
+        # If the scrape target stops answering, up == 0. Keeps us honest when
+        # the process is crashlooping too fast for the 5xx alert to fire.
+        expr: up{job="pms"} == 0
+        for: 2m
+        labels:
+          severity: page
+          service: pms
+        annotations:
+          summary: "PMS /metrics unreachable"
+          description: "Prometheus cannot scrape pms /metrics for 2 minutes."
+
+  - name: pms-schedulers
+    interval: 1m
+    rules:
+      - alert: PMSSchedulerStalled
+        # pms_scheduler_last_run_timestamp_seconds is emitted per job label.
+        # Triple the job's nominal interval is the PMS_10 guidance. We cap at
+        # the largest (occupancy, 60m by default) so one rule covers all jobs
+        # without needing per-job thresholds.
+        expr: |
+          (time() - pms_scheduler_last_run_timestamp_seconds) > (3 * 3600)
+        for: 10m
+        labels:
+          severity: warning
+          service: pms
+        annotations:
+          summary: "PMS scheduler {{ $labels.job }} has not run for >3h"
+          description: |
+            Last successful run at
+            {{ $value | humanizeDuration }} ago.
+            Investigate scheduler error logs.
+
+  - name: pms-backup
+    interval: 1m
+    rules:
+      - alert: PMSBackupStale
+        # Hourly snapshots are the contract; alert after 2h of missed runs.
+        expr: (time() - pms_last_successful_backup_unixtime) > 2 * 3600
+        for: 15m
+        labels:
+          severity: page
+          service: pms
+        annotations:
+          summary: "PMS backup older than 2 hours"
+          description: |
+            No successful VACUUM INTO snapshot for
+            {{ $value | humanizeDuration }}.
+            Check BACKUP_DIR writability and disk space.
+
+  - name: pms-process
+    interval: 1m
+    rules:
+      - alert: PMSFrequentRestarts
+        # cAdvisor / kubelet / node_exporter emit container_start_time_seconds
+        # or process_start_time_seconds; either will do. This rule prefers
+        # the container metric since compose is the recommended deployment.
+        expr: |
+          changes(container_start_time_seconds{container=~"pms-.*"}[15m]) > 2
+        for: 0m
+        labels:
+          severity: warning
+          service: pms
+        annotations:
+          summary: "PMS container restarted ≥3 times in 15m"
+          description: |
+            Container {{ $labels.container }} has restarted
+            {{ $value }} times in the last 15 minutes.

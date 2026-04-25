@@ -1,0 +1,26 @@
+/data/
+backend/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Build artefacts
+/bin/
+frontend/node_modules/
+frontend/dist/
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+e2e/.playwright/
+
+# Local env / secrets — NEVER commit
+.env
+backend/.env
+deploy/.env
+
+# Editor / OS
+.DS_Store
+.idea/
+*.swp
+*.log

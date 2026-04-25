@@ -1,0 +1,2 @@
+-- Cannot restore the unique constraint without potentially losing data.
+-- No-op; forward migration is safe.
