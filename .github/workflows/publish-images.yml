@@ -128,7 +128,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/release/v')
         uses: softprops/action-gh-release@v3
         with:
           files: |
