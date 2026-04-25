@@ -264,7 +264,10 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 	if mfaVerified {
 		s.audit(r, u, "login", "user", strconv.FormatInt(u.ID, 10), "success")
 		dto := userPublic(u)
-		WriteJSON(w, http.StatusOK, loginResponse{User: &dto})
+		WriteJSON(w, http.StatusOK, loginResponse{
+			User:                 &dto,
+			ProvisioningRequired: s.provisioningRequiredFor(r, u),
+		})
 		return
 	}
 	// Quarantined session — UI must prompt for the TOTP code next.
@@ -310,7 +313,10 @@ func userPublic(u *store.User) userDTO {
 func (s *Server) getMe(w http.ResponseWriter, r *http.Request) {
 	if u := ctxuser.From(r.Context()); u != nil {
 		dto := userPublic(u)
-		WriteJSON(w, http.StatusOK, meResponse{User: &dto})
+		WriteJSON(w, http.StatusOK, meResponse{
+			User:                 &dto,
+			ProvisioningRequired: s.provisioningRequiredFor(r, u),
+		})
 		return
 	}
 	if u := ctxuser.MFAPending(r.Context()); u != nil {
@@ -321,6 +327,26 @@ func (s *Server) getMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteError(w, http.StatusUnauthorized, "authentication required")
+}
+
+// provisioningRequiredFor mirrors the ProvisioningGate's logic so the
+// SPA can render the right screen without re-implementing the rules.
+// Keep the two in lock-step: any change here belongs in
+// provisioning_gate.go and vice versa.
+func (s *Server) provisioningRequiredFor(r *http.Request, u *store.User) bool {
+	if u == nil {
+		return false
+	}
+	if u.MustChangePassword {
+		return true
+	}
+	if u.Role == "super_admin" && !s.TOTPDevBypass {
+		_, enrolled, err := s.Store.GetUserTOTPSecret(r.Context(), u.ID)
+		if err == nil && !enrolled {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {

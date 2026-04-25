@@ -20,6 +20,12 @@ export interface User {
   id: number
   email: string
   role: Role
+  /**
+   * Set to true when the backend's provisioning gate is forcing the user
+   * to rotate their password (bootstrap super_admin, admin reset, etc.).
+   * The router guard funnels these accounts to /provisioning.
+   */
+  must_change_password?: boolean
 }
 
 export interface PropertyPermission {
@@ -37,6 +43,17 @@ export const useAuthStore = defineStore('auth', () => {
   // challenge has not. The UI keeps the login screen visible in this
   // state and swaps in the code-entry form.
   const mfaPending = ref(false)
+  // twoFactorEnrolled tracks whether the current user has finished TOTP
+  // enrolment. null means "unknown / not yet fetched". Populated by
+  // fetchTwoFactorStatus(), which the auth flow calls automatically after
+  // login / refreshMe / 2FA verify so the provisioning view can decide
+  // which stage to render without each component having to refetch.
+  const twoFactorEnrolled = ref<boolean | null>(null)
+  // provisioningRequired mirrors the backend's ProvisioningGate decision
+  // for the current user. Sourced from `/api/auth/me` so the SPA cannot
+  // disagree with the server (e.g. when PMS_2FA_DEV_BYPASS is on, the
+  // backend waives the super-admin enrolment requirement).
+  const provisioningRequired = ref(false)
 
   const isSuperAdmin = computed(() => user.value?.role === 'super_admin')
 
@@ -62,6 +79,27 @@ export const useAuthStore = defineStore('auth', () => {
     propertyPermissions.value = r.property_permissions
   }
 
+  /**
+   * Fetch /api/auth/2fa/status and cache `enrolled` so provisioningRequired
+   * stays accurate across navigations. The endpoint is on the provisioning
+   * gate's allow-list, so it works even before the user has rotated their
+   * bootstrap password. Failures (e.g. transient network) leave the value
+   * untouched rather than racing the user to the wrong screen.
+   */
+  async function fetchTwoFactorStatus() {
+    if (!user.value) {
+      twoFactorEnrolled.value = null
+      return
+    }
+    try {
+      const r = await api<{ enrolled: boolean }>('/api/auth/2fa/status')
+      twoFactorEnrolled.value = r.enrolled
+    } catch {
+      // Leave twoFactorEnrolled as-is so a flaky call doesn't bounce the
+      // user back to /provisioning if they were already through it.
+    }
+  }
+
   function canAccessPropertyModule(
     property: Pick<Property, 'id' | 'owner_user_id'> | null | undefined,
     module: PropertyModule,
@@ -76,31 +114,47 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function refreshMe() {
     try {
-      const r = await api<{ user?: User; mfa_required?: boolean }>('/api/auth/me')
+      const r = await api<{
+        user?: User
+        mfa_required?: boolean
+        provisioning_required?: boolean
+      }>('/api/auth/me')
       if (r.mfa_required) {
         user.value = null
         propertyPermissions.value = []
         mfaPending.value = true
+        twoFactorEnrolled.value = null
+        provisioningRequired.value = false
       } else if (r.user) {
         user.value = r.user
         mfaPending.value = false
+        provisioningRequired.value = !!r.provisioning_required
         await refreshPermissions()
+        await fetchTwoFactorStatus()
       } else {
         user.value = null
         propertyPermissions.value = []
         mfaPending.value = false
+        twoFactorEnrolled.value = null
+        provisioningRequired.value = false
       }
     } catch {
       user.value = null
       propertyPermissions.value = []
       mfaPending.value = false
+      twoFactorEnrolled.value = null
+      provisioningRequired.value = false
     } finally {
       loaded.value = true
     }
   }
 
   async function login(email: string, password: string) {
-    const r = await api<{ user?: User; mfa_required?: boolean }>('/api/auth/login', {
+    const r = await api<{
+      user?: User
+      mfa_required?: boolean
+      provisioning_required?: boolean
+    }>('/api/auth/login', {
       method: 'POST',
       json: { email, password },
     })
@@ -108,26 +162,35 @@ export const useAuthStore = defineStore('auth', () => {
       mfaPending.value = true
       user.value = null
       propertyPermissions.value = []
+      twoFactorEnrolled.value = null
+      provisioningRequired.value = false
       loaded.value = true
       return
     }
     if (r.user) {
       user.value = r.user
       mfaPending.value = false
+      provisioningRequired.value = !!r.provisioning_required
       await refreshPermissions()
+      await fetchTwoFactorStatus()
       loaded.value = true
     }
   }
 
   async function verifyTwoFactor(payload: { code?: string; recovery_code?: string }) {
-    const r = await api<{ user?: User }>('/api/auth/2fa/verify', {
-      method: 'POST',
-      json: payload,
-    })
+    const r = await api<{ user?: User; provisioning_required?: boolean }>(
+      '/api/auth/2fa/verify',
+      {
+        method: 'POST',
+        json: payload,
+      },
+    )
     if (r.user) {
       user.value = r.user
       mfaPending.value = false
+      provisioningRequired.value = !!r.provisioning_required
       await refreshPermissions()
+      await fetchTwoFactorStatus()
       loaded.value = true
     }
   }
@@ -137,6 +200,8 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     propertyPermissions.value = []
     mfaPending.value = false
+    twoFactorEnrolled.value = null
+    provisioningRequired.value = false
   }
 
   async function twoFactorStatus() {
@@ -165,14 +230,33 @@ export const useAuthStore = defineStore('auth', () => {
     })
   }
 
+  /**
+   * Self-service password rotation, used by the /provisioning view to
+   * clear `must_change_password`. The backend invalidates every other
+   * session for this user but keeps the current one alive so we don't
+   * have to re-login mid-flow. We refresh the local user object so the
+   * router guard sees the cleared flag immediately.
+   */
+  async function rotatePassword(newPassword: string) {
+    if (!user.value) throw new Error('not signed in')
+    await api<unknown>(`/api/users/${user.value.id}`, {
+      method: 'PATCH',
+      json: { password: newPassword },
+    })
+    await refreshMe()
+  }
+
   return {
     user,
     propertyPermissions,
     loaded,
     mfaPending,
+    twoFactorEnrolled,
+    provisioningRequired,
     isSuperAdmin,
     refreshMe,
     refreshPermissions,
+    fetchTwoFactorStatus,
     canAccessPropertyModule,
     login,
     verifyTwoFactor,
@@ -181,5 +265,6 @@ export const useAuthStore = defineStore('auth', () => {
     twoFactorEnrollStart,
     twoFactorEnrollConfirm,
     twoFactorDisable,
+    rotatePassword,
   }
 })

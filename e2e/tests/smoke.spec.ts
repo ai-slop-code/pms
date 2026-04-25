@@ -22,8 +22,19 @@ test.describe('PMS smoke', () => {
     await page.getByLabel('Password').fill(E2E_ADMIN_PASSWORD)
     await page.getByRole('button', { name: 'Sign in' }).click()
 
-    // Land on the dashboard. URL should no longer be /login.
+    // Bootstrap super_admin always lands on /provisioning to rotate the
+    // temp password. PMS_2FA_DEV_BYPASS=true (set by start-backend.sh)
+    // waives the TOTP enrolment step, so the password stage is the only
+    // one we need to clear before the SPA lets us into the app proper.
+    await page.waitForURL(/\/provisioning(\?|$)/)
+    const rotatedPassword = `${E2E_ADMIN_PASSWORD}-rotated!`
+    await page.getByLabel('New password').fill(rotatedPassword)
+    await page.getByLabel('Confirm new password').fill(rotatedPassword)
+    await page.getByRole('button', { name: 'Save password' }).click()
+
+    // Land on the dashboard. URL should no longer be /provisioning or /login.
     await expect(page).not.toHaveURL(/\/login(\?|$)/)
+    await expect(page).not.toHaveURL(/\/provisioning(\?|$)/)
 
     // 2. Navigate to Properties and start a new one.
     await page.goto('/properties')

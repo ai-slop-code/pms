@@ -133,7 +133,10 @@ func (s *Server) post2FAVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, u, "2fa_verify", "user", strconv.FormatInt(u.ID, 10), "success")
 	dto := userPublic(u)
-	WriteJSON(w, http.StatusOK, loginResponse{User: &dto})
+	WriteJSON(w, http.StatusOK, loginResponse{
+		User:                 &dto,
+		ProvisioningRequired: s.provisioningRequiredFor(r, u),
+	})
 }
 
 // post2FAEnrollStart issues a fresh secret + otpauth URL for the caller to

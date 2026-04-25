@@ -7,6 +7,15 @@ const router = createRouter({
   routes: [
     { path: '/login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
     {
+      path: '/provisioning',
+      name: 'provisioning',
+      component: () => import('@/views/ProvisioningView.vue'),
+      // Reachable as soon as the user is authenticated. The guard below
+      // makes sure non-gated users don't end up here, and that gated users
+      // can't navigate anywhere else.
+      meta: { provisioning: true },
+    },
+    {
       path: '/',
       component: () => import('@/views/ShellView.vue'),
       meta: { requiresAuth: true },
@@ -89,6 +98,18 @@ router.beforeEach(async (to) => {
   if (to.meta.public) {
     if (auth.user && to.path === '/login') return { path: '/' }
     return true
+  }
+  // Provisioning gate: an authenticated user with an unrotated bootstrap
+  // password (or a super-admin without TOTP) must finish setup before
+  // anything else. Funnel them to /provisioning; bounce them away once
+  // there's nothing left to do so the screen doesn't get sticky.
+  if (to.meta.provisioning) {
+    if (!auth.user) return { path: '/login' }
+    if (!auth.provisioningRequired) return { path: '/' }
+    return true
+  }
+  if (auth.user && auth.provisioningRequired) {
+    return { path: '/provisioning' }
   }
   if (to.meta.requiresAuth && !auth.user) {
     return { path: '/login', query: { redirect: to.fullPath } }
