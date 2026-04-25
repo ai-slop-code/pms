@@ -102,6 +102,23 @@ To consume the published images instead of building locally, replace the
 with `image: ghcr.io/<owner>/<repo>-backend:latest` (and the same for
 the frontend), then `docker compose pull && docker compose up -d`.
 
+### Pointing the SPA at a custom backend
+
+The frontend container regenerates `/usr/share/nginx/html/config.js` on
+every start from the `PMS_API_BASE_URL` env var, so the *same image*
+covers both deployment modes:
+
+- **Same-origin** (default): leave `PMS_API_BASE_URL` unset/empty. The
+  in-container nginx proxies `/api/*` to `pms-backend` on the compose
+  network — that's what the bundled compose file does.
+- **Cross-origin**: set `PMS_API_BASE_URL=https://api.example.com` on
+  the `pms-frontend` service (already wired through `deploy/.env.example`).
+  Restart the container — no rebuild — and the SPA will call the
+  backend on its own hostname. You'll also need `CORS_ORIGINS`,
+  `PMS_COOKIE_SAMESITE=none` and `PMS_COOKIE_SECURE=true` on the
+  backend; full checklist in
+  [docs/deployment/README.md](docs/deployment/README.md#3b-cross-origin-spa-and-api-on-different-domains).
+
 ### One-time repository setup
 
 1. **Make the repository public**, or grant the deployment host a PAT
