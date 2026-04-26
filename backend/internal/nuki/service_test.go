@@ -556,7 +556,12 @@ func TestReconcileCleanerDailyLogs_UsesFirstEntryPerDayForCleaner(t *testing.T) 
 	if err := st.UpdatePropertyProfile(context.Background(), pid, map[string]interface{}{"cleaner_nuki_auth_id": "cleaner-1"}); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC()
+	// Anchor `now` at noon UTC so the test stays day-stable when run in
+	// the early UTC morning. Otherwise `now.Add(-6h)` straddles midnight
+	// and ends up indexed under yesterday's day, while the assertion
+	// below still looks under today's.
+	today := time.Now().UTC()
+	now := time.Date(today.Year(), today.Month(), today.Day(), 12, 0, 0, 0, time.UTC)
 	fc := &fakeClient{
 		logEvents: []SmartlockEvent{
 			{ExternalID: "e1", OccurredAt: now.Add(-6 * time.Hour), AuthID: "cleaner-1", IsEntryLike: true},
