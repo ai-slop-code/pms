@@ -54,7 +54,9 @@ interface Props {
   ariaLabel: string
   /** Optional second axis. If omitted, all series share the left axis. */
   axes?: UiLineChartAxis[]
-  /** Minimum height in px (default 180, matching hand-rolled chart). */
+  /** Fixed chart height in px (default 180, matching hand-rolled chart).
+   *  Must be a definite size so Chart.js with maintainAspectRatio:false
+   *  doesn't grow the canvas on each ResizeObserver tick. */
   height?: number
 }
 
@@ -234,7 +236,7 @@ const hasAnyData = computed(() =>
   <figure
     ref="root"
     class="ui-line-chart"
-    :style="{ minHeight: `${height}px` }"
+    :style="{ height: `${height}px` }"
   >
     <canvas
       ref="canvas"
@@ -242,9 +244,9 @@ const hasAnyData = computed(() =>
       role="img"
       :aria-label="ariaLabel"
     />
-    <figcaption class="ui-line-chart__sr-fallback">
-      <span class="sr-only">{{ ariaLabel }}</span>
-      <table v-if="hasAnyData" class="sr-only">
+    <figcaption class="ui-line-chart__sr-fallback sr-only">
+      <span>{{ ariaLabel }}</span>
+      <table v-if="hasAnyData">
         <caption>{{ ariaLabel }}</caption>
         <thead>
           <tr>
@@ -275,19 +277,8 @@ const hasAnyData = computed(() =>
   width: 100%;
 }
 .ui-line-chart__canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.sr-only {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+  inset: 0;
+  display: block;
 }
 </style>
