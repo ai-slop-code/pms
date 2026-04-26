@@ -3,15 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-    />
     <title>PMS</title>
     <!--
       Runtime configuration. Loaded before the app bundle so operators can
       tweak settings (e.g. apiBaseUrl) after deployment without rebuilding.
-      See public/config.js for the available options.
+      config.js also installs the Content-Security-Policy meta tag based on
+      apiBaseUrl, so cross-origin deployments don't need any post-build
+      editing of this file. See public/config.js for the available options.
     -->
     <script src="/config.js"></script>
   </head>
