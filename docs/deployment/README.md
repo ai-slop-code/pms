@@ -296,8 +296,7 @@ Required configuration:
 
 | Setting | Value | Why |
 | ------- | ----- | --- |
-| `dist/config.js` `apiBaseUrl` | `https://api.example.com` | Sends API calls to the right origin (or use `VITE_API_BASE_URL` at build time). |
-| `dist/index.html` CSP `connect-src` | add `https://api.example.com` | The bundle ships with `connect-src 'self'`; without this the browser blocks every cross-origin XHR. |
+| `dist/config.js` `apiBaseUrl` | `https://api.example.com` | Sends API calls to the right origin (or use `VITE_API_BASE_URL` at build time). The bundled CSP is built from this value at runtime, so `connect-src` no longer has to be edited by hand. |
 | `CORS_ORIGINS` | `https://app.example.com` | Backend allows the SPA's origin and emits the CORS headers needed for credentialed requests. |
 | `PMS_COOKIE_SAMESITE` | `none` | Browsers refuse to send `SameSite=Lax` cookies on cross-site fetches. |
 | `PMS_COOKIE_SECURE` | `true` | Required by browsers whenever `SameSite=None`. Both hosts MUST be HTTPS. |
