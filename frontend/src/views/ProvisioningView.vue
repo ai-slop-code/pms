@@ -72,6 +72,19 @@ async function pickStage() {
     await router.replace('/login')
     return
   }
+  // Stage 3 (recovery codes) is the only screen where provisioningRequired
+  // has already flipped to false but we still need to keep the user here
+  // long enough to copy their codes.
+  if (stage.value === 'recovery-codes' && recoveryCodes.value.length > 0) {
+    return
+  }
+  // Backend is the source of truth for whether we're done. This handles
+  // the dev-bypass case (super_admin without TOTP, but the gate is waived)
+  // where twoFactorEnrolled would still be false locally.
+  if (!auth.provisioningRequired) {
+    await router.replace('/')
+    return
+  }
   if (auth.user.must_change_password) {
     stage.value = 'password'
     return
@@ -85,7 +98,8 @@ async function pickStage() {
     }
     return
   }
-  // All gates cleared — leave the view.
+  // Defensive: gate says required but we don't know which one — kick to
+  // home rather than render a broken screen.
   await router.replace('/')
 }
 
