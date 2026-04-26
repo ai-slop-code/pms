@@ -1,0 +1,9 @@
+Type,"Reference number",Check-in,Checkout,"Guest name","Reservation status",Currency,"Payment status",Amount,Commission,"Payments Service Fee",Net,"Payout date","Payout ID"
+Reservation,4867992512,"29 Aug 2025","31 Aug 2025","Gerhard Pickl",ok,EUR,by_booking,157.71,-17.28,-1.89,138.54,"4 Sept 2025",t5o6XoxGA5NpLo3p
+Reservation,4914580922,"28 Aug 2025","29 Aug 2025","Masaryk VojtÄch",ok,EUR,by_booking,78.86,-8.64,-0.95,69.27,"4 Sept 2025",t5o6XoxGA5NpLo3p
+Reservation,4456484752,"6 Sept 2025","7 Sept 2025","Jana HronÄekovÃ¡",ok,EUR,by_booking,100.76,-13.80,-1.21,85.75,"11 Sept 2025",1laj2tgOrmjTGmR6
+Reservation,5928950172,"16 Sept 2025","17 Sept 2025","Lara Stiefet",ok,EUR,by_booking,66.28,-12.10,-0.80,53.38,"18 Sept 2025",kdHeABZniGi6xtAm
+Reservation,6025746609,"14 Sept 2025","15 Sept 2025","Gil Sorani",ok,EUR,by_booking,62.56,-11.42,-0.75,50.39,"18 Sept 2025",kdHeABZniGi6xtAm
+Reservation,5979506735,"11 Sept 2025","12 Sept 2025","Ivan Gulej",ok,EUR,by_booking,61.07,-11.15,-0.73,49.19,"18 Sept 2025",kdHeABZniGi6xtAm
+Reservation,6299175865,"22 Sept 2025","23 Sept 2025","Michaela Tothova",ok,EUR,by_booking,79.13,-14.45,-0.95,63.73,"25 Sept 2025",H0L2jVzPjNgmDlS3
+Reservation,6265354014,"20 Sept 2025","21 Sept 2025","Dvori Shenhav",ok,EUR,by_booking,61.82,-11.29,-0.74,49.79,"25 Sept 2025",H0L2jVzPjNgmDlS3
