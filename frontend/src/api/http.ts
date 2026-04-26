@@ -86,9 +86,9 @@ export async function api<T>(
     // Provisioning gate: when the backend rejects a call because the user
     // still has `must_change_password` set or a super_admin hasn't
     // enrolled TOTP, funnel the SPA to /provisioning instead of letting
-    // each view render the raw error string. This complements the router
-    // guard for cases where the user is already inside a view when the
-    // gate trips (e.g. after a backend upgrade that newly requires 2FA).
+    // each view render the raw error string. The router guard already
+    // catches gated users on navigation; this is the safety net for
+    // background calls that fire while the user is on a protected view.
     if (
       res.status === 403 &&
       (err === 'password_change_required' || err === 'two_factor_enrolment_required') &&
