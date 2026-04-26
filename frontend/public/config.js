@@ -37,10 +37,11 @@
       if (origin !== window.location.origin) {
         connectSrc += ' ' + origin
       }
-    } catch (_) {
+    } catch (e) {
       // Malformed URL — leave connect-src at 'self' rather than emit a
       // broken policy. The app will surface the configuration error when
       // it tries to fetch from the bad value.
+      void e
     }
   }
   var policy = [

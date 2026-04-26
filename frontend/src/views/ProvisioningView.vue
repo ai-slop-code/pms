@@ -203,7 +203,7 @@ onMounted(pickStage)
         </div>
       </template>
 
-      <p class="provisioning-hint" v-if="auth.user">
+      <p v-if="auth.user" class="provisioning-hint">
         Signed in as <strong>{{ auth.user.email }}</strong
         >. You'll be redirected to the app once setup is complete.
       </p>
