@@ -49,11 +49,24 @@ export const useAuthStore = defineStore('auth', () => {
   // login / refreshMe / 2FA verify so the provisioning view can decide
   // which stage to render without each component having to refetch.
   const twoFactorEnrolled = ref<boolean | null>(null)
-  // provisioningRequired mirrors the backend's ProvisioningGate decision
-  // for the current user. Sourced from `/api/auth/me` so the SPA cannot
-  // disagree with the server (e.g. when PMS_2FA_DEV_BYPASS is on, the
-  // backend waives the super-admin enrolment requirement).
-  const provisioningRequired = ref(false)
+  // provisioningRequired is true when the user must finish bootstrap
+  // (rotate a temp password, enrol TOTP) before the SPA lets them into
+  // the rest of the app. It's a computed combination of:
+  //   - the explicit `provisioning_required` flag from /api/auth/me
+  //     (newer backends),
+  //   - `user.must_change_password`,
+  //   - super_admin without TOTP enrolment.
+  // Computing it from local signals means the SPA stays correct even
+  // when running against an older backend that doesn't surface the
+  // explicit flag.
+  const provisioningRequiredFromServer = ref(false)
+  const provisioningRequired = computed(() => {
+    if (!user.value) return false
+    if (provisioningRequiredFromServer.value) return true
+    if (user.value.must_change_password) return true
+    if (user.value.role === 'super_admin' && twoFactorEnrolled.value === false) return true
+    return false
+  })
 
   const isSuperAdmin = computed(() => user.value?.role === 'super_admin')
 
@@ -124,11 +137,15 @@ export const useAuthStore = defineStore('auth', () => {
         propertyPermissions.value = []
         mfaPending.value = true
         twoFactorEnrolled.value = null
-        provisioningRequired.value = false
+        provisioningRequiredFromServer.value = false
       } else if (r.user) {
         user.value = r.user
         mfaPending.value = false
-        provisioningRequired.value = !!r.provisioning_required
+        // Trust the server flag when present (newer backends). For
+        // older backends that omit it, the computed provisioningRequired
+        // falls back to user.must_change_password / twoFactorEnrolled,
+        // so the SPA stays correct without it.
+        provisioningRequiredFromServer.value = r.provisioning_required === true
         await refreshPermissions()
         await fetchTwoFactorStatus()
       } else {
@@ -136,14 +153,14 @@ export const useAuthStore = defineStore('auth', () => {
         propertyPermissions.value = []
         mfaPending.value = false
         twoFactorEnrolled.value = null
-        provisioningRequired.value = false
+        provisioningRequiredFromServer.value = false
       }
     } catch {
       user.value = null
       propertyPermissions.value = []
       mfaPending.value = false
       twoFactorEnrolled.value = null
-      provisioningRequired.value = false
+      provisioningRequiredFromServer.value = false
     } finally {
       loaded.value = true
     }
@@ -163,14 +180,14 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = null
       propertyPermissions.value = []
       twoFactorEnrolled.value = null
-      provisioningRequired.value = false
+      provisioningRequiredFromServer.value = false
       loaded.value = true
       return
     }
     if (r.user) {
       user.value = r.user
       mfaPending.value = false
-      provisioningRequired.value = !!r.provisioning_required
+      provisioningRequiredFromServer.value = r.provisioning_required === true
       await refreshPermissions()
       await fetchTwoFactorStatus()
       loaded.value = true
@@ -188,7 +205,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (r.user) {
       user.value = r.user
       mfaPending.value = false
-      provisioningRequired.value = !!r.provisioning_required
+      provisioningRequiredFromServer.value = r.provisioning_required === true
       await refreshPermissions()
       await fetchTwoFactorStatus()
       loaded.value = true
@@ -201,7 +218,7 @@ export const useAuthStore = defineStore('auth', () => {
     propertyPermissions.value = []
     mfaPending.value = false
     twoFactorEnrolled.value = null
-    provisioningRequired.value = false
+    provisioningRequiredFromServer.value = false
   }
 
   async function twoFactorStatus() {
