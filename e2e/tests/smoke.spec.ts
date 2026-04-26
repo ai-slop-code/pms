@@ -28,8 +28,10 @@ test.describe('PMS smoke', () => {
     // one we need to clear before the SPA lets us into the app proper.
     await page.waitForURL(/\/provisioning(\?|$)/)
     const rotatedPassword = `${E2E_ADMIN_PASSWORD}-rotated!`
-    await page.getByLabel('New password').fill(rotatedPassword)
-    await page.getByLabel('Confirm new password').fill(rotatedPassword)
+    await page
+      .getByRole('textbox', { name: 'New password', exact: true })
+      .fill(rotatedPassword)
+    await page.getByRole('textbox', { name: 'Confirm new password' }).fill(rotatedPassword)
     await page.getByRole('button', { name: 'Save password' }).click()
 
     // Land on the dashboard. URL should no longer be /provisioning or /login.
