@@ -42,6 +42,13 @@ const form = ref({
 const profileForm = ref({
   legal_owner_name: '',
   billing_name: '',
+  billing_address: '',
+  city: '',
+  postal_code: '',
+  country: '',
+  ico: '',
+  dic: '',
+  vat_id: '',
   contact_phone: '',
   default_check_in_time: '',
   default_check_out_time: '',
@@ -82,6 +89,13 @@ async function load() {
     profileForm.value = {
       legal_owner_name: String(s.profile.legal_owner_name ?? ''),
       billing_name: String(s.profile.billing_name ?? ''),
+      billing_address: String(s.profile.billing_address ?? ''),
+      city: String(s.profile.city ?? ''),
+      postal_code: String(s.profile.postal_code ?? ''),
+      country: String(s.profile.country ?? ''),
+      ico: String(s.profile.ico ?? ''),
+      dic: String(s.profile.dic ?? ''),
+      vat_id: String(s.profile.vat_id ?? ''),
       contact_phone: String(s.profile.contact_phone ?? ''),
       default_check_in_time: String(s.profile.default_check_in_time ?? ''),
       default_check_out_time: String(s.profile.default_check_out_time ?? ''),
@@ -132,6 +146,13 @@ async function saveSettings() {
     const profile: Record<string, unknown> = {
       legal_owner_name: profileForm.value.legal_owner_name || null,
       billing_name: profileForm.value.billing_name || null,
+      billing_address: profileForm.value.billing_address || null,
+      city: profileForm.value.city || null,
+      postal_code: profileForm.value.postal_code || null,
+      country: profileForm.value.country || null,
+      ico: profileForm.value.ico || null,
+      dic: profileForm.value.dic || null,
+      vat_id: profileForm.value.vat_id || null,
       contact_phone: profileForm.value.contact_phone || null,
       default_check_in_time: profileForm.value.default_check_in_time,
       default_check_out_time: profileForm.value.default_check_out_time,
@@ -235,10 +256,33 @@ watch(id, load)
             </div>
 
             <form @submit.prevent="saveSettings">
-              <UiSection title="Profile" description="Owner / contact details and stay defaults shown to guests.">
+              <UiSection
+                title="Billing & tax"
+                description="Used as the supplier (Dodávateľ) on generated invoices. Address falls back to the property address when left blank."
+              >
                 <div class="form-grid">
                   <UiInput v-model="profileForm.legal_owner_name" label="Legal owner name" />
                   <UiInput v-model="profileForm.billing_name" label="Billing name" />
+                  <UiInput
+                    v-model="profileForm.billing_address"
+                    label="Billing address line"
+                    help="Leave blank to use the property address."
+                  />
+                  <UiInput v-model="profileForm.city" label="Billing city" />
+                  <UiInput v-model="profileForm.postal_code" label="Billing postal code" />
+                  <UiInput v-model="profileForm.country" label="Billing country" />
+                  <UiInput v-model="profileForm.ico" label="IČO" help="Slovak company registration ID" />
+                  <UiInput v-model="profileForm.dic" label="DIČ" help="Slovak tax ID" />
+                  <UiInput
+                    v-model="profileForm.vat_id"
+                    label="VAT ID (IČ DPH)"
+                    help="Shown on the invoice supplier block when set."
+                  />
+                </div>
+              </UiSection>
+
+              <UiSection title="Profile" description="Contact details and stay defaults shown to guests.">
+                <div class="form-grid">
                   <UiInput v-model="profileForm.contact_phone" label="Contact phone" />
                   <UiInput
                     v-model="profileForm.cleaner_nuki_auth_id"
