@@ -720,7 +720,7 @@ func docTitle(lang string) string {
 
 func docTitleSub(lang string) string {
 	if lang == "sk" { return "Invoice" }
-	return "Fakt\u00fara"
+	return "Tax invoice"
 }
 
 func isPaid(doc Document) bool {
@@ -813,7 +813,7 @@ func footerMain(lang string) string {
 
 func footerSub(lang string) string {
 	if lang == "sk" { return "Thank you for your trust." }
-	return "Fakt\u00fara / Invoice"
+	return "Invoice document"
 }
 
 func fmtMoney(lang string, cents int, cur string) string {

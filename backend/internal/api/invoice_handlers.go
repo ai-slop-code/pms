@@ -405,6 +405,15 @@ func (s *Server) regenerateInvoice(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, "invoice not found")
 		return
 	}
+	// Refresh the supplier snapshot from the current property profile so
+	// that editing the property's billing details (e.g. setting a VAT ID)
+	// and clicking "Regenerate PDF" actually updates the rendered invoice.
+	// Customer snapshot is left untouched — that data lives only on the
+	// invoice itself and is not derivable from the property.
+	if err := s.refreshInvoiceSupplierFromProperty(r.Context(), row); err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to refresh supplier snapshot")
+		return
+	}
 	if _, err := s.renderAndAttachInvoiceVersion(r.Context(), pid, row, row.Version+1); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to generate invoice pdf")
 		return
@@ -787,6 +796,33 @@ func decodeInvoiceSnapshots(row *store.Invoice) (invoicePartySnapshot, invoicePa
 		return invoicePartySnapshot{}, invoicePartySnapshot{}, err
 	}
 	return supplier, customer, nil
+}
+
+// refreshInvoiceSupplierFromProperty rebuilds the supplier snapshot on the
+// invoice row from the live property + property_profile, persists it, and
+// updates the in-memory row so the caller can use it immediately. The
+// customer snapshot is intentionally left as-is.
+func (s *Server) refreshInvoiceSupplierFromProperty(ctx context.Context, row *store.Invoice) error {
+	property, err := s.Store.GetProperty(ctx, row.PropertyID)
+	if err != nil {
+		return err
+	}
+	profile, err := s.Store.GetPropertyProfile(ctx, row.PropertyID)
+	if err != nil {
+		return err
+	}
+	supplier := defaultInvoiceSupplier(property, profile)
+	supplierJSON, err := json.Marshal(supplier)
+	if err != nil {
+		return err
+	}
+	row.SupplierSnapshotJSON = string(supplierJSON)
+	updated, err := s.Store.UpdateInvoice(ctx, row)
+	if err != nil {
+		return err
+	}
+	*row = *updated
+	return nil
 }
 
 func defaultInvoiceSupplier(property *store.Property, profile *store.PropertyProfile) invoicePartySnapshot {
