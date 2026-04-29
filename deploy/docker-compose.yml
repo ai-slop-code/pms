@@ -23,7 +23,7 @@ services:
       PMS_ENV: production
       PMS_LISTEN_ADDR: ":8080"
       DATABASE_PATH: /var/lib/pms/pms.db
-      PMS_INVOICE_DIR: /var/lib/pms/invoices
+      DATA_DIR: /var/lib/pms
       SESSION_SECRET: ${SESSION_SECRET}
       DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY}
       FIRST_SUPERADMIN_EMAIL: ${FIRST_SUPERADMIN_EMAIL}
