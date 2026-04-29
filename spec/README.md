@@ -26,14 +26,21 @@ Original business idea and high-level requirements.
 ### `Prompt_answers.md`
 Clarifications and product decisions collected after the initial requirements review.
 
+### `PMS_13_Coding_Conventions.md`
+Canonical reference for coding style across the repo: commit message format
+(`<TYPE-NN>: <summary>`), branch & release naming, backend (Go) and
+frontend (Vue/TS) conventions, migration rules, and the definition of
+"done". Read this before opening a PR.
+
 ## Recommended Reading Order
 1. `PMS_00_Implementation_Prompt.md`
 2. `PMS_01_Architecture_and_Global_Spec.md`
 3. `PMS_02_Module_Specifications.md`
 4. `PMS_03_Implementation_Checklists.md`
 5. `PMS_04_Analytics_Data_Inventory.md`
-6. `initial_prompt.md`
-7. `Prompt_answers.md`
+6. `PMS_13_Coding_Conventions.md`
+7. `initial_prompt.md`
+8. `Prompt_answers.md`
 
 ## External API references
 - **Nuki Smart Lock API** (OpenAPI / Swagger UI): https://api.nuki.io/
