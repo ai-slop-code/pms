@@ -22,5 +22,6 @@ deploy/.env
 # Editor / OS
 .DS_Store
 .idea/
+.vscode/
 *.swp
 *.log
