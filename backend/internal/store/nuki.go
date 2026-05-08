@@ -323,18 +323,17 @@ func (s *Store) scanNukiCodes(ctx context.Context, q string, args ...interface{}
 }
 
 func (s *Store) ListOccupanciesForNukiSync(ctx context.Context, propertyID int64) ([]Occupancy, error) {
-	q := `
-		SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id
-		FROM occupancies
-		WHERE property_id = ? AND status IN ('active', 'updated') AND end_at >= ?
+	// Closure-labelled rows are excluded from Nuki sync — closed nights have
+	// no guest, externally-sold nights have a guest who arrives outside the
+	// Booking.com flow (PMS_14 §3.4).
+	q := occupancySelectColumns + ` FROM occupancies
+		WHERE property_id = ? AND status IN ('active', 'updated') AND closure_state IS NULL AND end_at >= ?
 		ORDER BY start_at ASC`
 	return s.scanOccupancies(ctx, q, propertyID, time.Now().UTC().Format(time.RFC3339))
 }
 
 func (s *Store) ListOccupanciesForNukiRevocation(ctx context.Context, propertyID int64) ([]Occupancy, error) {
-	q := `
-		SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id
-		FROM occupancies
+	q := occupancySelectColumns + ` FROM occupancies
 		WHERE property_id = ? AND status IN ('cancelled', 'deleted_from_source')
 		ORDER BY start_at ASC`
 	return s.scanOccupancies(ctx, q, propertyID)
@@ -748,6 +747,7 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		)
 		WHERE o.property_id = ?
 		  AND o.status IN ('active', 'updated')
+		  AND o.closure_state IS NULL
 		  AND o.end_at >= ?
 		ORDER BY o.start_at ASC
 		LIMIT ?`

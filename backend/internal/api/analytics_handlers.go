@@ -312,12 +312,17 @@ func (s *Server) getAnalyticsOutlook(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	closedStays, err := s.Store.ListClosedOccupanciesInDateRange(r.Context(), pid, todayMidnight, end90)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 
 	windows := []analyticsKPIWindow{}
 	for _, days := range []int{30, 60, 90} {
 		winEnd := todayMidnight.AddDate(0, 0, days)
 		nights := store.NightsSoldInRange(stays, todayMidnight, winEnd)
-		avail := store.AvailableNightsInRange(todayMidnight, winEnd)
+		avail := store.BookableNightsInRange(closedStays, todayMidnight, winEnd)
 		gross, _, _, _, matchedIDs, err := s.Store.SumPayoutGrossNetForStays(r.Context(), pid, todayMidnight, winEnd)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "database error")

@@ -7,12 +7,14 @@ import UiButton from '@/components/ui/UiButton.vue'
 import UiTable from '@/components/ui/UiTable.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import { displayStatus, statusTone } from './status'
+import { closureLabel, closureTone, formatExternalAmount, isLabelled } from './closure'
 import type { Occupancy as Occ } from '@/api/types/occupancy'
 
 defineProps<{
   month: string
   statusFilter: string
   occupancies: Occ[]
+  busy?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -21,6 +23,9 @@ const emit = defineEmits<{
   prev: []
   next: []
   refresh: []
+  close: [occ: Occ]
+  externalSale: [occ: Occ]
+  reopen: [occ: Occ]
 }>()
 </script>
 
@@ -64,20 +69,46 @@ const emit = defineEmits<{
           <th>Start</th>
           <th>End</th>
           <th>Status</th>
+          <th>Label</th>
           <th>Summary</th>
           <th>Payout</th>
           <th>UID</th>
+          <th class="actions-col">Actions</th>
         </tr>
       </template>
-      <tr v-for="o in occupancies" :key="o.id">
+      <tr v-for="o in occupancies" :key="o.id" :class="{ 'row-closed': o.closure_state === 'closed' }">
         <td>{{ o.start_at?.slice(0, 10) }}</td>
         <td>{{ o.end_at?.slice(0, 10) }}</td>
         <td>
           <UiBadge :tone="statusTone(o.status)" dot>{{ displayStatus(o.status) }}</UiBadge>
         </td>
+        <td>
+          <template v-if="isLabelled(o)">
+            <UiBadge :tone="closureTone(o.closure_state)">
+              {{ closureLabel(o.closure_state) }}
+            </UiBadge>
+            <span v-if="o.closure_state === 'external_sale'" class="ext-amount">
+              {{ formatExternalAmount(o) }}
+            </span>
+          </template>
+          <span v-else class="muted">—</span>
+        </td>
         <td>{{ o.raw_summary || '—' }}</td>
         <td>{{ o.has_payout_data ? 'Yes' : '—' }}</td>
         <td class="uid-cell">{{ o.source_event_uid }}</td>
+        <td class="actions-col">
+          <template v-if="!isLabelled(o)">
+            <UiButton size="sm" variant="ghost" :disabled="busy" @click="emit('close', o)">
+              Close
+            </UiButton>
+            <UiButton size="sm" variant="ghost" :disabled="busy" @click="emit('externalSale', o)">
+              Externally sold
+            </UiButton>
+          </template>
+          <UiButton v-else size="sm" variant="ghost" :disabled="busy" @click="emit('reopen', o)">
+            Reopen
+          </UiButton>
+        </td>
       </tr>
     </UiTable>
   </div>
@@ -88,5 +119,20 @@ const emit = defineEmits<{
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   word-break: break-all;
+}
+.actions-col {
+  white-space: nowrap;
+  text-align: right;
+}
+.ext-amount {
+  margin-left: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+.row-closed {
+  opacity: 0.7;
+}
+.muted {
+  color: var(--color-text-muted);
 }
 </style>

@@ -44,6 +44,7 @@ This document catalogs every analytical signal currently captured by the PMS dat
 - `start_at`, `end_at` (UTC), `status` (`active | updated | cancelled | deleted_from_source`)
 - `source_type` (`booking_ics` or synthetic `booking_payout`), `source_event_uid`, `raw_summary`, `guest_display_name`
 - `imported_at`, `last_synced_at`, `content_hash` (change detection), `last_sync_run_id`
+- **Closure label (PMS_14):** `closure_state` (`closed | external_sale | NULL`), `closure_reason`, `closure_category` (`owner_stay | maintenance | soft_block | other`), `closed_by_user_id`, `closed_at`, `external_net_amount_cents`, `external_currency`, `external_channel` (`airbnb | direct | walk_in | other`).
 
 ### Sync run signals
 
@@ -52,7 +53,8 @@ This document catalogs every analytical signal currently captured by the PMS dat
 ### Metrics derivable
 
 - **Occupancy / nights booked** per month / quarter / year, per property and portfolio-wide
-- **Occupancy rate** (booked nights / available nights) — availability is implicit (calendar = all nights)
+- **Occupancy rate** = `nights_sold / bookable_nights`, where `bookable_nights = calendar_nights − closed_nights` (PMS_14 §4). `external_sale` rows count toward the numerator; `closed` rows are removed from both numerator and denominator.
+- **External-sale revenue** — operator-entered `external_net_amount_cents`, prorated by overlap nights, contributes to gross revenue alongside Booking payouts.
 - **Average length of stay**, distribution
 - **Lead time** (between `imported_at` and `start_at`)
 - **Booking pace / pickup curve** (cumulative bookings by day before arrival)

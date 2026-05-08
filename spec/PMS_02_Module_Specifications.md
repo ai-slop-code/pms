@@ -106,6 +106,10 @@ Import property occupancy from configurable ICS sources, store raw and normalize
 - Source identity should rely on stable UID or best available event fingerprint.
 - Occupancy is the primary shared record used by Nuki, messages, and optionally invoices.
 - JSON endpoint access must use a token separate from the normal browser session if intended for automation use.
+- Occupancies may be manually labelled by an operator (PMS_14):
+  - `closed` — drops out of sales analytics (numerator and denominator) and suppresses Nuki code generation.
+  - `external_sale` — counts as a sold night, contributes its operator-entered net amount to gross revenue, and suppresses Nuki code generation.
+  - Labels survive ICS resync: `UpsertOccupancy` does not clear `closure_state` or related fields when re-importing the same UID.
 
 ### Normalization Rules
 - Store raw source data unchanged where possible.
@@ -120,6 +124,9 @@ Import property occupancy from configurable ICS sources, store raw and normalize
 - `GET /api/properties/{id}/occupancy-sync/runs`
 - `PATCH /api/properties/{id}/occupancy-source`
 - `GET /api/properties/{id}/occupancy-export?token=...`
+- `POST /api/properties/{id}/occupancies/{occupancyId}/close` — admin-only; body `{ reason, category }`.
+- `POST /api/properties/{id}/occupancies/{occupancyId}/external-sale` — admin-only; body `{ net_amount_cents, currency, channel, reason }`.
+- `POST /api/properties/{id}/occupancies/{occupancyId}/reopen` — admin-only; clears the closure label.
 
 ### Suggested JSON Export Fields
 - occupancy id
@@ -132,11 +139,12 @@ Import property occupancy from configurable ICS sources, store raw and normalize
 - status
 - raw summary
 - last synced at
+- categories (array; emits `PMS-CLOSURE` or `PMS-EXTERNAL-SALE` per PMS_14 §3.5; absent for normal stays)
 
 ### Suggested Database Entities
 - `occupancy_sources`
 - `occupancy_raw_events`
-- `occupancies`
+- `occupancies` — extended in migration 000019 with closure columns: `closure_state` (`closed` | `external_sale` | NULL), `closure_reason`, `closure_category`, `closed_by_user_id`, `closed_at`, `external_net_amount_cents`, `external_currency`, `external_channel`.
 - `occupancy_sync_runs`
 - `occupancy_api_tokens`
 

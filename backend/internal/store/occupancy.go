@@ -46,7 +46,27 @@ type Occupancy struct {
 	ImportedAt       time.Time
 	LastSyncedAt     time.Time
 	LastSyncRunID    sql.NullInt64
+	// Closure / external-sale labelling. When ClosureState is non-NULL the
+	// row is excluded from active-status analytics in different ways depending
+	// on the value (see PMS_14 §4):
+	//   - 'closed'        → night drops out of nights_sold and available_nights
+	//   - 'external_sale' → night counts as sold + available, with the
+	//                       operator-entered net amount feeding gross_revenue.
+	ClosureState           sql.NullString
+	ClosureReason          sql.NullString
+	ClosureCategory        sql.NullString
+	ClosedByUserID         sql.NullInt64
+	ClosedAt               sql.NullTime
+	ExternalNetAmountCents sql.NullInt64
+	ExternalCurrency       sql.NullString
+	ExternalChannel        sql.NullString
 }
+
+// Closure state constants (occupancies.closure_state values).
+const (
+	ClosureStateClosed       = "closed"
+	ClosureStateExternalSale = "external_sale"
+)
 
 type UpcomingOccupancy struct {
 	ID               int64
@@ -208,9 +228,7 @@ func (s *Store) UpdateOccupancyGuestDisplayName(ctx context.Context, propertyID,
 }
 
 func (s *Store) GetOccupancyBySourceEventUID(ctx context.Context, propertyID int64, sourceEventUID string) (*Occupancy, error) {
-	q := `
-		SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id
-		FROM occupancies WHERE property_id = ? AND source_event_uid = ?`
+	q := occupancySelectColumns + ` FROM occupancies WHERE property_id = ? AND source_event_uid = ?`
 	rows, err := s.scanOccupancies(ctx, q, propertyID, sourceEventUID)
 	if err != nil {
 		return nil, err
@@ -222,9 +240,7 @@ func (s *Store) GetOccupancyBySourceEventUID(ctx context.Context, propertyID int
 }
 
 func (s *Store) GetOccupancyByID(ctx context.Context, propertyID, occupancyID int64) (*Occupancy, error) {
-	q := `
-		SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id
-		FROM occupancies WHERE property_id = ? AND id = ?`
+	q := occupancySelectColumns + ` FROM occupancies WHERE property_id = ? AND id = ?`
 	rows, err := s.scanOccupancies(ctx, q, propertyID, occupancyID)
 	if err != nil {
 		return nil, err
@@ -291,9 +307,7 @@ func (s *Store) ListOccupancies(ctx context.Context, propertyID int64, month str
 		}
 		return list[offset:end], nil
 	}
-	q := `
-		SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id
-		FROM occupancies WHERE property_id = ?`
+	q := occupancySelectColumns + ` FROM occupancies WHERE property_id = ?`
 	args := []interface{}{propertyID}
 	if statusFilter != nil && *statusFilter != "" {
 		q += ` AND status = ?`
@@ -316,12 +330,18 @@ func (s *Store) ListOccupanciesOverlappingMonthInTZ(ctx context.Context, propert
 }
 
 func (s *Store) ListOccupanciesBetween(ctx context.Context, propertyID int64, startUTC, endUTC time.Time) ([]Occupancy, error) {
-	q := `
-		SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id
-		FROM occupancies WHERE property_id = ? AND start_at < ? AND end_at > ?
+	q := occupancySelectColumns + ` FROM occupancies WHERE property_id = ? AND start_at < ? AND end_at > ?
 		ORDER BY start_at ASC`
 	return s.scanOccupancies(ctx, q, propertyID, endUTC.Format(time.RFC3339), startUTC.Format(time.RFC3339))
 }
+
+// occupancySelectColumns is the canonical column list for Occupancy rows so
+// scanOccupancies stays in lockstep with every caller.
+const occupancySelectColumns = `
+	SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status,
+	       raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id,
+	       closure_state, closure_reason, closure_category, closed_by_user_id, closed_at,
+	       external_net_amount_cents, external_currency, external_channel`
 
 func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface{}) ([]Occupancy, error) {
 	rows, err := s.DB.QueryContext(ctx, q, args...)
@@ -334,7 +354,13 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 		var o Occupancy
 		var start, end, imp, last string
 		var runID sql.NullInt64
-		if err := rows.Scan(&o.ID, &o.PropertyID, &o.SourceType, &o.SourceEventUID, &start, &end, &o.Status, &o.RawSummary, &o.GuestDisplayName, &o.ContentHash, &imp, &last, &runID); err != nil {
+		var closedAt sql.NullString
+		if err := rows.Scan(
+			&o.ID, &o.PropertyID, &o.SourceType, &o.SourceEventUID, &start, &end, &o.Status,
+			&o.RawSummary, &o.GuestDisplayName, &o.ContentHash, &imp, &last, &runID,
+			&o.ClosureState, &o.ClosureReason, &o.ClosureCategory, &o.ClosedByUserID, &closedAt,
+			&o.ExternalNetAmountCents, &o.ExternalCurrency, &o.ExternalChannel,
+		); err != nil {
 			return nil, err
 		}
 		o.StartAt, _ = time.Parse(time.RFC3339, start)
@@ -342,6 +368,10 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 		o.ImportedAt, _ = time.Parse(time.RFC3339, imp)
 		o.LastSyncedAt, _ = time.Parse(time.RFC3339, last)
 		o.LastSyncRunID = runID
+		if closedAt.Valid && closedAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, closedAt.String)
+			o.ClosedAt = sql.NullTime{Time: t, Valid: true}
+		}
 		out = append(out, o)
 	}
 	return out, rows.Err()
@@ -451,9 +481,7 @@ func (s *Store) ValidateOccupancyExportToken(ctx context.Context, propertyID int
 }
 
 func (s *Store) ListOccupanciesForExport(ctx context.Context, propertyID int64) ([]Occupancy, error) {
-	q := `
-		SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id
-		FROM occupancies WHERE property_id = ? AND status NOT IN ('deleted_from_source', 'cancelled')
+	q := occupancySelectColumns + ` FROM occupancies WHERE property_id = ? AND status NOT IN ('deleted_from_source', 'cancelled')
 		ORDER BY start_at ASC`
 	return s.scanOccupancies(ctx, q, propertyID)
 }
@@ -508,4 +536,123 @@ func (s *Store) ListPropertyIDsWithICSURL(ctx context.Context) ([]int64, error) 
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// ErrOccupancyAlreadyLabelled indicates that the row already has a closure /
+// external-sale label and the caller must explicitly Reopen first. Operators
+// should never silently overwrite a label.
+var ErrOccupancyAlreadyLabelled = errors.New("occupancy already has a closure label; reopen first")
+
+// CloseOccupancy marks the row as off-the-market closed. Sets closed_by_user_id
+// + closed_at audit columns and clears any external-sale fields. Refuses to
+// overwrite an existing label.
+func (s *Store) CloseOccupancy(ctx context.Context, propertyID, occupancyID, userID int64, reason, category string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE occupancies
+		SET closure_state = 'closed',
+		    closure_reason = ?,
+		    closure_category = ?,
+		    closed_by_user_id = ?,
+		    closed_at = ?,
+		    external_net_amount_cents = NULL,
+		    external_currency = NULL,
+		    external_channel = NULL,
+		    last_synced_at = ?
+		WHERE property_id = ? AND id = ? AND closure_state IS NULL`,
+		nullableString(reason), nullableString(category), userID, now, now, propertyID, occupancyID)
+	if err != nil {
+		return fmt.Errorf("close occupancy: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return s.checkOccupancyLabelled(ctx, propertyID, occupancyID)
+	}
+	return nil
+}
+
+// MarkOccupancyExternalSale labels the row as sold via a different channel. The
+// operator-entered net amount feeds gross_revenue but does not change the
+// nights_sold / available_nights tally. Refuses to overwrite an existing label.
+func (s *Store) MarkOccupancyExternalSale(ctx context.Context, propertyID, occupancyID, userID, netAmountCents int64, currency, channel, reason string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE occupancies
+		SET closure_state = 'external_sale',
+		    closure_reason = ?,
+		    closure_category = NULL,
+		    closed_by_user_id = ?,
+		    closed_at = ?,
+		    external_net_amount_cents = ?,
+		    external_currency = ?,
+		    external_channel = ?,
+		    last_synced_at = ?
+		WHERE property_id = ? AND id = ? AND closure_state IS NULL`,
+		nullableString(reason), userID, now, netAmountCents, nullableString(currency), nullableString(channel), now, propertyID, occupancyID)
+	if err != nil {
+		return fmt.Errorf("mark external sale: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return s.checkOccupancyLabelled(ctx, propertyID, occupancyID)
+	}
+	return nil
+}
+
+// ReopenOccupancy removes any closure / external-sale label, restoring the row
+// to its original ICS-driven status. No-op (returns sql.ErrNoRows) if the row
+// is already unlabelled.
+func (s *Store) ReopenOccupancy(ctx context.Context, propertyID, occupancyID int64) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE occupancies
+		SET closure_state = NULL,
+		    closure_reason = NULL,
+		    closure_category = NULL,
+		    closed_by_user_id = NULL,
+		    closed_at = NULL,
+		    external_net_amount_cents = NULL,
+		    external_currency = NULL,
+		    external_channel = NULL,
+		    last_synced_at = ?
+		WHERE property_id = ? AND id = ? AND closure_state IS NOT NULL`,
+		now, propertyID, occupancyID)
+	if err != nil {
+		return fmt.Errorf("reopen occupancy: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// Either not found or not labelled; differentiate so the handler can
+		// return a clean 404 vs 409.
+		_, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+		if err != nil {
+			return err
+		}
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// checkOccupancyLabelled is called after a 0-row UPDATE to decide whether the
+// caller saw "row missing" (sql.ErrNoRows) or "already labelled"
+// (ErrOccupancyAlreadyLabelled).
+func (s *Store) checkOccupancyLabelled(ctx context.Context, propertyID, occupancyID int64) error {
+	row, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+	if err != nil {
+		return err
+	}
+	if row.ClosureState.Valid {
+		return ErrOccupancyAlreadyLabelled
+	}
+	// Should not happen unless a concurrent writer changed the row between
+	// the UPDATE and this SELECT; treat as a transient failure.
+	return errors.New("occupancy not updated")
+}
+
+func nullableString(v string) interface{} {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil
+	}
+	return v
 }

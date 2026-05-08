@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { api } from '@/api/http'
 import { useCurrentProperty } from '@/composables/useCurrentProperty'
 import { useConfirm } from '@/composables/useConfirm'
@@ -10,6 +10,13 @@ import UiEmptyState from '@/components/ui/UiEmptyState.vue'
 import OccupancyCalendar from '@/views/occupancy/OccupancyCalendar.vue'
 import OccupancyStayList from '@/views/occupancy/OccupancyStayList.vue'
 import OccupancySyncPanel from '@/views/occupancy/OccupancySyncPanel.vue'
+import OccupancyClosureDialog, {
+  type SubmitPayload as ClosureSubmit,
+} from '@/views/occupancy/OccupancyClosureDialog.vue'
+import UiDialog from '@/components/ui/UiDialog.vue'
+import UiButton from '@/components/ui/UiButton.vue'
+import UiBadge from '@/components/ui/UiBadge.vue'
+import { closureLabel, closureTone, isLabelled, formatExternalAmount } from '@/views/occupancy/closure'
 import { monthKey, parseMonthKey } from '@/utils/month'
 import type {
   Occupancy as Occ,
@@ -36,6 +43,101 @@ const source = ref<{ active: boolean; source_type: string } | null>(null)
 const newTokenPlain = ref('')
 const syncing = ref(false)
 const copiedExport = ref('')
+
+// PMS_14 manual labelling state.
+const dialogOpen = ref(false)
+const dialogMode = ref<'close' | 'external_sale'>('close')
+const dialogBusy = ref(false)
+const dialogError = ref('')
+const dialogTarget = ref<Occ | null>(null)
+const dialogStayLabel = computed(() => {
+  const o = dialogTarget.value
+  if (!o) return ''
+  return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
+})
+// Calendar day-actions popup state (PMS_14).
+const dayDialogOpen = ref(false)
+const dayDialogDate = ref('')
+const dayDialogStays = ref<Occ[]>([])
+
+function onCalendarCellClick(payload: { dateKey: string; stays: Occ[] }) {
+  if (!payload.stays.length) return
+  dayDialogDate.value = payload.dateKey
+  dayDialogStays.value = payload.stays
+  dayDialogOpen.value = true
+}
+
+function stayLabel(o: Occ) {
+  return `${o.start_at?.slice(0, 10)} → ${o.end_at?.slice(0, 10)} · ${o.raw_summary || o.source_event_uid || 'Stay'}`
+}
+
+function openCloseFromDay(o: Occ) {
+  dayDialogOpen.value = false
+  openCloseDialog(o)
+}
+function openExternalSaleFromDay(o: Occ) {
+  dayDialogOpen.value = false
+  openExternalSaleDialog(o)
+}
+async function reopenFromDay(o: Occ) {
+  dayDialogOpen.value = false
+  await reopenStay(o)
+}
+function openCloseDialog(o: Occ) {
+  dialogTarget.value = o
+  dialogMode.value = 'close'
+  dialogError.value = ''
+  dialogOpen.value = true
+}
+
+function openExternalSaleDialog(o: Occ) {
+  dialogTarget.value = o
+  dialogMode.value = 'external_sale'
+  dialogError.value = ''
+  dialogOpen.value = true
+}
+
+async function submitDialog(payload: ClosureSubmit) {
+  if (!pid.value || !dialogTarget.value) return
+  const occID = dialogTarget.value.id
+  const path =
+    dialogMode.value === 'close'
+      ? `/api/properties/${pid.value}/occupancies/${occID}/close`
+      : `/api/properties/${pid.value}/occupancies/${occID}/external-sale`
+  dialogBusy.value = true
+  dialogError.value = ''
+  try {
+    await api(path, { method: 'POST', json: payload })
+    dialogOpen.value = false
+    success.value = dialogMode.value === 'close' ? 'Stay marked as closed.' : 'Stay marked as externally sold.'
+    if (tab.value === 'list') await loadList()
+    else if (tab.value === 'calendar') await loadCalendar()
+  } catch (e) {
+    dialogError.value = e instanceof Error ? e.message : 'Failed to update stay'
+  } finally {
+    dialogBusy.value = false
+  }
+}
+
+async function reopenStay(o: Occ) {
+  if (!pid.value) return
+  const ok = await confirm({
+    title: 'Reopen stay',
+    message: 'Clear the closed / externally-sold label and restore this stay to its original state?',
+    confirmLabel: 'Reopen',
+  })
+  if (!ok) return
+  error.value = ''
+  success.value = ''
+  try {
+    await api(`/api/properties/${pid.value}/occupancies/${o.id}/reopen`, { method: 'POST' })
+    success.value = 'Stay reopened.'
+    if (tab.value === 'list') await loadList()
+    else if (tab.value === 'calendar') await loadCalendar()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to reopen stay'
+  }
+}
 
 function prevMonth() {
   const { year, month: m } = parseMonthKey(month.value)
@@ -228,17 +330,22 @@ watch(
             @prev="prevMonth"
             @next="nextMonth"
             @current="goToCurrentMonth"
+            @cell-click="onCalendarCellClick"
           />
           <OccupancyStayList
             v-else-if="active === 'list'"
             :month="month"
             :status-filter="statusFilter"
             :occupancies="occupancies"
+            :busy="dialogBusy"
             @update:month="month = $event"
             @update:status-filter="statusFilter = $event"
             @prev="prevMonth"
             @next="nextMonth"
             @refresh="loadList"
+            @close="openCloseDialog"
+            @external-sale="openExternalSaleDialog"
+            @reopen="reopenStay"
           />
           <OccupancySyncPanel
             v-else
@@ -256,6 +363,104 @@ watch(
           />
         </template>
       </UiTabs>
+
+      <OccupancyClosureDialog
+        v-model:open="dialogOpen"
+        :mode="dialogMode"
+        :stay-label="dialogStayLabel"
+        :busy="dialogBusy"
+        :error-message="dialogError"
+        @submit="submitDialog"
+      />
+
+      <UiDialog
+        v-model:open="dayDialogOpen"
+        :title="dayDialogDate ? `Stays on ${dayDialogDate}` : 'Stays'"
+        size="md"
+      >
+        <p v-if="!dayDialogStays.length" class="day-dialog__empty">No stays on this day.</p>
+        <ul v-else class="day-dialog__list">
+          <li v-for="o in dayDialogStays" :key="o.id" class="day-dialog__item">
+            <div class="day-dialog__row">
+              <div class="day-dialog__meta">
+                <div class="day-dialog__title">{{ stayLabel(o) }}</div>
+                <div class="day-dialog__sub">
+                  <UiBadge v-if="isLabelled(o)" :tone="closureTone(o.closure_state)">
+                    {{ closureLabel(o.closure_state) }}
+                  </UiBadge>
+                  <span v-if="o.closure_state === 'external_sale'" class="day-dialog__amount">
+                    {{ formatExternalAmount(o) }}
+                  </span>
+                </div>
+              </div>
+              <div class="day-dialog__actions">
+                <template v-if="!isLabelled(o)">
+                  <UiButton size="sm" variant="ghost" :disabled="dialogBusy" @click="openCloseFromDay(o)">
+                    Close
+                  </UiButton>
+                  <UiButton size="sm" variant="ghost" :disabled="dialogBusy" @click="openExternalSaleFromDay(o)">
+                    Externally sold
+                  </UiButton>
+                </template>
+                <UiButton v-else size="sm" variant="ghost" :disabled="dialogBusy" @click="reopenFromDay(o)">
+                  Reopen
+                </UiButton>
+              </div>
+            </div>
+          </li>
+        </ul>
+        <template #footer>
+          <UiButton variant="ghost" @click="dayDialogOpen = false">Close</UiButton>
+        </template>
+      </UiDialog>
     </template>
   </div>
 </template>
+
+<style scoped>
+.day-dialog__empty {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+.day-dialog__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.day-dialog__item {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.day-dialog__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.day-dialog__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.day-dialog__title {
+  font-weight: 500;
+}
+.day-dialog__sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+.day-dialog__actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+</style>
