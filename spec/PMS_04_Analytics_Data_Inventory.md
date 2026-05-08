@@ -64,7 +64,7 @@ This document catalogs every analytical signal currently captured by the PMS dat
 - ICS feed reliability: success ratio, sync latency, error taxonomy, HTTP status distribution
 - Token usage (B2B JSON export consumers via `last_used_at`)
 
-> Not stored: room / listing-level price per night, ADR — the ICS feed doesn't carry rates. RevPAR / ADR become possible via Booking payouts (see §6).
+> Not stored: room / listing-level price per night, ADR — the ICS feed doesn't carry rates. RevPAR / ADR are reconstructed from Booking.com payouts and statements (see §6).
 
 ---
 
@@ -143,30 +143,51 @@ This document catalogs every analytical signal currently captured by the PMS dat
 
 ---
 
-## 6. Booking.com payouts (commission & fee analytics)
+## 6. Booking.com bookings — payouts + statement (commission, fees, cancellations)
 
-**Table:** `finance_booking_payouts` (with FKs to `finance_transactions` and `occupancies`)
+**Table:** `finance_bookings` (renamed from `finance_booking_payouts` in migration 000021; FKs to `finance_transactions` and `occupancies`; `finance_imports` + `finance_booking_merges` are the per-upload audit tables introduced by FEAT-04).
 
-### Raw signals per CSV row
+The table is **lifecycle-aware**: each row may carry payout-derived data, statement-derived data, or both, distinguished by the `has_payout_data` and `has_statement_data` flags. The `(property_id, source_channel, reference_number)` unique index is the canonical merge key.
 
-- `reference_number`, `payout_id`, `row_type`, `check_in_date`, `check_out_date`, `guest_name`, `reservation_status`, `payment_status`, `currency`
-- **Money columns:** `amount_cents` (gross from CSV), `commission_cents`, `payment_service_fee_cents`, `net_cents` (required), `payout_date`
-- Linkage: `transaction_id` (auto-created ledger entry, **uses net only**), `occupancy_id` (matched stay), full `raw_row_json`
+### Raw signals per row
+
+- Identity: `reference_number`, `source_channel` (default `booking_com`), `payout_id`, `row_type`, `invoice_number`, `hotel_id`, `property_label`, `country`
+- Dates: `booked_on` (when the guest reserved — statement-only), `check_in_date`, `check_out_date`, `payout_date`
+- Guest / actor: `guest_name`, `booker_name`, `guest_request`
+- Status: `status` (canonical upper-cased — `OK`, `CANCELLED`, `MODIFIED`, `NO_SHOW`, `REFUSED_BY_HOTEL`, …; backfilled in migration 000022 from `reservation_status`), `reservation_status` (raw CSV), `payment_status`, `currency`
+- Money columns: `amount_cents` (gross), `original_amount_cents`, `commission_cents`, `commission_pct` (statement-reported %), `payment_service_fee_cents`, `net_cents`
+- Inventory: `persons`, `rooms`, `room_nights`
+- Source flags: `has_payout_data`, `has_statement_data`, raw payloads `raw_payout_row_json`, `raw_statement_row_json`
+- Linkage: `transaction_id` (auto-created ledger entry — uses net only), `occupancy_id` (matched stay) and the explicit reverse FK `occupancies.finance_booking_id`
 
 ### Metrics derivable
 
-- **Gross booking revenue** (sum of `amount_cents`) — closest thing to ADR data we currently have
-- **Booking.com commission %** = commission / gross; portfolio-wide and per stay
-- **Effective take-rate** = (commission + payment_service_fee) / gross
+#### Cash-basis (works on payout-only rows; available since v1.0)
+
+- **Gross booking revenue** (sum of `amount_cents`) — proxy for ADR before statement ingestion
+- **Booking.com commission %** = `commission / gross`; portfolio-wide and per stay
+- **Effective take-rate** = `(commission + payment_service_fee) / gross`
 - **Net payout** time-series, payout cadence (`payout_date` distribution)
-- **ADR** (gross / nights), **RevPAR** (gross / available nights) once joined to occupancy
+- **ADR** (`gross / nights`), **RevPAR** (`gross / available nights`) once joined to occupancy
 - **Reservation status mix** (paid, no-show, cancelled, etc.)
 - Payment service fee burden over time
 - **Payout-to-stay matching quality**: % rows with `occupancy_id` set vs orphaned
 - Repeat guest detection (by `guest_name` — noisy but possible)
 - Currency mix on the platform side (ledger is EUR-only)
 
-> Important caveat: **only the net payout currently lands on the ledger**. Gross / commission / fees are stored on the payout table only, so any full P&L view should join `finance_booking_payouts`.
+#### Accrual-basis (statement-derived, FEAT-05; gated on `has_statement_data = 1`)
+
+The frontend hides these charts until at least one statement row exists for the property; the freshness banner emits `has_statement_data` and `last_statement_date` so the UI can render an explicit empty state.
+
+- **Cancellation rate by booking cohort** (`ListCancellationByBookingCohort`) — group statement-aware rows by month of `booked_on`; rate = `CANCELLED / (CANCELLED + OK)`. Status `MODIFIED / NO_SHOW / REFUSED_BY_HOTEL` is reported in the `Other` column but **excluded from both numerator and denominator** (PMS_12 N7) so the rate is not skewed by ambiguous lifecycle states.
+- **Cancellation rate by arrival cohort** (`ListCancellationByArrivalCohort`) — same logic, grouped by month of `check_in_date`. Used for the operational "exposure in the next 30 days" view.
+- **Lead-time histogram (statement-precise)** (`ListLeadTimeStatementBuckets`) — fixed buckets `0-3 / 4-14 / 15-45 / 46+` days computed as `check_in_date − booked_on`; active stays only (`status IN ('OK','')`). Cancelled rows are excluded so the histogram reflects materialised demand.
+- **Persons distribution + ADR by guests** (`ListPersonsDistribution`) — counts active stays per `persons` value and reports weighted ADR (`Σ amount_cents / Σ room_nights`) per bucket. Rows with NULL or 0 `persons` are excluded.
+- **Weighted commission rate trend** (`ListCommissionRateTrend`) — per `booked_on` month: `Σ commission_cents / Σ amount_cents`. Active stays only; CANCELLED rows are dropped so they cannot pollute the rate with zero gross.
+- **Commission per stay** (`ListCommissionPerStay`) — line-item table sorted by `check_in_date DESC`; each row exposes gross, commission and the per-stay commission fraction.
+- **Last statement date** (`LastStatementBookedOn`, surfaced via `AnalyticsFreshness.LastStatementBookedOn` + `HasStatementData`) — the most recent `booked_on` among statement rows; used by the freshness disclaimer to communicate how current the accrual-basis charts are.
+
+> Important caveat: **only the net payout currently lands on the finance ledger**. Gross / commission / fees / statement-only fields live on `finance_bookings`, so any full P&L or accrual-basis view must read the table directly.
 
 ---
 
@@ -180,7 +201,7 @@ This document catalogs every analytical signal currently captured by the PMS dat
 - Dates: `issue_date`, `taxable_supply_date`, `due_date`, `stay_start_date`, `stay_end_date`
 - `amount_total_cents`, `currency`, `payment_status`, `payment_note`, `version`
 - Frozen JSON snapshots (`supplier_snapshot_json`, `customer_snapshot_json`) — contain VAT IDs, ICO / DIC, addresses
-- Linkage: `occupancy_id`, `finance_booking_payout_id`
+- Linkage: `occupancy_id`, `finance_booking_id` (the canonical FEAT-04 FK; the `finance_booking_payout_id` column on invoices was renamed in 000021's data path but kept its name to minimise churn — it now points at `finance_bookings.id`)
 - PDF files: `version`, `file_size_bytes`, `created_at`
 
 ### Metrics derivable
@@ -227,7 +248,7 @@ Every reporting axis below is supported by stored timestamps:
 | Code validity | `nuki_access_codes.valid_from` / `valid_until` |
 | Cleaning attendance | `cleaning_daily_logs.day_date`, `first_entry_at` |
 | Cashflow date | `finance_transactions.transaction_date` |
-| Booking payout date | `finance_booking_payouts.payout_date` |
+| Booking payout date | `finance_bookings.payout_date` |
 | Invoice issue / taxable supply / due dates | `invoices.*` |
 | Audit timestamps | `api_audit_logs.created_at` |
 
@@ -245,8 +266,8 @@ Every reporting axis below is supported by stored timestamps:
 
 ## Known gaps to flag proactively
 
-1. **No room rate / ADR data** in occupancy itself — ICS doesn't carry it. Gross revenue and ADR can only be reconstructed via `finance_booking_payouts.amount_cents`.
-2. **Ledger only stores net payouts** for booking income — gross / commission / fees live on the payout table and need to be joined for a full P&L.
+1. **No room rate / ADR data** in occupancy itself — ICS doesn't carry it. Gross revenue and ADR can only be reconstructed via `finance_bookings.amount_cents` (FEAT-04 / FEAT-05).
+2. **Ledger only stores net payouts** for booking income — gross / commission / fees / statement-only fields live on `finance_bookings` and need to be joined for a full P&L.
 3. **No VAT breakdown column** on invoices — only `amount_total_cents`. Tax analytics require a schema extension.
 4. **No outbound-message log** — we render but don't persist sends / opens.
 5. **No competitor / market data** — internal performance only.

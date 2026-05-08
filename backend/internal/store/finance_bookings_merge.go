@@ -30,7 +30,8 @@ func (s *Store) FinanceBookingByReference(ctx context.Context, propertyID int64,
 			persons, rooms, room_nights,
 			payout_date, payout_id, row_type,
 			invoice_number, hotel_id, property_label, country,
-			raw_payout_row_json, raw_statement_row_json
+			raw_payout_row_json, raw_statement_row_json,
+			status
 		FROM finance_bookings
 		WHERE property_id = ? AND source_channel = ? AND reference_number = ?`,
 		propertyID, channel, reference)
@@ -81,6 +82,7 @@ func (s *Store) FinanceBookingByReference(ctx context.Context, propertyID int64,
 		&payoutDate, &payoutID, &rowType,
 		&invoiceNumber, &hotelID, &propertyLabel, &country,
 		&rawPayout, &rawStatement,
+		&statusValue,
 	)
 	if err == sql.ErrNoRows {
 		return nil, 0, nil
@@ -172,6 +174,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 				country = ?,
 				raw_payout_row_json = COALESCE(?, raw_payout_row_json),
 				raw_statement_row_json = COALESCE(?, raw_statement_row_json),
+				status = ?,
 				updated_at = ?
 			WHERE id = ?`,
 			boolToInt(b.HasPayoutData), boolToInt(b.HasStatementData),
@@ -187,6 +190,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 			ptrToNullString(b.InvoiceNumber), ptrToNullString(b.HotelID),
 			ptrToNullString(b.PropertyLabel), ptrToNullString(b.Country),
 			ptrToNullString(b.RawPayoutRowJSON), ptrToNullString(b.RawStatementRowJSON),
+			ptrToNullString(canonicalStatusForDB(b)),
 			now, existingID,
 		)
 		return existingID, err
@@ -226,8 +230,9 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 			payout_date, payout_id, row_type,
 			invoice_number, hotel_id, property_label, country,
 			raw_payout_row_json, raw_statement_row_json,
+			status,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		propertyID, b.ReferenceNumber, channel,
 		boolToInt(b.HasPayoutData), boolToInt(b.HasStatementData),
 		ptrToNullString(b.BookedOn),
@@ -242,6 +247,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 		ptrToNullString(b.InvoiceNumber), ptrToNullString(b.HotelID),
 		ptrToNullString(b.PropertyLabel), ptrToNullString(b.Country),
 		ptrToNullString(b.RawPayoutRowJSON), ptrToNullString(b.RawStatementRowJSON),
+		ptrToNullString(canonicalStatusForDB(b)),
 		now, now,
 	)
 	if err != nil {
@@ -434,4 +440,29 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// canonicalStatusForDB picks the canonical status to persist in the
+// finance_bookings.status column. Statement rows fill b.Status with the
+// raw "Status" CSV value ("OK", "Cancelled", ...). Payout-only rows
+// fall back to the lower-cased reservation_status. Returns nil when
+// neither is populated; otherwise an upper-cased trimmed value.
+func canonicalStatusForDB(b statements.CanonicalBooking) *string {
+	pick := func(p *string) (string, bool) {
+		if p == nil {
+			return "", false
+		}
+		v := strings.TrimSpace(*p)
+		if v == "" {
+			return "", false
+		}
+		return strings.ToUpper(v), true
+	}
+	if v, ok := pick(b.Status); ok {
+		return &v
+	}
+	if v, ok := pick(b.ReservationStatus); ok {
+		return &v
+	}
+	return nil
 }
