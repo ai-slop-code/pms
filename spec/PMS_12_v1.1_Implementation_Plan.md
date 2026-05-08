@@ -412,7 +412,7 @@ configured cleaner auth id and any aliases) yields the guest entries.
 
 ### 4. Finance — Booking.com Statement ingestion (accrual-basis merge)
 
-> **Source spec:** [`spec/statement_processing/PMS_Statement_Ingestion_Spec.md`](statement_processing/PMS_Statement_Ingestion_Spec.md).
+> **Source spec:** [`spec/PMS_Statement_Ingestion_Spec.md`](PMS_Statement_Ingestion_Spec.md).
 > All blocker questions in that document are answered; this task is the
 > implementation contract.
 
@@ -600,7 +600,7 @@ Phase 1)**
   rate (both cohorts), persons distribution, ADR-by-persons,
   weighted commission rate and commission-per-stay; flag each as
   statement-derived with the "no statement data" rule.
-- `spec/statement_processing/PMS_Statement_Ingestion_Spec.md`:
+- `spec/PMS_Statement_Ingestion_Spec.md`:
   resolve N6 (record what today's payout flow does and the chosen
   parity outcome) and link to this task as the implementation
   vehicle.

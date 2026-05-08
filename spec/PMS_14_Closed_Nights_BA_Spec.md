@@ -61,7 +61,7 @@ revenue from the off-platform booking is invisible to PMS.
   the public iCal feed.
 - The Booking.com Connectivity API would, but PMS's stated long-term
   ingestion strategy is **manual upload, no API integration**
-  ([statement-ingestion spec](statement_processing/PMS_Statement_Ingestion_Spec.md), Q17).
+  ([statement-ingestion spec](PMS_Statement_Ingestion_Spec.md), Q17).
 - Heuristics ("event whose summary is `CLOSED - Not available`") work in
   some locales and break in others. The English heuristic specifically
   was tried by other PMS vendors and abandoned because hosts customise
