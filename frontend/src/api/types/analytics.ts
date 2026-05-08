@@ -3,8 +3,47 @@
 export interface FreshnessResponse {
   last_ics_sync_at?: string
   last_payout_date?: string
+  last_statement_date?: string
   unmatched_payouts_count: number
+  has_statement_data: boolean
   staleness_level: 'ok' | 'warn' | 'stale'
+}
+
+// FEAT-05 — statement-derived analytics rows.
+
+export interface CancellationCohortRow {
+  month: string
+  rate: number
+  cancelled: number
+  active: number
+  other: number
+}
+
+export interface CommissionTrendRow {
+  month: string
+  rate: number
+  commission_cents: number
+  gross_cents: number
+  stays: number
+}
+
+export interface CommissionPerStayRow {
+  booking_id: number
+  reference: string
+  guest_name: string
+  check_in_date: string
+  check_out_date: string
+  gross_cents: number
+  commission_cents: number
+  rate: number
+}
+
+export interface PersonsBucket {
+  persons: number
+  stays: number
+  gross_cents: number
+  room_nights: number
+  adr_cents: number
 }
 
 export interface KPIWindow {
@@ -122,6 +161,11 @@ export interface PerformanceResponse {
   seasonality_heatmap: HeatmapCell[]
   dow_occupancy: DOWCell[]
   cancellation: CancellationStat
+  cancellation_by_booking_month: CancellationCohortRow[]
+  cancellation_by_arrival_month: CancellationCohortRow[]
+  commission_rate_trend: CommissionTrendRow[]
+  commission_per_stay: CommissionPerStayRow[]
+  has_statement_data: boolean
   net_per_stay: NetPerStayRow[]
   yearly_cleaning: YearlyCleaningBlock
   yearly_finance: YearlyFinanceBlock
@@ -152,13 +196,17 @@ export interface DemandResponse {
   from: string
   to: string
   lead_time: BucketRow[]
+  lead_time_statement: BucketRow[]
   length_of_stay: BucketRow[]
+  persons_distribution: PersonsBucket[]
   adr_by_month: ADRRow[]
   adr_by_dow: ADRRow[]
   adr_by_lead_bucket: ADRRow[]
+  adr_by_persons: ADRRow[]
   gap_nights: GapRow[]
   orphan_midweek: GapRow[]
   returning_guests: ReturningStat
+  has_statement_data: boolean
 }
 
 export interface ReturningGuestRow {

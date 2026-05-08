@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import UiToolbar from '@/components/ui/UiToolbar.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 import UiButton from '@/components/ui/UiButton.vue'
@@ -47,6 +47,19 @@ const orphanMidweekPastCount = computed(() => {
 
 const leadMax = computed(() => Math.max(1, ...(props.demand?.lead_time.map((x) => x.count) ?? [0])))
 const losMax = computed(() => Math.max(1, ...(props.demand?.length_of_stay.map((x) => x.count) ?? [0])))
+
+// FEAT-05: statement-derived lead time + persons distribution.
+const hasStatementData = computed(() => props.demand?.has_statement_data ?? false)
+const leadTimeStatement = computed(() => props.demand?.lead_time_statement ?? [])
+const leadStatementMax = computed(() =>
+  Math.max(1, ...leadTimeStatement.value.map((x) => x.count)),
+)
+const personsDistribution = computed(() => props.demand?.persons_distribution ?? [])
+const personsMax = computed(() => Math.max(1, ...personsDistribution.value.map((p) => p.stays)))
+const adrByPersons = computed(() => props.demand?.adr_by_persons ?? [])
+
+const showStatementLeadTime = ref(true)
+const showCalendarLeadTime = ref(true)
 </script>
 
 <template>
@@ -71,16 +84,53 @@ const losMax = computed(() => Math.max(1, ...(props.demand?.length_of_stay.map((
 
     <div v-if="demand">
       <h2 class="section-heading occupancy">Lead time (days between booking and arrival)</h2>
-      <div class="card" role="img" aria-label="Lead time distribution bar chart">
-        <div v-for="b in demand.lead_time" :key="b.bucket" class="dim-row" aria-hidden="true">
-          <div class="dim-label">{{ leadBucketLabel(b.bucket) }}</div>
-          <div class="bar-track">
-            <div class="bar-fill bar-fill--primary" :style="{ width: `${(b.count / leadMax) * 100}%` }" />
+      <div class="card">
+        <div class="lead-toggle-row">
+          <label class="checkbox-control">
+            <input type="checkbox" v-model="showCalendarLeadTime" />
+            Calendar (ICS-derived, all reservations)
+          </label>
+          <label class="checkbox-control">
+            <input
+              type="checkbox"
+              v-model="showStatementLeadTime"
+              :disabled="!hasStatementData"
+            />
+            Precise (statement, active stays)
+          </label>
+        </div>
+        <p v-if="!hasStatementData && !showCalendarLeadTime" class="muted">
+          No Booking.com statement data uploaded yet.
+        </p>
+        <div v-if="showCalendarLeadTime" role="img" aria-label="Lead time distribution bar chart (calendar)">
+          <h3 class="sub-head">Calendar lead time</h3>
+          <div v-for="b in demand.lead_time" :key="`cal-${b.bucket}`" class="dim-row" aria-hidden="true">
+            <div class="dim-label">{{ leadBucketLabel(b.bucket) }}</div>
+            <div class="bar-track">
+              <div class="bar-fill bar-fill--primary" :style="{ width: `${(b.count / leadMax) * 100}%` }" />
+            </div>
+            <div class="dim-count">{{ b.count }}</div>
           </div>
-          <div class="dim-count">{{ b.count }}</div>
+        </div>
+        <div
+          v-if="showStatementLeadTime && hasStatementData"
+          role="img"
+          aria-label="Lead time distribution bar chart (statement, active stays only)"
+        >
+          <h3 class="sub-head">Statement lead time (precise)</h3>
+          <p v-if="leadTimeStatement.every((b) => b.count === 0)" class="muted">
+            No active statement-derived stays in this window.
+          </p>
+          <div v-for="b in leadTimeStatement" :key="`stmt-${b.bucket}`" class="dim-row" aria-hidden="true">
+            <div class="dim-label">{{ leadBucketLabel(b.bucket) }}</div>
+            <div class="bar-track">
+              <div class="bar-fill bar-fill--success" :style="{ width: `${(b.count / leadStatementMax) * 100}%` }" />
+            </div>
+            <div class="dim-count">{{ b.count }}</div>
+          </div>
         </div>
         <table class="sr-only">
-          <caption>Reservations by lead-time bucket</caption>
+          <caption>Reservations by lead-time bucket (calendar)</caption>
           <thead><tr><th scope="col">Lead time</th><th scope="col">Reservations</th></tr></thead>
           <tbody>
             <tr v-for="b in demand.lead_time" :key="b.bucket">
@@ -112,6 +162,41 @@ const losMax = computed(() => Math.max(1, ...(props.demand?.length_of_stay.map((
         </table>
       </div>
 
+      <h2 class="section-heading occupancy mt-section">Persons per reservation (statement-derived)</h2>
+      <div class="card">
+        <p v-if="!hasStatementData" class="muted">
+          No Booking.com statement data uploaded yet — persons distribution will
+          appear after the first statement import.
+        </p>
+        <p v-else-if="personsDistribution.length === 0" class="muted">
+          No active stays with persons information in this window.
+        </p>
+        <template v-else>
+          <div
+            v-for="p in personsDistribution"
+            :key="`p-${p.persons}`"
+            class="dim-row"
+            aria-hidden="true"
+          >
+            <div class="dim-label">{{ p.persons }} guest<span v-if="p.persons !== 1">s</span></div>
+            <div class="bar-track">
+              <div class="bar-fill bar-fill--primary" :style="{ width: `${(p.stays / personsMax) * 100}%` }" />
+            </div>
+            <div class="dim-count">{{ p.stays }}</div>
+          </div>
+          <table class="sr-only">
+            <caption>Active stays by guest count</caption>
+            <thead><tr><th scope="col">Guests</th><th scope="col">Stays</th></tr></thead>
+            <tbody>
+              <tr v-for="p in personsDistribution" :key="p.persons">
+                <th scope="row">{{ p.persons }}</th>
+                <td>{{ p.stays }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
+      </div>
+
       <h2 class="section-heading money mt-section">ADR by dimension</h2>
 
       <h3 class="sub-head">ADR by month</h3>
@@ -139,6 +224,24 @@ const losMax = computed(() => Math.max(1, ...(props.demand?.length_of_stay.map((
           <div class="adr-meta">{{ r.matched_nights }} nights</div>
           <strong>{{ eur(r.adr_cents) }}</strong>
         </div>
+      </div>
+
+      <h3 class="sub-head">ADR by guest count (statement-derived)</h3>
+      <div class="card">
+        <p v-if="!hasStatementData" class="muted">
+          No statement data — ADR by guest count will populate after the first
+          Booking.com statement import.
+        </p>
+        <p v-else-if="adrByPersons.length === 0" class="muted">
+          No active stays with persons information in this window.
+        </p>
+        <template v-else>
+          <div v-for="r in adrByPersons" :key="`adr-p-${r.bucket}`" class="adr-row">
+            <div class="adr-label adr-label--sm">{{ r.bucket }} guest<span v-if="r.bucket !== '1'">s</span></div>
+            <div class="adr-meta">{{ r.matched_nights }} nights</div>
+            <strong>{{ eur(r.adr_cents) }}</strong>
+          </div>
+        </template>
       </div>
 
       <h2 class="section-heading occupancy mt-section">

@@ -19,7 +19,9 @@ type analyticsFreshnessResponse struct {
 	GeneratedAt           time.Time `json:"generated_at"`
 	LastICSSyncAt         *string   `json:"last_ics_sync_at,omitempty"`
 	LastPayoutDate        *string   `json:"last_payout_date,omitempty"`
+	LastStatementDate     *string   `json:"last_statement_date,omitempty"`
 	UnmatchedPayoutsCount int       `json:"unmatched_payouts_count"`
+	HasStatementData      bool      `json:"has_statement_data"`
 	StalenessLevel        string    `json:"staleness_level"`
 }
 
@@ -101,6 +103,50 @@ type analyticsCancellationStat struct {
 	Cancelled int                `json:"total_cancelled"`
 }
 
+// analyticsCancellationCohortRow is one (month, rate) point for the
+// statement-derived cohort view (FEAT-05). Months that contain zero
+// statement-aware rows are omitted; the frontend renders the
+// "no statement data" empty state when the slice is empty.
+type analyticsCancellationCohortRow struct {
+	Month     string  `json:"month"`
+	Rate      float64 `json:"rate"`
+	Cancelled int     `json:"cancelled"`
+	Active    int     `json:"active"`
+	Other     int     `json:"other"`
+}
+
+// analyticsCommissionTrendRow is one weighted commission-rate point.
+type analyticsCommissionTrendRow struct {
+	Month           string  `json:"month"`
+	Rate            float64 `json:"rate"`
+	CommissionCents int64   `json:"commission_cents"`
+	GrossCents      int64   `json:"gross_cents"`
+	Stays           int     `json:"stays"`
+}
+
+// analyticsCommissionPerStayRow is one row of the commission-per-stay
+// list (mirrors the existing Net per stay table).
+type analyticsCommissionPerStayRow struct {
+	BookingID       int64   `json:"booking_id"`
+	Reference       string  `json:"reference"`
+	GuestName       string  `json:"guest_name"`
+	CheckInDate     string  `json:"check_in_date"`
+	CheckOutDate    string  `json:"check_out_date"`
+	GrossCents      int64   `json:"gross_cents"`
+	CommissionCents int64   `json:"commission_cents"`
+	Rate            float64 `json:"rate"`
+}
+
+// analyticsPersonsBucket is one (persons, count, ADR) row for the
+// "persons distribution" + "ADR by persons" charts.
+type analyticsPersonsBucket struct {
+	Persons    int   `json:"persons"`
+	Stays      int   `json:"stays"`
+	GrossCents int64 `json:"gross_cents"`
+	RoomNights int   `json:"room_nights"`
+	ADRCents   int64 `json:"adr_cents"`
+}
+
 type analyticsBucket struct {
 	Bucket string `json:"bucket"`
 	Count  int    `json:"count"`
@@ -145,6 +191,11 @@ type analyticsPerformanceResponse struct {
 	SeasonalityHeatmap []analyticsHeatmapCell   `json:"seasonality_heatmap"`
 	DOWOccupancy    []analyticsDOWCell          `json:"dow_occupancy"`
 	Cancellation    analyticsCancellationStat   `json:"cancellation"`
+	CancellationByBookingMonth []analyticsCancellationCohortRow `json:"cancellation_by_booking_month"`
+	CancellationByArrivalMonth []analyticsCancellationCohortRow `json:"cancellation_by_arrival_month"`
+	CommissionRateTrend []analyticsCommissionTrendRow      `json:"commission_rate_trend"`
+	CommissionPerStay   []analyticsCommissionPerStayRow    `json:"commission_per_stay"`
+	HasStatementData    bool                                `json:"has_statement_data"`
 	NetPerStay      []analyticsNetPerStayRow    `json:"net_per_stay"`
 	YearlyCleaning  analyticsYearlyCleaningBlock `json:"yearly_cleaning"`
 	YearlyFinance   analyticsYearlyFinanceBlock `json:"yearly_finance"`
@@ -156,13 +207,17 @@ type analyticsDemandResponse struct {
 	From            string                 `json:"from"`
 	To              string                 `json:"to"`
 	LeadTime        []analyticsBucket      `json:"lead_time"`
+	LeadTimeStatement []analyticsBucket    `json:"lead_time_statement"`
 	LengthOfStay    []analyticsBucket      `json:"length_of_stay"`
+	PersonsDistribution []analyticsPersonsBucket `json:"persons_distribution"`
 	ADRByMonth      []analyticsADRRow      `json:"adr_by_month"`
 	ADRByDOW        []analyticsADRRow      `json:"adr_by_dow"`
 	ADRByLeadBucket []analyticsADRRow      `json:"adr_by_lead_bucket"`
+	ADRByPersons    []analyticsADRRow      `json:"adr_by_persons"`
 	GapNights       []analyticsGapRow      `json:"gap_nights"`
 	OrphanMidweek   []analyticsGapRow      `json:"orphan_midweek"`
 	ReturningGuests analyticsReturningStat `json:"returning_guests"`
+	HasStatementData bool                  `json:"has_statement_data"`
 }
 
 type analyticsADRRow struct {
@@ -278,6 +333,7 @@ func (s *Server) getAnalyticsFreshness(w http.ResponseWriter, r *http.Request) {
 	out := analyticsFreshnessResponse{
 		GeneratedAt:           now.UTC(),
 		UnmatchedPayoutsCount: f.UnmatchedPayoutsCount,
+		HasStatementData:      f.HasStatementData,
 		StalenessLevel:        level,
 	}
 	if f.LastICSSyncAt != nil {
@@ -287,6 +343,10 @@ func (s *Server) getAnalyticsFreshness(w http.ResponseWriter, r *http.Request) {
 	if f.LastPayoutDate != nil {
 		d := f.LastPayoutDate.In(loc).Format("2006-01-02")
 		out.LastPayoutDate = &d
+	}
+	if f.LastStatementBookedOn != nil {
+		d := f.LastStatementBookedOn.In(loc).Format("2006-01-02")
+		out.LastStatementDate = &d
 	}
 	WriteJSON(w, http.StatusOK, out)
 }
@@ -515,6 +575,42 @@ func (s *Server) getAnalyticsPerformance(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// FEAT-05: statement-derived cancellation cohorts and commission metrics.
+	if has, err := s.Store.HasAnyStatementData(r.Context(), pid); err == nil {
+		resp.HasStatementData = has
+	}
+	if rows, err := s.Store.ListCancellationByBookingCohort(r.Context(), pid, from, to, loc); err == nil {
+		for _, row := range rows {
+			resp.CancellationByBookingMonth = append(resp.CancellationByBookingMonth, analyticsCancellationCohortRow{
+				Month: row.Month, Rate: row.Rate, Cancelled: row.Cancelled, Active: row.Active, Other: row.Other,
+			})
+		}
+	}
+	if rows, err := s.Store.ListCancellationByArrivalCohort(r.Context(), pid, from, to, loc); err == nil {
+		for _, row := range rows {
+			resp.CancellationByArrivalMonth = append(resp.CancellationByArrivalMonth, analyticsCancellationCohortRow{
+				Month: row.Month, Rate: row.Rate, Cancelled: row.Cancelled, Active: row.Active, Other: row.Other,
+			})
+		}
+	}
+	if rows, err := s.Store.ListCommissionRateTrend(r.Context(), pid, from, to, loc); err == nil {
+		for _, row := range rows {
+			resp.CommissionRateTrend = append(resp.CommissionRateTrend, analyticsCommissionTrendRow{
+				Month: row.Month, Rate: row.Rate,
+				CommissionCents: row.CommissionCents, GrossCents: row.GrossCents, Stays: row.Stays,
+			})
+		}
+	}
+	if rows, err := s.Store.ListCommissionPerStay(r.Context(), pid, from, to, loc); err == nil {
+		for _, row := range rows {
+			resp.CommissionPerStay = append(resp.CommissionPerStay, analyticsCommissionPerStayRow{
+				BookingID: row.BookingID, Reference: row.ReferenceNumber, GuestName: row.GuestName,
+				CheckInDate: row.CheckInDate, CheckOutDate: row.CheckOutDate,
+				GrossCents: row.GrossCents, CommissionCents: row.CommissionCents, Rate: row.Rate,
+			})
+		}
+	}
+
 	// Net per stay
 	nps, err := s.Store.ListNetPerStay(r.Context(), pid, from, to, loc)
 	if err == nil {
@@ -682,6 +778,27 @@ func (s *Server) getAnalyticsDemand(w http.ResponseWriter, r *http.Request) {
 		resp.ReturningGuests = analyticsReturningStat{
 			TotalActive: total, Returning: returning,
 			ReturningRate: safeDiv(float64(returning), float64(total)),
+		}
+	}
+
+	// FEAT-05: statement-derived demand metrics.
+	if has, err := s.Store.HasAnyStatementData(r.Context(), pid); err == nil {
+		resp.HasStatementData = has
+	}
+	if lts, err := s.Store.ListLeadTimeStatementBuckets(r.Context(), pid, from, to, loc); err == nil {
+		for _, b := range lts {
+			resp.LeadTimeStatement = append(resp.LeadTimeStatement, analyticsBucket{Bucket: b.Bucket, Count: b.Count})
+		}
+	}
+	if pd, err := s.Store.ListPersonsDistribution(r.Context(), pid, from, to, loc); err == nil {
+		for _, b := range pd {
+			resp.PersonsDistribution = append(resp.PersonsDistribution, analyticsPersonsBucket{
+				Persons: b.Persons, Stays: b.Stays, GrossCents: b.GrossCents,
+				RoomNights: b.RoomNights, ADRCents: b.ADRCents,
+			})
+			resp.ADRByPersons = append(resp.ADRByPersons, analyticsADRRow{
+				Bucket: fmt.Sprintf("%d", b.Persons), ADRCents: b.ADRCents, MatchedNights: b.RoomNights,
+			})
 		}
 	}
 	WriteJSON(w, http.StatusOK, resp)

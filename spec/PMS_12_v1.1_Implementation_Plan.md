@@ -446,8 +446,14 @@ configured cleaner auth id and any aliases) yields the guest entries.
 > tables. Cancellation reconciliation, multi-hotel filtering,
 > idempotence (deterministic raw-row JSON), per-row merge precedence
 > and a GDPR redaction store helper land in the same FEAT-04 commit.
-> Phase 2 analytics (cancellation rate, lead time, persons-mix,
-> commission rate / per-stay) are deferred to **FEAT-05**.
+>
+> **Implementation note (FEAT-05):** Phase 2 analytics ✅ — booking-
+> and arrival-cohort cancellation rates (`other` excluded per N7),
+> dual-series lead-time histogram (calendar + statement-precise),
+> persons distribution, ADR by guest count, weighted commission rate
+> trend, commission per stay table, and freshness disclaimer extended
+> with the last statement date. Empty states render the explicit
+> "no statement data" copy when `has_statement_data = false`.
 
 > **Source spec:** [`spec/PMS_Statement_Ingestion_Spec.md`](PMS_Statement_Ingestion_Spec.md).
 > All blocker questions in that document are answered; this task is the

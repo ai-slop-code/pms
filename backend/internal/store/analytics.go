@@ -93,7 +93,9 @@ func NormalizeGuestName(name string) string {
 type AnalyticsFreshness struct {
 	LastICSSyncAt         *time.Time
 	LastPayoutDate        *time.Time
+	LastStatementBookedOn *time.Time
 	UnmatchedPayoutsCount int
+	HasStatementData      bool
 }
 
 func (s *Store) GetAnalyticsFreshness(ctx context.Context, propertyID int64) (*AnalyticsFreshness, error) {
@@ -119,6 +121,11 @@ func (s *Store) GetAnalyticsFreshness(ctx context.Context, propertyID int64) (*A
 		} else if t2, err := time.Parse("2006-01-02", lastPayout.String); err == nil {
 			out.LastPayoutDate = &t2
 		}
+	}
+
+	if t, err := s.LastStatementBookedOn(ctx, propertyID); err == nil {
+		out.LastStatementBookedOn = t
+		out.HasStatementData = t != nil
 	}
 
 	_ = s.DB.QueryRowContext(ctx, `

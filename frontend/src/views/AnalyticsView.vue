@@ -254,6 +254,10 @@ function applyDemand() {
         <strong>{{ freshness.last_payout_date || '—' }}</strong>
       </div>
       <div class="freshness-stat">
+        <span class="freshness-stat__label">Last statement date</span>
+        <strong>{{ freshness.last_statement_date || '—' }}</strong>
+      </div>
+      <div class="freshness-stat">
         <span class="freshness-stat__label">Unmatched payouts</span>
         <strong>{{ freshness.unmatched_payouts_count }}</strong>
       </div>
