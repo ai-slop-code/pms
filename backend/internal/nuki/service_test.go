@@ -640,3 +640,117 @@ func TestReconcileCleanerDailyLogsSince_MatchesAliasFromExternalID(t *testing.T)
 		t.Fatalf("expected historical log to be created via alias matching")
 	}
 }
+
+func TestReconcileGuestDailyEntries_PartitionsCleanerVsGuest(t *testing.T) {
+	st := newTestStore(t)
+	pid := setupPropertyForNuki(t, st)
+	ctx := context.Background()
+
+	// Cleaner alias is configured.
+	if err := st.UpdatePropertyProfile(ctx, pid, map[string]interface{}{"cleaner_nuki_auth_id": "cleaner-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two stays mapped to two distinct guest authIDs.
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)
+	upsertOcc(t, st, pid, "uid-A", "active", today.Add(-48*time.Hour), today.Add(24*time.Hour))
+	upsertOcc(t, st, pid, "uid-B", "active", today.Add(-24*time.Hour), today.Add(48*time.Hour))
+	occA, err := st.GetOccupancyBySourceEventUID(ctx, pid, "uid-A")
+	if err != nil || occA == nil {
+		t.Fatalf("occA: %v", err)
+	}
+	occB, err := st.GetOccupancyBySourceEventUID(ctx, pid, "uid-B")
+	if err != nil || occB == nil {
+		t.Fatalf("occB: %v", err)
+	}
+
+	// Guest access codes mapping authID -> occupancy.
+	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
+		PropertyID:     pid,
+		OccupancyID:    occA.ID,
+		CodeLabel:      "uid-A",
+		ExternalNukiID: sql.NullString{String: "guest-A", Valid: true},
+		ValidFrom:      today.Add(-72 * time.Hour),
+		ValidUntil:     today.Add(72 * time.Hour),
+		Status:         "generated",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
+		PropertyID:     pid,
+		OccupancyID:    occB.ID,
+		CodeLabel:      "uid-B",
+		ExternalNukiID: sql.NullString{String: "guest-B", Valid: true},
+		ValidFrom:      today.Add(-72 * time.Hour),
+		ValidUntil:     today.Add(72 * time.Hour),
+		Status:         "generated",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fc := &fakeClient{
+		logEvents: []SmartlockEvent{
+			// Guest A: two unlocks same day, the earlier wins.
+			{ExternalID: "ga-1", OccurredAt: today.Add(-3 * time.Hour), AuthID: "guest-A", IsEntryLike: true},
+			{ExternalID: "ga-2", OccurredAt: today.Add(-1 * time.Hour), AuthID: "guest-A", IsEntryLike: true},
+			// Guest B: one unlock today.
+			{ExternalID: "gb-1", OccurredAt: today.Add(-2 * time.Hour), AuthID: "guest-B", IsEntryLike: true},
+			// Cleaner unlock: must be excluded even if mapped via aliases.
+			{ExternalID: "cl-1", OccurredAt: today.Add(-4 * time.Hour), AuthID: "cleaner-1", IsEntryLike: true},
+			// Unknown authID: ignored.
+			{ExternalID: "ux-1", OccurredAt: today.Add(-5 * time.Hour), AuthID: "stranger", IsEntryLike: true},
+			// Non-entry-like guest event: still counted via fallback only when no entry-like exist.
+			{ExternalID: "ga-3", OccurredAt: today.Add(-30 * time.Minute), AuthID: "guest-A", IsEntryLike: false},
+		},
+	}
+	svc := &Service{Store: st, Client: fc}
+	stats, err := svc.ReconcileGuestDailyEntries(ctx, pid)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if stats.OccupancyKeyCount != 2 {
+		t.Fatalf("OccupancyKeyCount=%d want 2", stats.OccupancyKeyCount)
+	}
+	if stats.UpsertedDays != 2 {
+		t.Fatalf("UpsertedDays=%d want 2 (one per stay)", stats.UpsertedDays)
+	}
+	if stats.CleanerSkipped == 0 {
+		t.Fatalf("CleanerSkipped=0 want >0 (cleaner unlock must be filtered)")
+	}
+
+	day := today.Format("2006-01-02")
+	rows, err := st.ListNukiGuestDailyEntriesInRange(ctx, pid, day, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d want 2", len(rows))
+	}
+	byOcc := map[int64]store.NukiGuestDailyEntry{}
+	for _, r := range rows {
+		byOcc[r.OccupancyID] = r
+	}
+	if got := byOcc[occA.ID].FirstEntryAt.UTC().Truncate(time.Second); !got.Equal(today.Add(-3 * time.Hour).UTC().Truncate(time.Second)) {
+		t.Fatalf("guest A first entry=%s want earlier of two unlocks", got)
+	}
+	if got := byOcc[occB.ID].FirstEntryAt.UTC().Truncate(time.Second); !got.Equal(today.Add(-2 * time.Hour).UTC().Truncate(time.Second)) {
+		t.Fatalf("guest B first entry=%s", got)
+	}
+}
+
+func TestReconcileGuestDailyEntries_NoOccupancyMapNoOp(t *testing.T) {
+	st := newTestStore(t)
+	pid := setupPropertyForNuki(t, st)
+	fc := &fakeClient{logEvents: []SmartlockEvent{
+		{ExternalID: "x", OccurredAt: time.Now().UTC(), AuthID: "any", IsEntryLike: true},
+	}}
+	svc := &Service{Store: st, Client: fc}
+	stats, err := svc.ReconcileGuestDailyEntries(context.Background(), pid)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if stats.UpsertedDays != 0 || stats.OccupancyKeyCount != 0 {
+		t.Fatalf("expected no-op, got stats=%+v", stats)
+	}
+}

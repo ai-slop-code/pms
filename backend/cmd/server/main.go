@@ -221,6 +221,59 @@ func main() {
 		metrics.RecordSchedulerRun("cleaning_reconcile", "ran")
 	})
 
+	go runScheduler(rootCtx, "guest_reconcile", cfg.CleaningReconcileInterval, func(bg context.Context) {
+		ok, err := st.TryAcquireJobLease(bg, "guest_reconcile", instanceID, leaseTTL(cfg.CleaningReconcileInterval))
+		if err != nil {
+			metrics.RecordSchedulerRun("guest_reconcile", "error")
+			log.Printf("guest reconcile scheduler: lease error: %v", err)
+			return
+		}
+		if !ok {
+			metrics.RecordSchedulerRun("guest_reconcile", "skipped")
+			return
+		}
+		// Reuse the Nuki-configured property list — guest reconcile only
+		// makes sense where the Smartlock log can be fetched. The
+		// reconciler internally no-ops when no occupancy↔code map exists.
+		ids, err := st.ListPropertyIDsWithNukiConfig(bg)
+		if err != nil {
+			metrics.RecordSchedulerRun("guest_reconcile", "error")
+			log.Printf("guest reconcile scheduler: list properties: %v", err)
+			return
+		}
+		for _, id := range ids {
+			if _, err := nukiSvc.ReconcileGuestDailyEntries(bg, id); err != nil {
+				log.Printf("guest reconcile property %d: %v", id, err)
+			}
+		}
+		metrics.RecordSchedulerRun("guest_reconcile", "ran")
+	})
+
+	go runScheduler(rootCtx, "guest_entries_reconcile", cfg.CleaningReconcileInterval, func(bg context.Context) {
+		ok, err := st.TryAcquireJobLease(bg, "guest_entries_reconcile", instanceID, leaseTTL(cfg.CleaningReconcileInterval))
+		if err != nil {
+			metrics.RecordSchedulerRun("guest_entries_reconcile", "error")
+			log.Printf("guest reconcile scheduler: lease error: %v", err)
+			return
+		}
+		if !ok {
+			metrics.RecordSchedulerRun("guest_entries_reconcile", "skipped")
+			return
+		}
+		ids, err := st.ListPropertyIDsWithNukiConfig(bg)
+		if err != nil {
+			metrics.RecordSchedulerRun("guest_entries_reconcile", "error")
+			log.Printf("guest reconcile scheduler: list properties: %v", err)
+			return
+		}
+		for _, id := range ids {
+			if _, err := nukiSvc.ReconcileGuestDailyEntries(bg, id); err != nil {
+				log.Printf("guest reconcile property %d: %v", id, err)
+			}
+		}
+		metrics.RecordSchedulerRun("guest_entries_reconcile", "ran")
+	})
+
 	if cfg.BackupInterval > 0 {
 		backupDir := cfg.BackupDir
 		if backupDir == "" {

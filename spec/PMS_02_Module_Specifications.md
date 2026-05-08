@@ -608,6 +608,7 @@ All routes are registered under the authenticated router group in `backend/inter
 - `GET /api/properties/{id}/analytics/demand?from=YYYY-MM-DD&to=YYYY-MM-DD` — lead-time distribution, length-of-stay distribution, ADR-by-month/DOW/lead-bucket, gap-nights list, orphan-midweek list, returning-guests summary.
 - `GET /api/properties/{id}/analytics/pace?window=YYYY-MM` — cumulative booking-pace curve for the arrival window, plus the same-named window a year earlier.
 - `GET /api/properties/{id}/analytics/returning-guests?limit=50&offset=0` — paginated drill-down `{ name, stay_count, first_stay, last_stay }`.
+- `GET /api/properties/{id}/analytics/guest-checkin-heatmap?from=YYYY-MM-DD&to=YYYY-MM-DD` — 24-bucket hour-of-day histogram of first guest unlock per stay per day. Cleaner unlocks are excluded by matching the property's `cleaner_nuki_auth_id` (and aliases derived from `nuki_keypad_codes.raw_json`); guest unlocks are resolved to their owning occupancy through `nuki_access_codes.external_nuki_id`. Closed stays (PMS_14 §3) are excluded; externally-sold stays are kept. Default range is the current month in property TZ.
 - `GET /api/properties/{id}/analytics/freshness` — `{ last_ics_sync_at, last_payout_date, unmatched_payouts_count, staleness_level: 'ok'|'warn'|'stale' }`.
 
 Every list response echoes back the input filters and a `generated_at` RFC3339 timestamp.

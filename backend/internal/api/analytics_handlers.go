@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"pms/backend/internal/nuki"
 	"pms/backend/internal/permissions"
 	"pms/backend/internal/store"
 )
@@ -786,4 +787,144 @@ func (s *Server) getAnalyticsReturningGuests(w http.ResponseWriter, r *http.Requ
 		Offset:      offset,
 		Guests:      out,
 	})
+}
+
+// guestCheckinHourBucket is one hour-of-day bucket in the response. Hour
+// is in [0,23] expressed in the property timezone.
+type guestCheckinHourBucket struct {
+	Hour  int `json:"hour"`
+	Count int `json:"count"`
+}
+
+type guestCheckinHeatmapResponse struct {
+	From    string                   `json:"from"`
+	To      string                   `json:"to"`
+	Buckets []guestCheckinHourBucket `json:"buckets"`
+}
+
+// getAnalyticsGuestCheckinHeatmap returns a 24-bucket histogram of the
+// hour-of-day at which guests first unlocked the door, taken from the
+// reconciled nuki_guest_daily_entries table (PMS_12 task 3). The handler
+// only filters and aggregates persisted rows — all the heavy lifting
+// (cleaner-vs-guest partitioning, dedup) lives in the reconciler.
+func (s *Server) getAnalyticsGuestCheckinHeatmap(w http.ResponseWriter, r *http.Request) {
+	_, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Analytics, permissions.LevelRead)
+	if !ok {
+		return
+	}
+	loc := s.analyticsLocation(r, pid)
+	now := time.Now().In(loc)
+	defFrom := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+	defTo := defFrom.AddDate(0, 1, 0).Add(-24 * time.Hour)
+	from := parseDateParam(r.URL.Query().Get("from"), defFrom, loc)
+	to := parseDateParam(r.URL.Query().Get("to"), defTo, loc)
+	if !to.After(from) && !to.Equal(from) {
+		WriteError(w, http.StatusBadRequest, "invalid_range")
+		return
+	}
+	if to.Sub(from) > 366*24*time.Hour {
+		WriteError(w, http.StatusBadRequest, "range_too_large")
+		return
+	}
+	fromDate := from.Format("2006-01-02")
+	toDate := to.Format("2006-01-02")
+	rows, err := s.Store.ListNukiGuestDailyEntriesInRange(r.Context(), pid, fromDate, toDate)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	counts := make([]int, 24)
+	for _, row := range rows {
+		h := row.FirstEntryAt.In(loc).Hour()
+		if h >= 0 && h < 24 {
+			counts[h]++
+		}
+	}
+	buckets := make([]guestCheckinHourBucket, 24)
+	for i := 0; i < 24; i++ {
+		buckets[i] = guestCheckinHourBucket{Hour: i, Count: counts[i]}
+	}
+	WriteJSON(w, http.StatusOK, guestCheckinHeatmapResponse{
+		From:    fromDate,
+		To:      toDate,
+		Buckets: buckets,
+	})
+}
+
+type guestReconcileStatsResponse struct {
+	FetchedEvents     int    `json:"fetched_events"`
+	CleanerSkipped    int    `json:"cleaner_skipped"`
+	AuthMatchedEvents int    `json:"auth_matched_events"`
+	EntryLikeEvents   int    `json:"entry_like_events"`
+	UpsertedDays      int    `json:"upserted_days"`
+	FallbackAnyEvent  bool   `json:"fallback_any_event"`
+	OccupancyKeyCount int    `json:"occupancy_key_count"`
+	CleanerAliasCount int    `json:"cleaner_alias_count"`
+	RequestedSinceUTC string `json:"requested_since_utc"`
+}
+
+type guestReconcileResponse struct {
+	OK    bool                         `json:"ok"`
+	Error string                       `json:"error,omitempty"`
+	Stats *guestReconcileStatsResponse `json:"stats,omitempty"`
+}
+
+// runGuestCheckinReconcile manually triggers ReconcileGuestDailyEntriesSince
+// for a property. Optional ?month=YYYY-MM widens the lookback to the first
+// of that month in the property TZ; default uses the service's standard
+// 45-day window (matching the scheduler).
+func (s *Server) runGuestCheckinReconcile(w http.ResponseWriter, r *http.Request) {
+	actor, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Analytics, permissions.LevelWrite)
+	if !ok {
+		return
+	}
+	if s.Nuki == nil {
+		WriteError(w, http.StatusInternalServerError, "nuki service not configured")
+		return
+	}
+	var (
+		stats *nuki.GuestReconcileStats
+		err   error
+	)
+	month := strings.TrimSpace(r.URL.Query().Get("month"))
+	if month != "" {
+		prop, perr := s.Store.GetProperty(r.Context(), pid)
+		if perr != nil {
+			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		loc, tzErr := time.LoadLocation(prop.Timezone)
+		if tzErr != nil {
+			loc = time.UTC
+		}
+		var y, m int
+		if _, scanErr := fmtSscanfMonth(month, &y, &m); scanErr != nil || m < 1 || m > 12 {
+			WriteError(w, http.StatusBadRequest, "month must be YYYY-MM")
+			return
+		}
+		since := time.Date(y, time.Month(m), 1, 0, 0, 0, 0, loc).UTC()
+		stats, err = s.Nuki.ReconcileGuestDailyEntriesSince(r.Context(), pid, since)
+	} else {
+		stats, err = s.Nuki.ReconcileGuestDailyEntries(r.Context(), pid)
+	}
+	if err != nil {
+		WriteJSON(w, http.StatusOK, guestReconcileResponse{OK: false, Error: err.Error()})
+		return
+	}
+	s.audit(r, actor, "guest_reconcile", "property", strconv.FormatInt(pid, 10), "success")
+	var outStats *guestReconcileStatsResponse
+	if stats != nil {
+		outStats = &guestReconcileStatsResponse{
+			FetchedEvents:     stats.FetchedEvents,
+			CleanerSkipped:    stats.CleanerSkipped,
+			AuthMatchedEvents: stats.AuthMatchedEvents,
+			EntryLikeEvents:   stats.EntryLikeEvents,
+			UpsertedDays:      stats.UpsertedDays,
+			FallbackAnyEvent:  stats.FallbackAnyEvent,
+			OccupancyKeyCount: stats.OccupancyKeyCount,
+			CleanerAliasCount: stats.CleanerAliasCount,
+			RequestedSinceUTC: stats.RequestedSinceUTC,
+		}
+	}
+	WriteJSON(w, http.StatusOK, guestReconcileResponse{OK: true, Stats: outStats})
 }

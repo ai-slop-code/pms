@@ -176,3 +176,14 @@ export interface ReturningGuestsResponse {
   offset: number
   guests: ReturningGuestRow[]
 }
+
+export interface GuestCheckinHourBucket {
+  hour: number
+  count: number
+}
+
+export interface GuestCheckinHeatmapResponse {
+  from: string
+  to: string
+  buckets: GuestCheckinHourBucket[]
+}

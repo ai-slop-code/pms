@@ -205,6 +205,8 @@ func (s *Server) Routes() chi.Router {
 			r.Get("/properties/{id}/analytics/demand", s.getAnalyticsDemand)
 			r.Get("/properties/{id}/analytics/pace", s.getAnalyticsPace)
 			r.Get("/properties/{id}/analytics/returning-guests", s.getAnalyticsReturningGuests)
+			r.Get("/properties/{id}/analytics/guest-checkin-heatmap", s.getAnalyticsGuestCheckinHeatmap)
+			r.Post("/properties/{id}/analytics/guest-checkin/reconcile/run", s.runGuestCheckinReconcile)
 			r.Get("/admin/backup", s.getAdminBackup)
 			})
 		})

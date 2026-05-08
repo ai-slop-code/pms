@@ -7,6 +7,8 @@ import {
   eur, pct, heatCellColor, cancellationBucketLabel, dowLabel as dowLabelFn, monthLabels,
 } from './helpers'
 import type { HeatmapCell, MonthlyTrendRow, NetPerStayRow, PerformanceResponse } from '@/api/types/analytics'
+import type { GuestCheckinHeatmapResponse } from '@/api/types/analytics'
+import GuestCheckinHeatmap from './GuestCheckinHeatmap.vue'
 
 const UiLineChart = defineAsyncComponent(() => import('@/components/charts/UiLineChart.vue'))
 
@@ -17,6 +19,7 @@ const props = defineProps<{
   perfYear: number
   perfYoy: boolean
   weekStartsOn: 'monday' | 'sunday'
+  guestCheckinHeatmap: GuestCheckinHeatmapResponse | null
 }>()
 
 const emit = defineEmits<{
@@ -405,6 +408,10 @@ function onHeatKeydown(e: KeyboardEvent) {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div class="mt-section">
+        <GuestCheckinHeatmap :heatmap="guestCheckinHeatmap" />
       </div>
     </div>
   </div>

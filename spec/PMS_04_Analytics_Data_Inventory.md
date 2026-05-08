@@ -70,7 +70,7 @@ This document catalogs every analytical signal currently captured by the PMS dat
 
 ## 3. Nuki smart-lock access
 
-**Tables:** `nuki_access_codes`, `nuki_keypad_codes`, `nuki_event_logs`, `nuki_sync_runs`
+**Tables:** `nuki_access_codes`, `nuki_keypad_codes`, `nuki_event_logs`, `nuki_sync_runs`, `nuki_guest_daily_entries`
 
 ### Raw signals
 
@@ -88,6 +88,10 @@ This document catalogs every analytical signal currently captured by the PMS dat
 - Failure recurrence and error categorization
 - Keypad inventory size, churn (`last_seen_at` drift), orphaned / expired codes
 - Operational SLA on Nuki integration (sync frequency, last successful sync per property)
+- **Guest check-in hour-of-day** distribution from
+  `nuki_guest_daily_entries.first_entry_at`, bucketed in property TZ.
+  Reconciled live from the Smartlock log; cleaner unlocks are excluded
+  via the same alias set used by the cleaning heatmap.
 
 ---
 

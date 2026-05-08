@@ -21,6 +21,7 @@ import type {
   DemandResponse,
   ReturningGuestRow,
   ReturningGuestsResponse,
+  GuestCheckinHeatmapResponse,
 } from '@/api/types/analytics'
 
 type Tab = 'outlook' | 'performance' | 'demand'
@@ -43,7 +44,7 @@ const freshness = ref<FreshnessResponse | null>(null)
 const outlook = ref<OutlookResponse | null>(null)
 const performance = ref<PerformanceResponse | null>(null)
 const demand = ref<DemandResponse | null>(null)
-
+const guestCheckinHeatmap = ref<GuestCheckinHeatmapResponse | null>(null)
 const today = new Date()
 const thisMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
 const perfFrom = ref(`${thisMonthStr}-01`)
@@ -98,6 +99,20 @@ async function loadPerformance() {
       `/api/properties/${pid.value}/analytics/performance?${params.toString()}`,
     )
   } catch (e) {
+    error.value = (e as Error).message
+  }
+  await loadGuestCheckinHeatmap()
+}
+
+async function loadGuestCheckinHeatmap() {
+  if (!pid.value) return
+  try {
+    const params = new URLSearchParams({ from: perfFrom.value, to: perfTo.value })
+    guestCheckinHeatmap.value = await api<GuestCheckinHeatmapResponse>(
+      `/api/properties/${pid.value}/analytics/guest-checkin-heatmap?${params.toString()}`,
+    )
+  } catch (e) {
+    // Surface but do not block performance rendering.
     error.value = (e as Error).message
   }
 }
@@ -182,6 +197,7 @@ watch(pid, () => {
   performance.value = null
   demand.value = null
   rgTop5.value = []
+  guestCheckinHeatmap.value = null
   loadFreshness()
   if (tab.value === 'outlook') loadOutlook()
   if (tab.value === 'performance') loadPerformance()
@@ -266,6 +282,7 @@ function applyDemand() {
       :perf-year="perfYear"
       :perf-yoy="perfYoy"
       :week-starts-on="weekStartsOn"
+      :guest-checkin-heatmap="guestCheckinHeatmap"
       @update:perf-from="perfFrom = $event"
       @update:perf-to="perfTo = $event"
       @update:perf-year="perfYear = $event"

@@ -284,6 +284,32 @@ PMS — let the operator pick one of two labels for the imported block:
 
 ---
 
+### 3. Analytics — guest check-in time heatmap (from Nuki access log)  ✅
+
+> **Implementation note (2026-04-29):** The original spec assumed
+> `nuki_event_logs` carries unlock events with an `auth_id` column.
+> The actual schema only stores operational lifecycle messages
+> (`event_type`, `message`, `payload_json`) — there is no
+> `auth_id` and no unlock log persisted in the DB. The implementation
+> therefore mirrors the cleaning reconciler exactly:
+>
+> - A new `nuki_guest_daily_entries` table (migration 000020) keyed
+>   by `(property_id, occupancy_id, day_date)` stores the earliest
+>   guest unlock per stay per day.
+> - A new `ReconcileGuestDailyEntries` service method live-fetches
+>   the Smartlock log via `Client.ListSmartlockEvents`, partitions
+>   guest events from cleaner events using
+>   `cleanerAuthAliases`, and resolves each guest event to its
+>   owning occupancy through `nuki_access_codes.external_nuki_id`.
+> - A new scheduler job (`guest_reconcile`) reuses the existing
+>   `cleaning_reconcile` interval and runs immediately after the
+>   cleaning reconciler.
+> - The new endpoint
+>   `GET /api/properties/{id}/analytics/guest-checkin-heatmap`
+>   reads the persisted rows, filters to the requested range, and
+>   returns the 24-bucket histogram. Closed-stay rows are excluded
+>   in SQL; externally-sold rows remain (PMS_14 §4 rule).
+
 ### 3. Analytics — guest check-in time heatmap (from Nuki access log)
 
 **Problem**
