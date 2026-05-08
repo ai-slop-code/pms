@@ -45,11 +45,11 @@ func insertPayout(t *testing.T, st *Store, pid int64, ref string, occID *int64, 
 		occ = *occID
 	}
 	_, err := st.DB.ExecContext(context.Background(), `
-		INSERT INTO finance_booking_payouts
+		INSERT INTO finance_bookings
 			(property_id, reference_number, payout_id, row_type, check_in_date, check_out_date,
 			 guest_name, reservation_status, currency, payment_status,
 			 amount_cents, commission_cents, payment_service_fee_cents, net_cents,
-			 payout_date, transaction_id, occupancy_id, raw_row_json, created_at, updated_at)
+			 payout_date, transaction_id, occupancy_id, raw_payout_row_json, created_at, updated_at)
 		VALUES (?, ?, NULL, 'stay', ?, NULL, 'Test', 'ok', 'EUR', 'paid',
 			?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)`,
 		pid, ref, checkIn, amount, commission, fee, net, payoutDate, occ, now, now)

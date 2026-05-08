@@ -366,6 +366,17 @@ Default: **I'll verify in code and propose; the answer here drives Phase 1 UX sc
 
 A: Verify the defefault
 
+**Resolution (FEAT-04, 2026-05-08):** Pre-FEAT-04 the payout flow was
+**upload-and-commit** (single `POST .../booking-payouts/import`
+multipart endpoint that parsed and persisted in one shot). Per the
+user directive *"upgrade both"*, FEAT-04 introduced a unified
+`POST .../finance/imports/preview` + `POST .../finance/imports/commit`
+pair that handles **both** payout and statement uploads through the
+same preview-then-commit UX. The legacy single-step endpoint has been
+removed and the Finance page now renders a single
+"Upload Booking.com CSV" button that auto-detects the format and opens
+the merge-plan dialog.
+
 **N7 — Bucketing of `MODIFIED` / `NO_SHOW` / `REFUSED_BY_HOTEL`.** With Q16=store-as-is, the bucketing is a read-time concern.
 - (a) treat as `active` (counts as a denominated stay, dilutes cancellation rate)
 - (b) **`other`** — excluded from cancellation-rate numerator and denominator, surfaced as a separate "non-standard outcomes" KPI

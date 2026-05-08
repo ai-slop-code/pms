@@ -626,7 +626,7 @@ Every list response echoes back the input filters and a `generated_at` RFC3339 t
 ### Suggested Database Entities
 **No new tables in v1.** All metrics are live-computed from existing schema:
 - `occupancies`, `occupancy_sync_runs` — nights, occupancy, lead time, cancellations, pace, gap nights.
-- `finance_booking_payouts` — ADR, RevPAR, gross/net/commission/fees, returning-guest name source.
+- `finance_booking_payouts` — ADR, RevPAR, gross/net/commission/fees, returning-guest name source. *(Renamed to `finance_bookings` in FEAT-04 and extended with statement-derived columns and `has_payout_data` / `has_statement_data` flags; the analytics query above is unchanged.)*
 - `finance_transactions`, `cleaning_monthly_summaries` — net-per-stay cleaning allocation, cost-per-night roll-up.
 
 **Optional v2 addition (flagged, do not build in v1):** `analytics_snapshots(property_id, metric_code, period_key, value_cents_or_ratio, computed_at)` — add only if p95 latency on any endpoint exceeds 500 ms on realistic data.

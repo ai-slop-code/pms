@@ -50,8 +50,8 @@ const filteredTransactions = computed(() => {
 <template>
   <div>
     <UiSection
-      title="Booking.com payout import"
-      description="Upload a payout CSV. Each row imports the net amount as Booking.com income; reference numbers prevent duplicates."
+      title="Booking.com CSV upload"
+      description="Upload a Booking.com Payout Info or Statement CSV. The system detects the format, previews the merge plan, and commits on confirmation."
     >
       <template #actions>
         <RouterLink to="/finance/booking-payouts" class="action-link">
@@ -73,7 +73,7 @@ const filteredTransactions = computed(() => {
             :loading="importingPayouts"
             :disabled="!payoutImportFile"
             @click="emit('importPayouts')"
-          >Import payout CSV</UiButton>
+          >Upload Booking.com CSV</UiButton>
         </div>
       </UiCard>
     </UiSection>

@@ -111,7 +111,7 @@ func (s *Store) GetAnalyticsFreshness(ctx context.Context, propertyID int64) (*A
 
 	var lastPayout sql.NullString
 	_ = s.DB.QueryRowContext(ctx, `
-		SELECT MAX(payout_date) FROM finance_booking_payouts
+		SELECT MAX(payout_date) FROM finance_bookings
 		WHERE property_id = ?`, propertyID).Scan(&lastPayout)
 	if lastPayout.Valid && lastPayout.String != "" {
 		if t, err := time.Parse(time.RFC3339, lastPayout.String); err == nil {
@@ -122,7 +122,7 @@ func (s *Store) GetAnalyticsFreshness(ctx context.Context, propertyID int64) (*A
 	}
 
 	_ = s.DB.QueryRowContext(ctx, `
-		SELECT COUNT(1) FROM finance_booking_payouts
+		SELECT COUNT(1) FROM finance_bookings
 		WHERE property_id = ? AND occupancy_id IS NULL`, propertyID).Scan(&out.UnmatchedPayoutsCount)
 
 	return out, nil
@@ -359,7 +359,7 @@ func (s *Store) SumPayoutGrossNetForStays(ctx context.Context, propertyID int64,
 		SELECT occupancy_id,
 			COALESCE(amount_cents, 0), COALESCE(commission_cents, 0),
 			COALESCE(payment_service_fee_cents, 0), COALESCE(net_cents, 0)
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ?
 		  AND occupancy_id IS NOT NULL
 		  AND check_in_date IS NOT NULL
@@ -647,7 +647,7 @@ func (s *Store) ListMonthlyOccupancyAndADR(ctx context.Context, propertyID int64
 		SELECT occupancy_id, substr(check_in_date, 1, 7) AS m,
 			COALESCE(amount_cents, 0), COALESCE(commission_cents, 0),
 			COALESCE(payment_service_fee_cents, 0), COALESCE(net_cents, 0)
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ?
 		  AND occupancy_id IS NOT NULL
 		  AND check_in_date IS NOT NULL
@@ -913,7 +913,7 @@ func (s *Store) ListNetPerStay(ctx context.Context, propertyID int64, fromDate, 
 			COALESCE(SUM(commission_cents), 0),
 			COALESCE(SUM(payment_service_fee_cents), 0),
 			COALESCE(SUM(net_cents), 0)
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ? AND occupancy_id IS NOT NULL
 		GROUP BY occupancy_id`, propertyID)
 	if err != nil {
@@ -1112,7 +1112,7 @@ func (s *Store) ADRByDimension(ctx context.Context, propertyID int64, fromDate, 
 	// Load confirmed payouts with linked stay IDs.
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT occupancy_id, check_in_date, COALESCE(amount_cents, 0)
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ? AND occupancy_id IS NOT NULL
 		  AND check_in_date IS NOT NULL
 		  AND check_in_date >= ? AND check_in_date < ?`,

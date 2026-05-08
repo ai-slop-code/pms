@@ -438,6 +438,17 @@ configured cleaner auth id and any aliases) yields the guest entries.
 
 ### 4. Finance — Booking.com Statement ingestion (accrual-basis merge)
 
+> **Implementation note (2026-05-08):** Phase 1 ingestion ✅ — single
+> Booking.com CSV upload (payout or statement) routed through a
+> preview-then-commit pipeline backed by the new
+> `finance/statements` parser package, the renamed `finance_bookings`
+> table and the `finance_imports` / `finance_booking_merges` audit
+> tables. Cancellation reconciliation, multi-hotel filtering,
+> idempotence (deterministic raw-row JSON), per-row merge precedence
+> and a GDPR redaction store helper land in the same FEAT-04 commit.
+> Phase 2 analytics (cancellation rate, lead time, persons-mix,
+> commission rate / per-stay) are deferred to **FEAT-05**.
+
 > **Source spec:** [`spec/PMS_Statement_Ingestion_Spec.md`](PMS_Statement_Ingestion_Spec.md).
 > All blocker questions in that document are answered; this task is the
 > implementation contract.

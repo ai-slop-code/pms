@@ -69,7 +69,7 @@ func TestImportBookingPayoutRow_AtomicOnFailure(t *testing.T) {
 		t.Fatalf("finance_transactions count changed after failed import: want %d got %d", baseTxCount, got)
 	}
 	if got := countBookingPayouts(t, st, pid); got != basePayoutCount {
-		t.Fatalf("finance_booking_payouts count changed after failed import: want %d got %d", basePayoutCount, got)
+		t.Fatalf("finance_bookings count changed after failed import: want %d got %d", basePayoutCount, got)
 	}
 }
 
@@ -178,8 +178,8 @@ func countFinanceTransactions(t *testing.T, st *Store, pid int64) int {
 func countBookingPayouts(t *testing.T, st *Store, pid int64) int {
 	t.Helper()
 	var n int
-	if err := st.DB.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM finance_booking_payouts WHERE property_id = ?`, pid).Scan(&n); err != nil {
-		t.Fatalf("count finance_booking_payouts: %v", err)
+	if err := st.DB.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM finance_bookings WHERE property_id = ?`, pid).Scan(&n); err != nil {
+		t.Fatalf("count finance_bookings: %v", err)
 	}
 	return n
 }

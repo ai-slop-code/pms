@@ -69,7 +69,7 @@ func fixCSVMojibakeNullString(v sql.NullString) sql.NullString {
 }
 
 // bookingPayoutHostName picks a human-readable property/host/listing line from the payout import snapshot
-// (CSV columns are stored as lowercase keys in raw_row_json).
+// (CSV columns are stored as lowercase keys in raw_payout_row_json).
 func bookingPayoutHostName(raw sql.NullString) *string {
 	if !raw.Valid {
 		return nil
