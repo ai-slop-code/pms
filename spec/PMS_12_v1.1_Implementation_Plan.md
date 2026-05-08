@@ -691,3 +691,119 @@ plan is self-contained.)
   state, and booker-name visibility (detail-only).
 
 ---
+
+### 5. Booking payouts — surface contributing data sources per row
+
+**Problem**
+
+Since FEAT-04, every row in the **Booking payouts** view (the merged
+`finance_bookings` table) can be backed by the **Payout Info** CSV
+only, the **Statement** CSV only, or both. The list view today shows
+only the merged result; the operator cannot tell, for a given
+reservation, which uploads contributed and therefore cannot reason
+about why a row is missing accrual fields (no statement uploaded yet)
+or why it lacks payout figures (booked but not yet paid out). The
+"map stay" workflow loses important context: a statement-only row
+maps to a future arrival with no cash figures, while a payout-only
+row is a fully-settled stay missing booker name / persons / lead
+time. The user-visible bug is that the same UI badge ("Mapped" /
+"Unmapped") is shown for both kinds of rows, hiding the difference.
+
+**Goal**
+
+Add a per-row **Sources** indicator to `BookingPayoutsView.vue` that
+renders one badge per contributing channel:
+
+- `Payout` — the row was seen in a Payout Info CSV
+  (`has_payout_data = 1`).
+- `Statement` — the row was seen in a Statement CSV
+  (`has_statement_data = 1`).
+
+Both badges render together when the row has been merged from both
+sources (the FEAT-04 happy path). At least one badge is always
+present — a row exists in `finance_bookings` only because it was
+imported from at least one source.
+
+**Backend (FEAT-06)**
+
+- Extend `store.FinanceBookingPayoutListRow` with `HasPayoutData bool`
+  and `HasStatementData bool`. Add the two columns to the existing
+  `SELECT` in `ListBookingPayouts` (the columns already exist on
+  `finance_bookings` since migration 000021).
+- Extend the `financeBookingPayoutRow` JSON shape in
+  `internal/api/finance_handlers.go` with `has_payout_data` and
+  `has_statement_data` (both `bool`, never `null`). Tag names follow
+  PMS_13 §4 (snake_case JSON, camelCase Go struct fields).
+- No new endpoint; this is a strict additive field on the existing
+  `GET /api/properties/{id}/finance/booking-payouts` response. Pre-
+  FEAT-04 callers ignore the new fields.
+- Backend tests in `internal/api/finance_handlers_test.go` (or the
+  closest existing test file): seed one payout-only row (use
+  `insertPayout`), one statement-only row (use the FEAT-05
+  `insertStatementBooking` helper exposed via the store test
+  package), and one merged row (both flags set), then assert the
+  JSON response carries the expected flag combinations.
+
+**Frontend (FEAT-06)**
+
+- Extend the `BookingPayout` type in
+  `frontend/src/api/types/bookingPayouts.ts` with `has_payout_data:
+  boolean` and `has_statement_data: boolean`.
+- In [BookingPayoutsView.vue](../frontend/src/views/BookingPayoutsView.vue),
+  add a new **Sources** column between **Mapping** and **Invoice**.
+  Render the badges with the existing `UiBadge` component:
+  - `Payout` — `tone="info"`, dot, when `has_payout_data` is true.
+  - `Statement` — `tone="success"`, dot, when `has_statement_data`
+    is true.
+  - Badges are stacked horizontally with the existing `gap-2`
+    spacing utility; sentence case (PMS_07 §11) so the labels read
+    "Payout" and "Statement" exactly.
+- Tooltips (`title` attribute) explain provenance:
+  - Payout: "Imported from a Booking.com Payout Info CSV — cash
+    figures (net, fees, payout date) come from this source."
+  - Statement: "Imported from a Booking.com Statement CSV —
+    accrual figures (booked-on, persons, commission %, status)
+    come from this source."
+- Update the existing Mapping badge copy to keep the two concepts
+  visually distinct: leave it as "Mapped" / "Unmapped" — Sources is
+  a separate column, not a replacement.
+- Empty state copy in the table is unchanged.
+
+**Spec / inventory updates**
+
+- Update `spec/PMS_04_Analytics_Data_Inventory.md` §6 to reference
+  the per-row source flags as the documented way for the UI to
+  report provenance (the column shape is already documented since
+  the FEAT-04 / FEAT-05 audit pass).
+- Add a screenshot-grade note in `spec/PMS_08_UI_UX_Polish_Spec.md`
+  §3.7 ("Booking Payouts") that the Sources column is part of the
+  default columns and must remain visible at the `1280px` content
+  width.
+
+**Tests**
+
+- Backend: see "Backend (FEAT-06)" above.
+- Frontend vitest in `BookingPayoutsView.spec.ts`: extend the
+  fixture so the mocked response returns one row per
+  `(has_payout_data, has_statement_data)` combination and assert
+  that the `Payout` / `Statement` badge text appears (or doesn't)
+  per row. Snapshot the new column header so accidental copy
+  changes are caught.
+
+**Out of scope**
+
+- No filtering by source type in v1.1 — the existing **Mapping**
+  filter is sufficient. A later iteration can add a source filter
+  if real usage demands it.
+- No detail panel / drawer expansion of provenance metadata
+  (`finance_imports` audit rows) in this task; that surface lives
+  in a future "Imports history" view.
+
+**Acceptance**
+
+- Every row in the Booking payouts list renders at least one source
+  badge.
+- A row with both flags set renders both badges side by side.
+- The JSON response contains `has_payout_data` and
+  `has_statement_data` as booleans for every row.
+- vitest + go test suites are green on `feature/v1.1.0`.

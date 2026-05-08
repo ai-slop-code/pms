@@ -41,6 +41,8 @@ type FinanceBookingPayoutListRow struct {
 	OccupancyStartAt        sql.NullTime
 	OccupancyEndAt          sql.NullTime
 	OccupancySummary        sql.NullString
+	HasPayoutData           bool
+	HasStatementData        bool
 }
 
 func (s *Store) GetBookingPayoutByID(ctx context.Context, propertyID, payoutID int64) (*FinanceBookingPayout, error) {
@@ -379,7 +381,8 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 				WHERE i.property_id = fbp.property_id AND i.finance_booking_payout_id = fbp.id
 				LIMIT 1
 			) AS linked_invoice_id,
-			occ.source_event_uid, occ.start_at, occ.end_at, COALESCE(occ.guest_display_name, occ.raw_summary)
+			occ.source_event_uid, occ.start_at, occ.end_at, COALESCE(occ.guest_display_name, occ.raw_summary),
+			fbp.has_payout_data, fbp.has_statement_data
 		FROM finance_bookings fbp
 		LEFT JOIN occupancies occ
 		  ON occ.id = fbp.occupancy_id
@@ -408,14 +411,18 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 		var r FinanceBookingPayoutListRow
 		var payoutDate, created, updated string
 		var occStart, occEnd sql.NullString
+		var hasPayout, hasStatement int
 		if err := rows.Scan(
 			&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate,
 			&r.GuestName, &r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents,
 			&r.PaymentServiceFeeCents, &r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.RawRowJSON,
 			&created, &updated, &r.LinkedInvoiceID, &r.OccupancySourceEventUID, &occStart, &occEnd, &r.OccupancySummary,
+			&hasPayout, &hasStatement,
 		); err != nil {
 			return nil, err
 		}
+		r.HasPayoutData = hasPayout != 0
+		r.HasStatementData = hasStatement != 0
 		r.PayoutDate, _ = time.Parse(time.RFC3339, payoutDate)
 		r.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		r.UpdatedAt, _ = time.Parse(time.RFC3339, updated)

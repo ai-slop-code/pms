@@ -157,7 +157,7 @@ The table is **lifecycle-aware**: each row may carry payout-derived data, statem
 - Status: `status` (canonical upper-cased — `OK`, `CANCELLED`, `MODIFIED`, `NO_SHOW`, `REFUSED_BY_HOTEL`, …; backfilled in migration 000022 from `reservation_status`), `reservation_status` (raw CSV), `payment_status`, `currency`
 - Money columns: `amount_cents` (gross), `original_amount_cents`, `commission_cents`, `commission_pct` (statement-reported %), `payment_service_fee_cents`, `net_cents`
 - Inventory: `persons`, `rooms`, `room_nights`
-- Source flags: `has_payout_data`, `has_statement_data`, raw payloads `raw_payout_row_json`, `raw_statement_row_json`
+- Source flags: `has_payout_data`, `has_statement_data`, raw payloads `raw_payout_row_json`, `raw_statement_row_json`. Both flags are surfaced verbatim in the `GET /api/properties/{id}/finance/booking-payouts` JSON and rendered as the **Sources** column on the Booking Payouts UI (FEAT-06) so operators can tell payout-only, statement-only, and merged rows apart at a glance.
 - Linkage: `transaction_id` (auto-created ledger entry — uses net only), `occupancy_id` (matched stay) and the explicit reverse FK `occupancies.finance_booking_id`
 
 ### Metrics derivable

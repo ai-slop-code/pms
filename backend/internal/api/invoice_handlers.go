@@ -215,6 +215,8 @@ func (s *Server) listInvoicePayoutLinkCandidates(w http.ResponseWriter, r *http.
 			OccupancyEndAt:         nullTimePtr(rr.OccupancyEndAt),
 			OccupancySummary:       fixCSVMojibakePtr(nullStringPtr(rr.OccupancySummary)),
 			LinkedInvoiceID:        nullInt64Ptr(rr.LinkedInvoiceID),
+			HasPayoutData:          rr.HasPayoutData,
+			HasStatementData:       rr.HasStatementData,
 		})
 	}
 	mappedRaw := "false"

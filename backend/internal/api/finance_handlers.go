@@ -86,6 +86,8 @@ type financeBookingPayoutRow struct {
 	OccupancyEndAt         *string `json:"occupancy_end_at"`
 	OccupancySummary       *string `json:"occupancy_summary"`
 	LinkedInvoiceID        *int64  `json:"linked_invoice_id"`
+	HasPayoutData          bool    `json:"has_payout_data"`
+	HasStatementData       bool    `json:"has_statement_data"`
 }
 
 type financeBookingPayoutsResponse struct {
@@ -321,6 +323,8 @@ func (s *Server) listFinanceBookingPayouts(w http.ResponseWriter, r *http.Reques
 			OccupancyEndAt:         nullTimePtr(rr.OccupancyEndAt),
 			OccupancySummary:       fixCSVMojibakePtr(nullStringPtr(rr.OccupancySummary)),
 			LinkedInvoiceID:        nullInt64Ptr(rr.LinkedInvoiceID),
+			HasPayoutData:          rr.HasPayoutData,
+			HasStatementData:       rr.HasStatementData,
 		})
 	}
 	WriteJSON(w, http.StatusOK, financeBookingPayoutsResponse{Month: month, MappedOnly: mappedOnlyRaw, Payouts: out})
