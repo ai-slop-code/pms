@@ -436,7 +436,7 @@ configured cleaner auth id and any aliases) yields the guest entries.
 
 ---
 
-### 4. Finance — Booking.com Statement ingestion (accrual-basis merge)
+### 4. Finance — Booking.com Statement ingestion (accrual-basis merge)  ✅
 
 > **Implementation note (2026-05-08):** Phase 1 ingestion ✅ — single
 > Booking.com CSV upload (payout or statement) routed through a
@@ -692,7 +692,7 @@ plan is self-contained.)
 
 ---
 
-### 5. Booking payouts — surface contributing data sources per row
+### 5. Booking payouts — surface contributing data sources per row  ✅
 
 **Problem**
 
