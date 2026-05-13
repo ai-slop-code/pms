@@ -753,8 +753,73 @@ func (s *Server) patchFinanceRecurringRule(w http.ResponseWriter, r *http.Reques
 		WriteError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
+	if err := s.resyncRecurringForAllOpenMonths(r.Context(), pid, actor); err != nil {
+		WriteError(w, http.StatusInternalServerError, "resync failed")
+		return
+	}
 	s.audit(r, actor, "finance_recurring_rule_update", "finance_recurring_rule", strconv.FormatInt(row.ID, 10), "success")
 	WriteJSON(w, http.StatusOK, map[string]interface{}{"rule": recurringToRow(*row)})
+}
+
+func (s *Server) deleteFinanceRecurringRule(w http.ResponseWriter, r *http.Request) {
+	actor, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Finance, permissions.LevelWrite)
+	if !ok {
+		return
+	}
+	rid, err := strconv.ParseInt(chi.URLParam(r, "ruleId"), 10, 64)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid rule id")
+		return
+	}
+	if err := s.Store.DeleteFinanceRecurringRule(r.Context(), pid, rid); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			WriteError(w, http.StatusNotFound, "rule not found")
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	// Re-sync all opened months so any cleaning_salary or summary state is
+	// recomputed (the rule's own transactions are already gone in the same
+	// store-level transaction).
+	if err := s.resyncRecurringForAllOpenMonths(r.Context(), pid, actor); err != nil {
+		WriteError(w, http.StatusInternalServerError, "resync failed")
+		return
+	}
+	s.audit(r, actor, "finance_recurring_rule_delete", "finance_recurring_rule", strconv.FormatInt(rid, 10), "success")
+	WriteJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+}
+
+// resyncRecurringForAllOpenMonths re-runs OpenFinanceMonth for every
+// already-opened month on the property. Used after a recurring rule mutation
+// so that auto-generated transactions reflect the new ruleset (and orphans
+// from deactivated/deleted rules are purged).
+func (s *Server) resyncRecurringForAllOpenMonths(ctx context.Context, pid int64, actor *store.User) error {
+	months, err := s.Store.ListOpenedFinanceMonths(ctx, pid)
+	if err != nil {
+		return err
+	}
+	if len(months) == 0 {
+		return nil
+	}
+	prop, err := s.Store.GetProperty(ctx, pid)
+	if err != nil {
+		return err
+	}
+	loc, err := time.LoadLocation(prop.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	var by *int64
+	if actor != nil {
+		by = &actor.ID
+	}
+	for _, m := range months {
+		if _, err := s.Store.OpenFinanceMonth(ctx, pid, m, by, loc); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type bookingPayoutCSVRow struct {
