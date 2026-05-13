@@ -87,13 +87,13 @@ const showCalendarLeadTime = ref(true)
       <div class="card">
         <div class="lead-toggle-row">
           <label class="checkbox-control">
-            <input type="checkbox" v-model="showCalendarLeadTime" />
+            <input v-model="showCalendarLeadTime" type="checkbox" />
             Calendar (ICS-derived, all reservations)
           </label>
           <label class="checkbox-control">
             <input
-              type="checkbox"
               v-model="showStatementLeadTime"
+              type="checkbox"
               :disabled="!hasStatementData"
             />
             Precise (statement, active stays)

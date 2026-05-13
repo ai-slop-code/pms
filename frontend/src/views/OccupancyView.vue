@@ -53,7 +53,7 @@ const dialogTarget = ref<Occ | null>(null)
 const dialogStayLabel = computed(() => {
   const o = dialogTarget.value
   if (!o) return ''
-  return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
+  return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
 })
 // Calendar day-actions popup state (PMS_14).
 const dayDialogOpen = ref(false)
