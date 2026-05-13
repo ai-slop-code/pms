@@ -149,7 +149,7 @@ func TestOpenFinanceMonth_PositiveTimezoneKeepsTargetMonth(t *testing.T) {
 		Direction:     "outgoing",
 		Frequency:     "monthly",
 		StartMonth:    month,
-		EffectiveFrom: time.Now().UTC().Add(-24 * time.Hour),
+		EffectiveFrom: time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC),
 		Active:        true,
 	})
 	if err != nil {
