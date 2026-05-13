@@ -186,6 +186,7 @@ func (s *Server) Routes() chi.Router {
 				r.Get("/properties/{id}/finance/recurring-rules", s.listFinanceRecurringRules)
 				r.Post("/properties/{id}/finance/recurring-rules", s.postFinanceRecurringRule)
 				r.Patch("/properties/{id}/finance/recurring-rules/{ruleId}", s.patchFinanceRecurringRule)
+				r.Delete("/properties/{id}/finance/recurring-rules/{ruleId}", s.deleteFinanceRecurringRule)
 				r.Get("/properties/{id}/invoices/occupancy-candidates", s.listInvoiceOccupancyCandidates)
 				r.Get("/properties/{id}/invoices/payout-link-candidates", s.listInvoicePayoutLinkCandidates)
 				r.Get("/properties/{id}/invoices", s.listInvoices)

@@ -13,6 +13,7 @@ import UiButton from '@/components/ui/UiButton.vue'
 import UiInlineBanner from '@/components/ui/UiInlineBanner.vue'
 import UiEmptyState from '@/components/ui/UiEmptyState.vue'
 import UiDialog from '@/components/ui/UiDialog.vue'
+import UiSelect from '@/components/ui/UiSelect.vue'
 import { monthKey, shiftMonth } from '@/utils/month'
 import FinanceOverviewTab from '@/views/finance/FinanceOverviewTab.vue'
 import FinanceTransactionsTab from '@/views/finance/FinanceTransactionsTab.vue'
@@ -44,6 +45,20 @@ const editAmountEur = ref('')
 const editNote = ref('')
 const editSubmitting = ref(false)
 const editError = ref('')
+
+const editRuleDialogOpen = ref(false)
+const editingRule = ref<RecurringRule | null>(null)
+const editRuleForm = ref({
+  title: '',
+  category_id: 0,
+  amount_eur: 0,
+  direction: 'outgoing' as 'incoming' | 'outgoing',
+  start_month: '',
+  end_month: '',
+  effective_from: '',
+})
+const editRuleSubmitting = ref(false)
+const editRuleError = ref('')
 
 const categories = ref<FinanceCategory[]>([])
 const transactions = ref<FinanceTransaction[]>([])
@@ -360,6 +375,87 @@ async function toggleRecurringRule(rule: RecurringRule) {
   }
 }
 
+function editRecurringRule(rule: RecurringRule) {
+  editingRule.value = rule
+  editRuleForm.value = {
+    title: rule.title,
+    category_id: rule.category_id ?? 0,
+    amount_eur: Number(((rule.amount_cents ?? 0) / 100).toFixed(2)),
+    direction: rule.direction,
+    start_month: rule.start_month,
+    end_month: rule.end_month || '',
+    effective_from: rule.effective_from ? rule.effective_from.slice(0, 16) : '',
+  }
+  editRuleError.value = ''
+  editRuleDialogOpen.value = true
+}
+
+async function submitEditRecurringRule() {
+  const rule = editingRule.value
+  if (!rule || !pid.value) return
+  const form = editRuleForm.value
+  if (!form.title.trim()) {
+    editRuleError.value = 'Title is required.'
+    return
+  }
+  if (!Number.isFinite(form.amount_eur) || form.amount_eur < 0) {
+    editRuleError.value = 'Amount must be a non-negative number.'
+    return
+  }
+  if (!/^\d{4}-\d{2}$/.test(form.start_month)) {
+    editRuleError.value = 'Start month must be YYYY-MM.'
+    return
+  }
+  editRuleSubmitting.value = true
+  editRuleError.value = ''
+  try {
+    await api(`/api/properties/${pid.value}/finance/recurring-rules/${rule.id}`, {
+      method: 'PATCH',
+      json: {
+        title: form.title,
+        category_id: form.category_id || null,
+        amount_cents: Math.round(form.amount_eur * 100),
+        direction: form.direction,
+        start_month: form.start_month,
+        end_month: form.end_month || '',
+        effective_from: new Date(form.effective_from || `${form.start_month}-01T00:00`).toISOString(),
+      },
+    })
+    toast.success('Recurring rule updated. All opened months re-synced.')
+    editRuleDialogOpen.value = false
+    editingRule.value = null
+    await loadAll()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Failed to update recurring rule'
+    editRuleError.value = msg
+    toast.error(msg)
+  } finally {
+    editRuleSubmitting.value = false
+  }
+}
+
+async function deleteRecurringRule(rule: RecurringRule) {
+  if (!pid.value) return
+  const ok = await confirm({
+    title: 'Delete recurring rule',
+    message: `Delete "${rule.title}"? All auto-generated transactions for this rule across every month will be removed and the affected months re-synced. This cannot be undone.`,
+    confirmLabel: 'Delete',
+    tone: 'danger',
+  })
+  if (!ok) return
+  try {
+    await api(`/api/properties/${pid.value}/finance/recurring-rules/${rule.id}`, {
+      method: 'DELETE',
+    })
+    toast.success('Recurring rule deleted.')
+    await loadAll()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Failed to delete recurring rule'
+    error.value = msg
+    toast.error(msg)
+  }
+}
+
 async function openMonth() {
   if (!pid.value) return
   busy.value = true
@@ -457,6 +553,8 @@ watch(
         :busy="busy"
         @submit="createRecurringRule"
         @toggle="toggleRecurringRule"
+        @edit="editRecurringRule"
+        @delete="deleteRecurringRule"
       />
 
       <FinanceCategoriesTab
@@ -484,6 +582,38 @@ watch(
       <template #footer>
         <UiButton variant="secondary" :disabled="editSubmitting" @click="editDialogOpen = false">Cancel</UiButton>
         <UiButton variant="primary" :loading="editSubmitting" @click="submitEditTransaction">Save</UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog
+      :open="editRuleDialogOpen"
+      title="Edit recurring rule"
+      size="md"
+      @update:open="editRuleDialogOpen = $event"
+    >
+      <form class="edit-rule-form" @submit.prevent="submitEditRecurringRule">
+        <UiInput v-model="editRuleForm.title" label="Title" />
+        <UiInput v-model.number="editRuleForm.amount_eur" type="number" label="Amount (EUR)" />
+        <UiSelect v-model="editRuleForm.direction" label="Direction">
+          <option value="incoming">Incoming</option>
+          <option value="outgoing">Outgoing</option>
+        </UiSelect>
+        <UiSelect v-model.number="editRuleForm.category_id" label="Category">
+          <option :value="0">Uncategorized</option>
+          <option
+            v-for="c in categories.filter((x) => x.direction === 'both' || x.direction === editRuleForm.direction)"
+            :key="c.id"
+            :value="c.id"
+          >{{ c.title }}</option>
+        </UiSelect>
+        <UiInput v-model="editRuleForm.start_month" type="month" label="Start month" />
+        <UiInput v-model="editRuleForm.end_month" type="month" label="End month (optional)" />
+        <UiInput v-model="editRuleForm.effective_from" type="datetime-local" label="Effective from" />
+        <UiInlineBanner v-if="editRuleError" tone="danger" :message="editRuleError" />
+      </form>
+      <template #footer>
+        <UiButton variant="secondary" :disabled="editRuleSubmitting" @click="editRuleDialogOpen = false">Cancel</UiButton>
+        <UiButton variant="primary" :loading="editRuleSubmitting" @click="submitEditRecurringRule">Save</UiButton>
       </template>
     </UiDialog>
 
@@ -562,6 +692,11 @@ watch(
 
 <style scoped>
 .edit-tx-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.edit-rule-form {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);

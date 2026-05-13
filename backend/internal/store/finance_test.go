@@ -171,6 +171,144 @@ func TestOpenFinanceMonth_PositiveTimezoneKeepsTargetMonth(t *testing.T) {
 	}
 }
 
+// TestOpenFinanceMonth_PurgesOrphanRecurringTransactions reproduces the bug
+// where deactivating a recurring rule (and replacing it with a new one) left
+// the old auto-generated finance_transaction in place across re-opens. After
+// the fix, OpenFinanceMonth deletes any recurring-rule transactions whose
+// source rule is no longer active or no longer covers the month.
+func TestOpenFinanceMonth_PurgesOrphanRecurringTransactions(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	loc := time.UTC
+	month := "2026-04"
+	ctx := context.Background()
+
+	old, err := st.CreateFinanceRecurringRule(ctx, &FinanceRecurringRule{
+		PropertyID:    pid,
+		Title:         "Mortgage old",
+		AmountCents:   30076,
+		Direction:     "outgoing",
+		Frequency:     "monthly",
+		StartMonth:    "2025-01",
+		EffectiveFrom: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		Active:        true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.OpenFinanceMonth(ctx, pid, month, nil, loc); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deactivate the old rule and add a replacement at a new amount.
+	deactivated := false
+	if _, err := st.UpdateFinanceRecurringRule(ctx, pid, old.ID, nil, nil, nil, nil, nil, nil, nil, nil, &deactivated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateFinanceRecurringRule(ctx, &FinanceRecurringRule{
+		PropertyID:    pid,
+		Title:         "Mortgage new",
+		AmountCents:   39470,
+		Direction:     "outgoing",
+		Frequency:     "monthly",
+		StartMonth:    "2026-04",
+		EffectiveFrom: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		Active:        true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.OpenFinanceMonth(ctx, pid, month, nil, loc); err != nil {
+		t.Fatal(err)
+	}
+
+	txs, err := st.ListFinanceTransactions(ctx, pid, month, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int
+	for _, tx := range txs {
+		if tx.SourceType == "recurring_rule" {
+			total += tx.AmountCents
+		}
+	}
+	if total != 39470 {
+		t.Fatalf("recurring total cents = %d, want 39470 (only the active replacement rule should remain)", total)
+	}
+}
+
+// TestDeleteFinanceRecurringRule_CascadesTransactions verifies that deleting
+// a recurring rule also removes every auto-generated finance_transaction
+// produced by it, regardless of source_reference_id format.
+func TestDeleteFinanceRecurringRule_CascadesTransactions(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	ctx := context.Background()
+
+	rule, err := st.CreateFinanceRecurringRule(ctx, &FinanceRecurringRule{
+		PropertyID:    pid,
+		Title:         "Internet",
+		AmountCents:   2500,
+		Direction:     "outgoing",
+		Frequency:     "monthly",
+		StartMonth:    "2026-01",
+		EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Active:        true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"2026-01", "2026-02", "2026-03"} {
+		if _, err := st.OpenFinanceMonth(ctx, pid, m, nil, time.UTC); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := st.DeleteFinanceRecurringRule(ctx, pid, rule.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.GetFinanceRecurringRuleByID(ctx, pid, rule.ID); err == nil {
+		t.Fatal("rule still present after delete")
+	}
+	for _, m := range []string{"2026-01", "2026-02", "2026-03"} {
+		txs, err := st.ListFinanceTransactions(ctx, pid, m, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tx := range txs {
+			if tx.SourceType == "recurring_rule" {
+				t.Fatalf("month %s still has recurring_rule transaction id=%d", m, tx.ID)
+			}
+		}
+	}
+}
+
+func TestOpenFinanceMonth_PositiveTimezoneKeepsTargetMonth_AfterPurge(t *testing.T) {
+	// Smoke test: ensure existing positive-timezone test still passes after
+	// the orphan purge is added (regression guard).
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	loc := time.FixedZone("UTC+2", 2*60*60)
+	month := "2026-04"
+	rule, err := st.CreateFinanceRecurringRule(context.Background(), &FinanceRecurringRule{
+		PropertyID:    pid,
+		Title:         "TZ recurring",
+		AmountCents:   1234,
+		Direction:     "outgoing",
+		Frequency:     "monthly",
+		StartMonth:    month,
+		EffectiveFrom: time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC),
+		Active:        true,
+	})
+	if err != nil || rule.ID == 0 {
+		t.Fatalf("rule create failed: %v", err)
+	}
+	if _, err := st.OpenFinanceMonth(context.Background(), pid, month, nil, loc); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindOrCreateOccupancyForPayoutStayDates_CreatesHistoricalStay(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := setupFinanceProperty(t, st)

@@ -18,7 +18,12 @@ defineProps<{
 
 const recurringForm = defineModel<RecurringForm>('recurringForm', { required: true })
 
-const emit = defineEmits<{ submit: []; toggle: [rule: RecurringRule] }>()
+const emit = defineEmits<{
+  submit: []
+  toggle: [rule: RecurringRule]
+  edit: [rule: RecurringRule]
+  delete: [rule: RecurringRule]
+}>()
 
 const eur = (cents?: number | null) => formatEuros(cents ?? 0)
 </script>
@@ -75,9 +80,11 @@ const eur = (cents?: number | null) => formatEuros(cents ?? 0)
             <UiBadge :tone="r.active ? 'success' : 'neutral'" dot>{{ r.active ? 'Active' : 'Inactive' }}</UiBadge>
           </td>
           <td class="row-actions">
+            <UiButton variant="ghost" size="sm" @click="emit('edit', r)">Edit</UiButton>
             <UiButton variant="ghost" size="sm" @click="emit('toggle', r)">
               {{ r.active ? 'Deactivate' : 'Activate' }}
             </UiButton>
+            <UiButton variant="danger" size="sm" @click="emit('delete', r)">Delete</UiButton>
           </td>
         </tr>
       </UiTable>
