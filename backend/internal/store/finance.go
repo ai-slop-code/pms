@@ -406,6 +406,61 @@ func (s *Store) UpdateFinanceRecurringRule(ctx context.Context, propertyID, id i
 	return s.GetFinanceRecurringRuleByID(ctx, propertyID, id)
 }
 
+// DeleteFinanceRecurringRule hard-deletes a recurring rule along with every
+// auto-generated finance_transactions row sourced from it (across all months,
+// both new "<ruleID>:YYYY-MM" and legacy "<ruleID>" source_reference_id
+// formats). Returns sql.ErrNoRows if the rule does not exist.
+func (s *Store) DeleteFinanceRecurringRule(ctx context.Context, propertyID, id int64) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM finance_transactions
+		WHERE property_id = ?
+		  AND source_type = 'recurring_rule'
+		  AND (source_reference_id = ? OR source_reference_id LIKE ?)`,
+		propertyID, fmt.Sprintf("%d", id), fmt.Sprintf("%d:%%", id)); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM finance_recurring_rules
+		WHERE id = ? AND property_id = ?`, id, propertyID)
+	if err != nil {
+		return err
+	}
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
+}
+
+// ListOpenedFinanceMonths returns the YYYY-MM identifiers of every month that
+// has ever been opened for the given property, sorted ascending. Callers use
+// this to re-sync all open months after a recurring rule is mutated.
+func (s *Store) ListOpenedFinanceMonths(ctx context.Context, propertyID int64) ([]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT month FROM finance_month_states
+		WHERE property_id = ?
+		ORDER BY month ASC`, propertyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month string, openedBy *int64, loc *time.Location) (int, error) {
 	year, m, err := parseMonthYYYYMM(month)
 	if err != nil {
@@ -521,6 +576,29 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 		inserted += int(aff)
 	}
 	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	// Purge orphaned recurring-rule transactions for this month: any auto
+	// row whose source rule is no longer active or no longer covers monthRef.
+	// Match by transaction_date YYYY-MM prefix so legacy source_reference_id
+	// formats (just the rule ID with month embedded in the note) are also
+	// cleaned up.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM finance_transactions
+		WHERE property_id = ?
+		  AND source_type = 'recurring_rule'
+		  AND substr(transaction_date, 1, 7) = ?
+		  AND source_reference_id NOT IN (
+		      SELECT (id || ':' || ?) FROM finance_recurring_rules
+		      WHERE property_id = ?
+		        AND active = 1
+		        AND start_month <= ?
+		        AND (end_month IS NULL OR end_month = '' OR end_month >= ?)
+		        AND substr(effective_from, 1, 7) <= ?
+		        AND (effective_to IS NULL OR substr(effective_to, 1, 7) >= ?)
+		  )`,
+		propertyID, monthRef, monthRef, propertyID, monthRef, monthRef, monthRef, monthRef); err != nil {
 		return 0, err
 	}
 
