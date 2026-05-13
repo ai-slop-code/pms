@@ -51,20 +51,19 @@ export const useAuthStore = defineStore('auth', () => {
   const twoFactorEnrolled = ref<boolean | null>(null)
   // provisioningRequired is true when the user must finish bootstrap
   // (rotate a temp password, enrol TOTP) before the SPA lets them into
-  // the rest of the app. It's a computed combination of:
-  //   - the explicit `provisioning_required` flag from /api/auth/me
-  //     (newer backends),
-  //   - `user.must_change_password`,
-  //   - super_admin without TOTP enrolment.
-  // Computing it from local signals means the SPA stays correct even
-  // when running against an older backend that doesn't surface the
-  // explicit flag.
+  // the rest of the app. The backend is authoritative via the
+  // `provisioning_required` flag on /api/auth/me and /api/auth/login —
+  // we mirror it here. `must_change_password` is also honoured locally
+  // as a belt-and-suspenders check (it's a direct property of the user
+  // object). We deliberately do NOT re-derive "super_admin without
+  // TOTP" client-side: that lets PMS_2FA_DEV_BYPASS=true (dev/test
+  // only) actually waive the enrolment step, which the smoke harness
+  // relies on.
   const provisioningRequiredFromServer = ref(false)
   const provisioningRequired = computed(() => {
     if (!user.value) return false
     if (provisioningRequiredFromServer.value) return true
     if (user.value.must_change_password) return true
-    if (user.value.role === 'super_admin' && twoFactorEnrolled.value === false) return true
     return false
   })
 

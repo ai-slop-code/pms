@@ -120,4 +120,51 @@ describe('BookingPayoutsView', () => {
     await flushPromises()
     expect(w.text()).toContain('upstream 503')
   })
+
+  it('renders Payout/Statement source badges per row provenance flags', async () => {
+    seedProperty()
+    apiRouter({
+      '/api/properties/7/finance/booking-payouts': () => ({
+        payouts: [
+          {
+            id: 1,
+            reference_number: 'BK-PAYOUT-ONLY',
+            net_cents: 1000,
+            payout_date: '2026-04-10',
+            has_payout_data: true,
+            has_statement_data: false,
+          },
+          {
+            id: 2,
+            reference_number: 'BK-STATEMENT-ONLY',
+            net_cents: 2000,
+            payout_date: '2026-04-11',
+            has_payout_data: false,
+            has_statement_data: true,
+          },
+          {
+            id: 3,
+            reference_number: 'BK-MERGED',
+            net_cents: 3000,
+            payout_date: '2026-04-12',
+            has_payout_data: true,
+            has_statement_data: true,
+          },
+        ],
+      }),
+    })
+    const w = mount(BookingPayoutsView)
+    await flushPromises()
+    const headers = w.findAll('th').map((h) => h.text())
+    expect(headers).toContain('Sources')
+    const rows = w.findAll('tbody tr')
+    expect(rows).toHaveLength(3)
+    const sourcesCell = (i: number) => rows[i]!.findAll('td')[7]!.text()
+    expect(sourcesCell(0)).toContain('Payout')
+    expect(sourcesCell(0)).not.toContain('Statement')
+    expect(sourcesCell(1)).toContain('Statement')
+    expect(sourcesCell(1)).not.toContain('Payout')
+    expect(sourcesCell(2)).toContain('Payout')
+    expect(sourcesCell(2)).toContain('Statement')
+  })
 })

@@ -204,6 +204,7 @@ Mobile: tabs become a horizontal scrollable strip; tables become stacked cards f
 - PageHeader + toolbar (date range, source filter).
 - Two KPIs (total gross, matched rate %).
 - `UiTable` (Payout date / Reference / Gross / Stay link / Matched). Unmatched rows get `tone="warning"` row background (`--warning-weak`).
+- **Sources column** (FEAT-06): renders one `UiBadge` per active provenance flag — `tone="info"` "Payout" when `has_payout_data`, `tone="success"` "Statement" when `has_statement_data`. Tooltips explain which fields each source contributes. The column is part of the default columns and remains visible at the `1280px` content width.
 
 ### 3.8 Invoices (`views/InvoicesView.vue`)
 

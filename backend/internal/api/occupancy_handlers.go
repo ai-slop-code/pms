@@ -58,6 +58,15 @@ type occupancyRow struct {
 	LastSyncedAt   string `json:"last_synced_at"`
 	ContentHash    string `json:"content_hash"`
 	HasPayoutData  bool   `json:"has_payout_data"`
+	// Closure / external-sale labelling (PMS_14). NULL JSON omitted.
+	ClosureState           *string `json:"closure_state,omitempty"`
+	ClosureReason          *string `json:"closure_reason,omitempty"`
+	ClosureCategory        *string `json:"closure_category,omitempty"`
+	ClosedAt               *string `json:"closed_at,omitempty"`
+	ClosedByUserID         *int64  `json:"closed_by_user_id,omitempty"`
+	ExternalNetAmountCents *int64  `json:"external_net_amount_cents,omitempty"`
+	ExternalCurrency       *string `json:"external_currency,omitempty"`
+	ExternalChannel        *string `json:"external_channel,omitempty"`
 }
 
 type occupancyListResponse struct {
@@ -137,20 +146,31 @@ func (s *Server) getOccupancyExportPublic(w http.ResponseWriter, r *http.Request
 		return
 	}
 	type row struct {
-		ID               int64  `json:"id"`
-		PropertyID       int64  `json:"property_id"`
-		PropertyName     string `json:"property_name"`
-		SourceType       string `json:"source_type"`
-		ExternalEventUID string `json:"external_event_uid"`
-		StayStart        string `json:"stay_start"`
-		StayEnd          string `json:"stay_end"`
-		Status           string `json:"status"`
-		RawSummary       string `json:"raw_summary,omitempty"`
-		LastSyncedAt     string `json:"last_synced_at"`
+		ID               int64    `json:"id"`
+		PropertyID       int64    `json:"property_id"`
+		PropertyName     string   `json:"property_name"`
+		SourceType       string   `json:"source_type"`
+		ExternalEventUID string   `json:"external_event_uid"`
+		StayStart        string   `json:"stay_start"`
+		StayEnd          string   `json:"stay_end"`
+		Status           string   `json:"status"`
+		RawSummary       string   `json:"raw_summary,omitempty"`
+		LastSyncedAt     string   `json:"last_synced_at"`
+		// Categories mirrors the iCal CATEGORIES field per PMS_14 §3.5
+		// so downstream consumers can filter labelled nights without
+		// leaking the operator-entered amount/channel.
+		Categories []string `json:"categories,omitempty"`
 	}
 	out := make([]row, 0, len(list))
 	for _, o := range list {
 		rs := occupancySummary(o)
+		var cats []string
+		switch o.ClosureState.String {
+		case "closed":
+			cats = []string{"PMS-CLOSURE"}
+		case "external_sale":
+			cats = []string{"PMS-EXTERNAL-SALE"}
+		}
 		out = append(out, row{
 			ID:               o.ID,
 			PropertyID:       o.PropertyID,
@@ -162,6 +182,7 @@ func (s *Server) getOccupancyExportPublic(w http.ResponseWriter, r *http.Request
 			Status:           o.Status,
 			RawSummary:       rs,
 			LastSyncedAt:     o.LastSyncedAt.UTC().Format(time.RFC3339),
+			Categories:       cats,
 		})
 	}
 	WriteJSON(w, http.StatusOK, struct {
@@ -217,7 +238,7 @@ func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool) []occupancy
 	out := make([]occupancyRow, 0, len(list))
 	for _, o := range list {
 		rs := occupancySummary(o)
-		out = append(out, occupancyRow{
+		row := occupancyRow{
 			ID:             o.ID,
 			PropertyID:     o.PropertyID,
 			SourceType:     o.SourceType,
@@ -229,10 +250,40 @@ func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool) []occupancy
 			LastSyncedAt:   o.LastSyncedAt.UTC().Format(time.RFC3339),
 			ContentHash:    o.ContentHash,
 			HasPayoutData:  payoutMap[o.ID],
-		})
+		}
+		if o.ClosureState.Valid {
+			row.ClosureState = optString(o.ClosureState.String)
+		}
+		if o.ClosureReason.Valid {
+			row.ClosureReason = optString(o.ClosureReason.String)
+		}
+		if o.ClosureCategory.Valid {
+			row.ClosureCategory = optString(o.ClosureCategory.String)
+		}
+		if o.ClosedAt.Valid {
+			s := o.ClosedAt.Time.UTC().Format(time.RFC3339)
+			row.ClosedAt = &s
+		}
+		if o.ClosedByUserID.Valid {
+			v := o.ClosedByUserID.Int64
+			row.ClosedByUserID = &v
+		}
+		if o.ExternalNetAmountCents.Valid {
+			v := o.ExternalNetAmountCents.Int64
+			row.ExternalNetAmountCents = &v
+		}
+		if o.ExternalCurrency.Valid {
+			row.ExternalCurrency = optString(o.ExternalCurrency.String)
+		}
+		if o.ExternalChannel.Valid {
+			row.ExternalChannel = optString(o.ExternalChannel.String)
+		}
+		out = append(out, row)
 	}
 	return out
 }
+
+func optString(s string) *string { return &s }
 
 func occupancySummary(o store.Occupancy) string {
 	if o.GuestDisplayName.Valid && o.GuestDisplayName.String != "" {

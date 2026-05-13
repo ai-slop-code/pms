@@ -24,7 +24,7 @@ Group=pms
 EnvironmentFile=/etc/pms/pms.env
 Environment=PMS_ENV=production
 Environment=DATABASE_PATH=/var/lib/pms/pms.db
-Environment=PMS_INVOICE_DIR=/var/lib/pms/invoices
+Environment=DATA_DIR=/var/lib/pms
 Environment=PMS_LOG_FORMAT=json
 ExecStart=/usr/local/bin/pms-server
 Restart=on-failure

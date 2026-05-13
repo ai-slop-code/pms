@@ -13,9 +13,15 @@ import (
 // ---------------- Shared helpers ----------------
 
 // analyticsActiveStatus is the predicate for occupancies that should
-// contribute to nights-sold / ADR / RevPAR / revenue metrics. Matches
-// the existing convention used by the rest of the codebase.
-const analyticsActiveStatus = `status IN ('active', 'updated')`
+// contribute to nights-sold / ADR / RevPAR / revenue metrics.
+//
+// Closure-aware semantics (PMS_14 §4):
+//
+//   - status ∈ {active, updated} — inherited ICS-driven gating.
+//   - closure_state IS NULL OR != 'closed' — closed rows drop out of
+//     all active-aggregates entirely. Externally-sold rows stay in
+//     because the night is still occupied (just not by a Booking guest).
+const analyticsActiveStatus = `status IN ('active', 'updated') AND (closure_state IS NULL OR closure_state != 'closed')`
 const analyticsCancelledStatus = `status IN ('cancelled', 'deleted_from_source')`
 
 // diacriticFold is a compact lookup table for the common Latin
@@ -87,7 +93,9 @@ func NormalizeGuestName(name string) string {
 type AnalyticsFreshness struct {
 	LastICSSyncAt         *time.Time
 	LastPayoutDate        *time.Time
+	LastStatementBookedOn *time.Time
 	UnmatchedPayoutsCount int
+	HasStatementData      bool
 }
 
 func (s *Store) GetAnalyticsFreshness(ctx context.Context, propertyID int64) (*AnalyticsFreshness, error) {
@@ -105,7 +113,7 @@ func (s *Store) GetAnalyticsFreshness(ctx context.Context, propertyID int64) (*A
 
 	var lastPayout sql.NullString
 	_ = s.DB.QueryRowContext(ctx, `
-		SELECT MAX(payout_date) FROM finance_booking_payouts
+		SELECT MAX(payout_date) FROM finance_bookings
 		WHERE property_id = ?`, propertyID).Scan(&lastPayout)
 	if lastPayout.Valid && lastPayout.String != "" {
 		if t, err := time.Parse(time.RFC3339, lastPayout.String); err == nil {
@@ -115,8 +123,13 @@ func (s *Store) GetAnalyticsFreshness(ctx context.Context, propertyID int64) (*A
 		}
 	}
 
+	if t, err := s.LastStatementBookedOn(ctx, propertyID); err == nil {
+		out.LastStatementBookedOn = t
+		out.HasStatementData = t != nil
+	}
+
 	_ = s.DB.QueryRowContext(ctx, `
-		SELECT COUNT(1) FROM finance_booking_payouts
+		SELECT COUNT(1) FROM finance_bookings
 		WHERE property_id = ? AND occupancy_id IS NULL`, propertyID).Scan(&out.UnmatchedPayoutsCount)
 
 	return out, nil
@@ -127,19 +140,26 @@ func (s *Store) GetAnalyticsFreshness(ctx context.Context, propertyID int64) (*A
 // OccupancyLite is a minimal projection used by analytics
 // computations that do not need the full Occupancy row.
 type OccupancyLite struct {
-	ID         int64
-	StartAt    time.Time
-	EndAt      time.Time
-	Status     string
-	ImportedAt time.Time
-	GuestName  string
+	ID                     int64
+	StartAt                time.Time
+	EndAt                  time.Time
+	Status                 string
+	ImportedAt             time.Time
+	GuestName              string
+	ClosureState           string // "", "closed", or "external_sale"
+	ExternalNetAmountCents int64  // populated when ClosureState == "external_sale"
 }
 
 // ListActiveOccupanciesInDateRange returns all active stays that
-// overlap [fromUTC, toUTC).
+// overlap [fromUTC, toUTC). Closed rows are filtered out by
+// analyticsActiveStatus; externally-sold rows remain so callers can
+// still count them as nights-sold.
 func (s *Store) ListActiveOccupanciesInDateRange(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time) ([]OccupancyLite, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, start_at, end_at, status, imported_at, COALESCE(guest_display_name, '')
+		SELECT id, start_at, end_at, status, imported_at,
+		       COALESCE(guest_display_name, ''),
+		       COALESCE(closure_state, ''),
+		       COALESCE(external_net_amount_cents, 0)
 		FROM occupancies
 		WHERE property_id = ?
 		  AND `+analyticsActiveStatus+`
@@ -155,7 +175,7 @@ func (s *Store) ListActiveOccupanciesInDateRange(ctx context.Context, propertyID
 	for rows.Next() {
 		var o OccupancyLite
 		var start, end, imported string
-		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName); err != nil {
+		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName, &o.ClosureState, &o.ExternalNetAmountCents); err != nil {
 			return nil, err
 		}
 		o.StartAt, _ = time.Parse(time.RFC3339, start)
@@ -199,13 +219,131 @@ func toDateStart(t time.Time, loc *time.Location) time.Time {
 	return time.Date(tl.Year(), tl.Month(), tl.Day(), 0, 0, 0, 0, loc)
 }
 
-// AvailableNightsInRange returns the number of calendar nights in
-// [fromDate, toDate) — one per calendar day.
+// AvailableNightsInRange returns the raw number of calendar nights in
+// [fromDate, toDate) — one per calendar day. Use BookableNightsInRange
+// when computing the occupancy% denominator: PMS_14 §4 requires that
+// closed nights be subtracted from BOTH numerator and denominator so
+// occupancy% stays stable when a Booking.com block is labelled
+// `closed`.
 func AvailableNightsInRange(fromDate, toDate time.Time) int {
 	if !toDate.After(fromDate) {
 		return 0
 	}
 	return int(toDate.Sub(fromDate).Hours()/24 + 0.5)
+}
+
+// BookableNightsInRange = AvailableNightsInRange − ClosedNightsInRange,
+// floored at zero. This is the correct denominator for occupancy%
+// calculations per PMS_14 §4.
+func BookableNightsInRange(closedStays []OccupancyLite, fromDate, toDate time.Time) int {
+	n := AvailableNightsInRange(fromDate, toDate) - ClosedNightsInRange(closedStays, fromDate, toDate)
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// ClosedNightsInRange counts the nights inside [fromDate, toDate) that
+// fall on a stay flagged closure_state='closed'. Because
+// ListActiveOccupanciesInDateRange filters closed rows out, callers
+// that want this count must use ListOccupanciesIncludingClosedInRange
+// instead.
+func ClosedNightsInRange(closedStays []OccupancyLite, fromDate, toDate time.Time) int {
+	if !toDate.After(fromDate) {
+		return 0
+	}
+	count := 0
+	for _, st := range closedStays {
+		if st.ClosureState != "closed" {
+			continue
+		}
+		sd := toDateStart(st.StartAt, fromDate.Location())
+		ed := toDateStart(st.EndAt, fromDate.Location())
+		lo := sd
+		if lo.Before(fromDate) {
+			lo = fromDate
+		}
+		hi := ed
+		if hi.After(toDate) {
+			hi = toDate
+		}
+		if hi.After(lo) {
+			count += int(hi.Sub(lo).Hours()/24 + 0.5)
+		}
+	}
+	return count
+}
+
+// ExternalSaleRevenueCentsInRange returns the operator-entered net
+// amounts contributed by externally-sold rows in [fromDate, toDate),
+// prorated by the number of overlapping nights / total stay nights.
+// Stays whose ClosureState is not 'external_sale' are skipped.
+func ExternalSaleRevenueCentsInRange(stays []OccupancyLite, fromDate, toDate time.Time) int64 {
+	if !toDate.After(fromDate) {
+		return 0
+	}
+	var total int64
+	for _, st := range stays {
+		if st.ClosureState != "external_sale" || st.ExternalNetAmountCents == 0 {
+			continue
+		}
+		sd := toDateStart(st.StartAt, fromDate.Location())
+		ed := toDateStart(st.EndAt, fromDate.Location())
+		stayNights := int(ed.Sub(sd).Hours()/24 + 0.5)
+		if stayNights <= 0 {
+			continue
+		}
+		lo := sd
+		if lo.Before(fromDate) {
+			lo = fromDate
+		}
+		hi := ed
+		if hi.After(toDate) {
+			hi = toDate
+		}
+		if !hi.After(lo) {
+			continue
+		}
+		overlap := int(hi.Sub(lo).Hours()/24 + 0.5)
+		total += st.ExternalNetAmountCents * int64(overlap) / int64(stayNights)
+	}
+	return total
+}
+
+// ListClosedOccupanciesInDateRange returns rows where closure_state =
+// 'closed' that overlap [fromUTC, toUTC). Useful for denominator
+// subtraction in the occupancy % formula (PMS_14 §4).
+func (s *Store) ListClosedOccupanciesInDateRange(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time) ([]OccupancyLite, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT id, start_at, end_at, status, imported_at,
+		       COALESCE(guest_display_name, ''),
+		       COALESCE(closure_state, ''),
+		       0
+		FROM occupancies
+		WHERE property_id = ?
+		  AND status IN ('active', 'updated')
+		  AND closure_state = 'closed'
+		  AND start_at < ?
+		  AND end_at > ?
+		ORDER BY start_at ASC`,
+		propertyID, toUTC.Format(time.RFC3339), fromUTC.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OccupancyLite
+	for rows.Next() {
+		var o OccupancyLite
+		var start, end, imported string
+		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName, &o.ClosureState, &o.ExternalNetAmountCents); err != nil {
+			return nil, err
+		}
+		o.StartAt, _ = time.Parse(time.RFC3339, start)
+		o.EndAt, _ = time.Parse(time.RFC3339, end)
+		o.ImportedAt, _ = time.Parse(time.RFC3339, imported)
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }
 
 // PayoutForStayRow is the subset of payout fields analytics needs.
@@ -228,7 +366,7 @@ func (s *Store) SumPayoutGrossNetForStays(ctx context.Context, propertyID int64,
 		SELECT occupancy_id,
 			COALESCE(amount_cents, 0), COALESCE(commission_cents, 0),
 			COALESCE(payment_service_fee_cents, 0), COALESCE(net_cents, 0)
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ?
 		  AND occupancy_id IS NOT NULL
 		  AND check_in_date IS NOT NULL
@@ -470,6 +608,10 @@ func (s *Store) ListMonthlyOccupancyAndADR(ctx context.Context, propertyID int64
 	if err != nil {
 		return nil, err
 	}
+	closedStays, err := s.ListClosedOccupanciesInDateRange(ctx, propertyID, start, end)
+	if err != nil {
+		return nil, err
+	}
 
 	// Per-month active stay -> nights split (ignoring revenue).
 	type monthAgg struct {
@@ -487,12 +629,12 @@ func (s *Store) ListMonthlyOccupancyAndADR(ctx context.Context, propertyID int64
 		return a
 	}
 
-	// Available nights + nights-sold per month.
+	// Bookable nights per month (= raw available − closed nights).
 	for cursor := start; cursor.Before(end); cursor = cursor.AddDate(0, 1, 0) {
 		monthEnd := cursor.AddDate(0, 1, 0)
 		key := cursor.Format("2006-01")
 		a := ensure(key)
-		a.availableNights = AvailableNightsInRange(cursor, monthEnd)
+		a.availableNights = BookableNightsInRange(closedStays, cursor, monthEnd)
 	}
 	for _, st := range stays {
 		sd := toDateStart(st.StartAt, loc)
@@ -512,7 +654,7 @@ func (s *Store) ListMonthlyOccupancyAndADR(ctx context.Context, propertyID int64
 		SELECT occupancy_id, substr(check_in_date, 1, 7) AS m,
 			COALESCE(amount_cents, 0), COALESCE(commission_cents, 0),
 			COALESCE(payment_service_fee_cents, 0), COALESCE(net_cents, 0)
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ?
 		  AND occupancy_id IS NOT NULL
 		  AND check_in_date IS NOT NULL
@@ -590,10 +732,29 @@ func (s *Store) ListWeeklyOccupancy(ctx context.Context, propertyID int64, fromY
 	if err != nil {
 		return nil, err
 	}
+	closedStays, err := s.ListClosedOccupanciesInDateRange(ctx, propertyID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	// Per-day flag: true when the day falls inside a closed stay.
+	closedDay := map[string]bool{}
+	for _, st := range closedStays {
+		sd := toDateStart(st.StartAt, loc)
+		ed := toDateStart(st.EndAt, loc)
+		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+			if d.Before(start) || !d.Before(end) {
+				continue
+			}
+			closedDay[d.Format("2006-01-02")] = true
+		}
+	}
 	cellKey := func(y, w int) string { return fmt.Sprintf("%04d-%02d", y, w) }
 	sold := map[string]int{}
 	avail := map[string]int{}
 	for d := start; d.Before(end); d = d.AddDate(0, 0, 1) {
+		if closedDay[d.Format("2006-01-02")] {
+			continue
+		}
 		y, w := d.ISOWeek()
 		avail[cellKey(y, w)]++
 	}
@@ -633,10 +794,29 @@ func (s *Store) ListDOWOccupancy(ctx context.Context, propertyID int64, fromDate
 	if err != nil {
 		return nil, err
 	}
+	closedStays, err := s.ListClosedOccupanciesInDateRange(ctx, propertyID, fromDate, toDate)
+	if err != nil {
+		return nil, err
+	}
 	loc := fromDate.Location()
+	// Per-day flag: true when the day falls inside a closed stay.
+	closedDay := map[string]bool{}
+	for _, st := range closedStays {
+		sd := toDateStart(st.StartAt, loc)
+		ed := toDateStart(st.EndAt, loc)
+		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+			if d.Before(fromDate) || !d.Before(toDate) {
+				continue
+			}
+			closedDay[d.Format("2006-01-02")] = true
+		}
+	}
 	sold := [7]int{}
 	avail := [7]int{}
 	for d := fromDate; d.Before(toDate); d = d.AddDate(0, 0, 1) {
+		if closedDay[d.Format("2006-01-02")] {
+			continue
+		}
 		avail[int(d.Weekday())]++
 	}
 	for _, st := range stays {
@@ -740,7 +920,7 @@ func (s *Store) ListNetPerStay(ctx context.Context, propertyID int64, fromDate, 
 			COALESCE(SUM(commission_cents), 0),
 			COALESCE(SUM(payment_service_fee_cents), 0),
 			COALESCE(SUM(net_cents), 0)
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ? AND occupancy_id IS NOT NULL
 		GROUP BY occupancy_id`, propertyID)
 	if err != nil {
@@ -939,7 +1119,7 @@ func (s *Store) ADRByDimension(ctx context.Context, propertyID int64, fromDate, 
 	// Load confirmed payouts with linked stay IDs.
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT occupancy_id, check_in_date, COALESCE(amount_cents, 0)
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ? AND occupancy_id IS NOT NULL
 		  AND check_in_date IS NOT NULL
 		  AND check_in_date >= ? AND check_in_date < ?`,

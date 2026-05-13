@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"pms/backend/internal/nuki"
 	"pms/backend/internal/permissions"
 	"pms/backend/internal/store"
 )
@@ -18,7 +19,9 @@ type analyticsFreshnessResponse struct {
 	GeneratedAt           time.Time `json:"generated_at"`
 	LastICSSyncAt         *string   `json:"last_ics_sync_at,omitempty"`
 	LastPayoutDate        *string   `json:"last_payout_date,omitempty"`
+	LastStatementDate     *string   `json:"last_statement_date,omitempty"`
 	UnmatchedPayoutsCount int       `json:"unmatched_payouts_count"`
+	HasStatementData      bool      `json:"has_statement_data"`
 	StalenessLevel        string    `json:"staleness_level"`
 }
 
@@ -100,6 +103,50 @@ type analyticsCancellationStat struct {
 	Cancelled int                `json:"total_cancelled"`
 }
 
+// analyticsCancellationCohortRow is one (month, rate) point for the
+// statement-derived cohort view (FEAT-05). Months that contain zero
+// statement-aware rows are omitted; the frontend renders the
+// "no statement data" empty state when the slice is empty.
+type analyticsCancellationCohortRow struct {
+	Month     string  `json:"month"`
+	Rate      float64 `json:"rate"`
+	Cancelled int     `json:"cancelled"`
+	Active    int     `json:"active"`
+	Other     int     `json:"other"`
+}
+
+// analyticsCommissionTrendRow is one weighted commission-rate point.
+type analyticsCommissionTrendRow struct {
+	Month           string  `json:"month"`
+	Rate            float64 `json:"rate"`
+	CommissionCents int64   `json:"commission_cents"`
+	GrossCents      int64   `json:"gross_cents"`
+	Stays           int     `json:"stays"`
+}
+
+// analyticsCommissionPerStayRow is one row of the commission-per-stay
+// list (mirrors the existing Net per stay table).
+type analyticsCommissionPerStayRow struct {
+	BookingID       int64   `json:"booking_id"`
+	Reference       string  `json:"reference"`
+	GuestName       string  `json:"guest_name"`
+	CheckInDate     string  `json:"check_in_date"`
+	CheckOutDate    string  `json:"check_out_date"`
+	GrossCents      int64   `json:"gross_cents"`
+	CommissionCents int64   `json:"commission_cents"`
+	Rate            float64 `json:"rate"`
+}
+
+// analyticsPersonsBucket is one (persons, count, ADR) row for the
+// "persons distribution" + "ADR by persons" charts.
+type analyticsPersonsBucket struct {
+	Persons    int   `json:"persons"`
+	Stays      int   `json:"stays"`
+	GrossCents int64 `json:"gross_cents"`
+	RoomNights int   `json:"room_nights"`
+	ADRCents   int64 `json:"adr_cents"`
+}
+
 type analyticsBucket struct {
 	Bucket string `json:"bucket"`
 	Count  int    `json:"count"`
@@ -144,6 +191,11 @@ type analyticsPerformanceResponse struct {
 	SeasonalityHeatmap []analyticsHeatmapCell   `json:"seasonality_heatmap"`
 	DOWOccupancy    []analyticsDOWCell          `json:"dow_occupancy"`
 	Cancellation    analyticsCancellationStat   `json:"cancellation"`
+	CancellationByBookingMonth []analyticsCancellationCohortRow `json:"cancellation_by_booking_month"`
+	CancellationByArrivalMonth []analyticsCancellationCohortRow `json:"cancellation_by_arrival_month"`
+	CommissionRateTrend []analyticsCommissionTrendRow      `json:"commission_rate_trend"`
+	CommissionPerStay   []analyticsCommissionPerStayRow    `json:"commission_per_stay"`
+	HasStatementData    bool                                `json:"has_statement_data"`
 	NetPerStay      []analyticsNetPerStayRow    `json:"net_per_stay"`
 	YearlyCleaning  analyticsYearlyCleaningBlock `json:"yearly_cleaning"`
 	YearlyFinance   analyticsYearlyFinanceBlock `json:"yearly_finance"`
@@ -155,13 +207,17 @@ type analyticsDemandResponse struct {
 	From            string                 `json:"from"`
 	To              string                 `json:"to"`
 	LeadTime        []analyticsBucket      `json:"lead_time"`
+	LeadTimeStatement []analyticsBucket    `json:"lead_time_statement"`
 	LengthOfStay    []analyticsBucket      `json:"length_of_stay"`
+	PersonsDistribution []analyticsPersonsBucket `json:"persons_distribution"`
 	ADRByMonth      []analyticsADRRow      `json:"adr_by_month"`
 	ADRByDOW        []analyticsADRRow      `json:"adr_by_dow"`
 	ADRByLeadBucket []analyticsADRRow      `json:"adr_by_lead_bucket"`
+	ADRByPersons    []analyticsADRRow      `json:"adr_by_persons"`
 	GapNights       []analyticsGapRow      `json:"gap_nights"`
 	OrphanMidweek   []analyticsGapRow      `json:"orphan_midweek"`
 	ReturningGuests analyticsReturningStat `json:"returning_guests"`
+	HasStatementData bool                  `json:"has_statement_data"`
 }
 
 type analyticsADRRow struct {
@@ -277,6 +333,7 @@ func (s *Server) getAnalyticsFreshness(w http.ResponseWriter, r *http.Request) {
 	out := analyticsFreshnessResponse{
 		GeneratedAt:           now.UTC(),
 		UnmatchedPayoutsCount: f.UnmatchedPayoutsCount,
+		HasStatementData:      f.HasStatementData,
 		StalenessLevel:        level,
 	}
 	if f.LastICSSyncAt != nil {
@@ -286,6 +343,10 @@ func (s *Server) getAnalyticsFreshness(w http.ResponseWriter, r *http.Request) {
 	if f.LastPayoutDate != nil {
 		d := f.LastPayoutDate.In(loc).Format("2006-01-02")
 		out.LastPayoutDate = &d
+	}
+	if f.LastStatementBookedOn != nil {
+		d := f.LastStatementBookedOn.In(loc).Format("2006-01-02")
+		out.LastStatementDate = &d
 	}
 	WriteJSON(w, http.StatusOK, out)
 }
@@ -312,12 +373,17 @@ func (s *Server) getAnalyticsOutlook(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	closedStays, err := s.Store.ListClosedOccupanciesInDateRange(r.Context(), pid, todayMidnight, end90)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 
 	windows := []analyticsKPIWindow{}
 	for _, days := range []int{30, 60, 90} {
 		winEnd := todayMidnight.AddDate(0, 0, days)
 		nights := store.NightsSoldInRange(stays, todayMidnight, winEnd)
-		avail := store.AvailableNightsInRange(todayMidnight, winEnd)
+		avail := store.BookableNightsInRange(closedStays, todayMidnight, winEnd)
 		gross, _, _, _, matchedIDs, err := s.Store.SumPayoutGrossNetForStays(r.Context(), pid, todayMidnight, winEnd)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "database error")
@@ -509,6 +575,42 @@ func (s *Server) getAnalyticsPerformance(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// FEAT-05: statement-derived cancellation cohorts and commission metrics.
+	if has, err := s.Store.HasAnyStatementData(r.Context(), pid); err == nil {
+		resp.HasStatementData = has
+	}
+	if rows, err := s.Store.ListCancellationByBookingCohort(r.Context(), pid, from, to, loc); err == nil {
+		for _, row := range rows {
+			resp.CancellationByBookingMonth = append(resp.CancellationByBookingMonth, analyticsCancellationCohortRow{
+				Month: row.Month, Rate: row.Rate, Cancelled: row.Cancelled, Active: row.Active, Other: row.Other,
+			})
+		}
+	}
+	if rows, err := s.Store.ListCancellationByArrivalCohort(r.Context(), pid, from, to, loc); err == nil {
+		for _, row := range rows {
+			resp.CancellationByArrivalMonth = append(resp.CancellationByArrivalMonth, analyticsCancellationCohortRow{
+				Month: row.Month, Rate: row.Rate, Cancelled: row.Cancelled, Active: row.Active, Other: row.Other,
+			})
+		}
+	}
+	if rows, err := s.Store.ListCommissionRateTrend(r.Context(), pid, from, to, loc); err == nil {
+		for _, row := range rows {
+			resp.CommissionRateTrend = append(resp.CommissionRateTrend, analyticsCommissionTrendRow{
+				Month: row.Month, Rate: row.Rate,
+				CommissionCents: row.CommissionCents, GrossCents: row.GrossCents, Stays: row.Stays,
+			})
+		}
+	}
+	if rows, err := s.Store.ListCommissionPerStay(r.Context(), pid, from, to, loc); err == nil {
+		for _, row := range rows {
+			resp.CommissionPerStay = append(resp.CommissionPerStay, analyticsCommissionPerStayRow{
+				BookingID: row.BookingID, Reference: row.ReferenceNumber, GuestName: row.GuestName,
+				CheckInDate: row.CheckInDate, CheckOutDate: row.CheckOutDate,
+				GrossCents: row.GrossCents, CommissionCents: row.CommissionCents, Rate: row.Rate,
+			})
+		}
+	}
+
 	// Net per stay
 	nps, err := s.Store.ListNetPerStay(r.Context(), pid, from, to, loc)
 	if err == nil {
@@ -678,6 +780,27 @@ func (s *Server) getAnalyticsDemand(w http.ResponseWriter, r *http.Request) {
 			ReturningRate: safeDiv(float64(returning), float64(total)),
 		}
 	}
+
+	// FEAT-05: statement-derived demand metrics.
+	if has, err := s.Store.HasAnyStatementData(r.Context(), pid); err == nil {
+		resp.HasStatementData = has
+	}
+	if lts, err := s.Store.ListLeadTimeStatementBuckets(r.Context(), pid, from, to, loc); err == nil {
+		for _, b := range lts {
+			resp.LeadTimeStatement = append(resp.LeadTimeStatement, analyticsBucket{Bucket: b.Bucket, Count: b.Count})
+		}
+	}
+	if pd, err := s.Store.ListPersonsDistribution(r.Context(), pid, from, to, loc); err == nil {
+		for _, b := range pd {
+			resp.PersonsDistribution = append(resp.PersonsDistribution, analyticsPersonsBucket{
+				Persons: b.Persons, Stays: b.Stays, GrossCents: b.GrossCents,
+				RoomNights: b.RoomNights, ADRCents: b.ADRCents,
+			})
+			resp.ADRByPersons = append(resp.ADRByPersons, analyticsADRRow{
+				Bucket: fmt.Sprintf("%d", b.Persons), ADRCents: b.ADRCents, MatchedNights: b.RoomNights,
+			})
+		}
+	}
 	WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -781,4 +904,144 @@ func (s *Server) getAnalyticsReturningGuests(w http.ResponseWriter, r *http.Requ
 		Offset:      offset,
 		Guests:      out,
 	})
+}
+
+// guestCheckinHourBucket is one hour-of-day bucket in the response. Hour
+// is in [0,23] expressed in the property timezone.
+type guestCheckinHourBucket struct {
+	Hour  int `json:"hour"`
+	Count int `json:"count"`
+}
+
+type guestCheckinHeatmapResponse struct {
+	From    string                   `json:"from"`
+	To      string                   `json:"to"`
+	Buckets []guestCheckinHourBucket `json:"buckets"`
+}
+
+// getAnalyticsGuestCheckinHeatmap returns a 24-bucket histogram of the
+// hour-of-day at which guests first unlocked the door, taken from the
+// reconciled nuki_guest_daily_entries table (PMS_12 task 3). The handler
+// only filters and aggregates persisted rows — all the heavy lifting
+// (cleaner-vs-guest partitioning, dedup) lives in the reconciler.
+func (s *Server) getAnalyticsGuestCheckinHeatmap(w http.ResponseWriter, r *http.Request) {
+	_, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Analytics, permissions.LevelRead)
+	if !ok {
+		return
+	}
+	loc := s.analyticsLocation(r, pid)
+	now := time.Now().In(loc)
+	defFrom := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+	defTo := defFrom.AddDate(0, 1, 0).Add(-24 * time.Hour)
+	from := parseDateParam(r.URL.Query().Get("from"), defFrom, loc)
+	to := parseDateParam(r.URL.Query().Get("to"), defTo, loc)
+	if !to.After(from) && !to.Equal(from) {
+		WriteError(w, http.StatusBadRequest, "invalid_range")
+		return
+	}
+	if to.Sub(from) > 366*24*time.Hour {
+		WriteError(w, http.StatusBadRequest, "range_too_large")
+		return
+	}
+	fromDate := from.Format("2006-01-02")
+	toDate := to.Format("2006-01-02")
+	rows, err := s.Store.ListNukiGuestDailyEntriesInRange(r.Context(), pid, fromDate, toDate)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	counts := make([]int, 24)
+	for _, row := range rows {
+		h := row.FirstEntryAt.In(loc).Hour()
+		if h >= 0 && h < 24 {
+			counts[h]++
+		}
+	}
+	buckets := make([]guestCheckinHourBucket, 24)
+	for i := 0; i < 24; i++ {
+		buckets[i] = guestCheckinHourBucket{Hour: i, Count: counts[i]}
+	}
+	WriteJSON(w, http.StatusOK, guestCheckinHeatmapResponse{
+		From:    fromDate,
+		To:      toDate,
+		Buckets: buckets,
+	})
+}
+
+type guestReconcileStatsResponse struct {
+	FetchedEvents     int    `json:"fetched_events"`
+	CleanerSkipped    int    `json:"cleaner_skipped"`
+	AuthMatchedEvents int    `json:"auth_matched_events"`
+	EntryLikeEvents   int    `json:"entry_like_events"`
+	UpsertedDays      int    `json:"upserted_days"`
+	FallbackAnyEvent  bool   `json:"fallback_any_event"`
+	OccupancyKeyCount int    `json:"occupancy_key_count"`
+	CleanerAliasCount int    `json:"cleaner_alias_count"`
+	RequestedSinceUTC string `json:"requested_since_utc"`
+}
+
+type guestReconcileResponse struct {
+	OK    bool                         `json:"ok"`
+	Error string                       `json:"error,omitempty"`
+	Stats *guestReconcileStatsResponse `json:"stats,omitempty"`
+}
+
+// runGuestCheckinReconcile manually triggers ReconcileGuestDailyEntriesSince
+// for a property. Optional ?month=YYYY-MM widens the lookback to the first
+// of that month in the property TZ; default uses the service's standard
+// 45-day window (matching the scheduler).
+func (s *Server) runGuestCheckinReconcile(w http.ResponseWriter, r *http.Request) {
+	actor, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Analytics, permissions.LevelWrite)
+	if !ok {
+		return
+	}
+	if s.Nuki == nil {
+		WriteError(w, http.StatusInternalServerError, "nuki service not configured")
+		return
+	}
+	var (
+		stats *nuki.GuestReconcileStats
+		err   error
+	)
+	month := strings.TrimSpace(r.URL.Query().Get("month"))
+	if month != "" {
+		prop, perr := s.Store.GetProperty(r.Context(), pid)
+		if perr != nil {
+			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		loc, tzErr := time.LoadLocation(prop.Timezone)
+		if tzErr != nil {
+			loc = time.UTC
+		}
+		var y, m int
+		if _, scanErr := fmtSscanfMonth(month, &y, &m); scanErr != nil || m < 1 || m > 12 {
+			WriteError(w, http.StatusBadRequest, "month must be YYYY-MM")
+			return
+		}
+		since := time.Date(y, time.Month(m), 1, 0, 0, 0, 0, loc).UTC()
+		stats, err = s.Nuki.ReconcileGuestDailyEntriesSince(r.Context(), pid, since)
+	} else {
+		stats, err = s.Nuki.ReconcileGuestDailyEntries(r.Context(), pid)
+	}
+	if err != nil {
+		WriteJSON(w, http.StatusOK, guestReconcileResponse{OK: false, Error: err.Error()})
+		return
+	}
+	s.audit(r, actor, "guest_reconcile", "property", strconv.FormatInt(pid, 10), "success")
+	var outStats *guestReconcileStatsResponse
+	if stats != nil {
+		outStats = &guestReconcileStatsResponse{
+			FetchedEvents:     stats.FetchedEvents,
+			CleanerSkipped:    stats.CleanerSkipped,
+			AuthMatchedEvents: stats.AuthMatchedEvents,
+			EntryLikeEvents:   stats.EntryLikeEvents,
+			UpsertedDays:      stats.UpsertedDays,
+			FallbackAnyEvent:  stats.FallbackAnyEvent,
+			OccupancyKeyCount: stats.OccupancyKeyCount,
+			CleanerAliasCount: stats.CleanerAliasCount,
+			RequestedSinceUTC: stats.RequestedSinceUTC,
+		}
+	}
+	WriteJSON(w, http.StatusOK, guestReconcileResponse{OK: true, Stats: outStats})
 }

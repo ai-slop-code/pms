@@ -41,6 +41,8 @@ type FinanceBookingPayoutListRow struct {
 	OccupancyStartAt        sql.NullTime
 	OccupancyEndAt          sql.NullTime
 	OccupancySummary        sql.NullString
+	HasPayoutData           bool
+	HasStatementData        bool
 }
 
 func (s *Store) GetBookingPayoutByID(ctx context.Context, propertyID, payoutID int64) (*FinanceBookingPayout, error) {
@@ -49,8 +51,8 @@ func (s *Store) GetBookingPayoutByID(ctx context.Context, propertyID, payoutID i
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT id, property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name,
 			reservation_status, currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents,
-			net_cents, payout_date, transaction_id, occupancy_id, raw_row_json, created_at, updated_at
-		FROM finance_booking_payouts
+			net_cents, payout_date, transaction_id, occupancy_id, raw_payout_row_json, created_at, updated_at
+		FROM finance_bookings
 		WHERE property_id = ? AND id = ?`, propertyID, payoutID).
 		Scan(&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate, &r.GuestName,
 			&r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents, &r.PaymentServiceFeeCents,
@@ -70,8 +72,8 @@ func (s *Store) GetBookingPayoutByReference(ctx context.Context, propertyID int6
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT id, property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name,
 			reservation_status, currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents,
-			net_cents, payout_date, transaction_id, occupancy_id, raw_row_json, created_at, updated_at
-		FROM finance_booking_payouts
+			net_cents, payout_date, transaction_id, occupancy_id, raw_payout_row_json, created_at, updated_at
+		FROM finance_bookings
 		WHERE property_id = ? AND reference_number = ?`, propertyID, referenceNumber).
 		Scan(&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate, &r.GuestName,
 			&r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents, &r.PaymentServiceFeeCents,
@@ -88,10 +90,10 @@ func (s *Store) GetBookingPayoutByReference(ctx context.Context, propertyID int6
 func (s *Store) CreateBookingPayout(ctx context.Context, row *FinanceBookingPayout) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO finance_booking_payouts (
+		INSERT INTO finance_bookings (
 			property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name, reservation_status,
 			currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents, net_cents, payout_date,
-			transaction_id, occupancy_id, raw_row_json, created_at, updated_at
+			transaction_id, occupancy_id, raw_payout_row_json, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.PropertyID, row.ReferenceNumber, nullStringValue(row.PayoutID), nullStringValue(row.RowType),
 		nullStringValue(row.CheckInDate), nullStringValue(row.CheckOutDate), nullStringValue(row.GuestName), nullStringValue(row.ReservationStatus),
@@ -146,10 +148,10 @@ func (s *Store) ImportBookingPayoutRow(ctx context.Context, txInput *FinanceTran
 	}
 	payout.TransactionID = sql.NullInt64{Int64: txID, Valid: txID > 0}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO finance_booking_payouts (
+		INSERT INTO finance_bookings (
 			property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name, reservation_status,
 			currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents, net_cents, payout_date,
-			transaction_id, occupancy_id, raw_row_json, created_at, updated_at
+			transaction_id, occupancy_id, raw_payout_row_json, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		payout.PropertyID, payout.ReferenceNumber, nullStringValue(payout.PayoutID), nullStringValue(payout.RowType),
 		nullStringValue(payout.CheckInDate), nullStringValue(payout.CheckOutDate), nullStringValue(payout.GuestName), nullStringValue(payout.ReservationStatus),
@@ -173,7 +175,7 @@ func (s *Store) UpdateBookingPayoutMapping(ctx context.Context, propertyID int64
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.DB.ExecContext(ctx, `
-		UPDATE finance_booking_payouts
+		UPDATE finance_bookings
 		SET occupancy_id = ?, updated_at = ?
 		WHERE property_id = ? AND reference_number = ?`, occ, now, propertyID, referenceNumber)
 	return err
@@ -193,7 +195,7 @@ func (s *Store) OccupancyIDsWithPayoutData(ctx context.Context, propertyID int64
 	}
 	q := fmt.Sprintf(`
 		SELECT DISTINCT occupancy_id
-		FROM finance_booking_payouts
+		FROM finance_bookings
 		WHERE property_id = ? AND occupancy_id IS NOT NULL AND occupancy_id IN (%s)`, strings.Join(ph, ","))
 	rows, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -347,7 +349,7 @@ func (s *Store) FinanceTransactionBySourceReference(ctx context.Context, propert
 			COALESCE(CASE WHEN fbp.occupancy_id IS NOT NULL THEN 1 ELSE 0 END, 0)
 		FROM finance_transactions ft
 		LEFT JOIN finance_categories fc ON fc.id = ft.category_id
-		LEFT JOIN finance_booking_payouts fbp
+		LEFT JOIN finance_bookings fbp
 		  ON fbp.property_id = ft.property_id
 		 AND fbp.reference_number = ft.source_reference_id
 		WHERE ft.property_id = ? AND ft.source_type = ? AND ft.source_reference_id = ?
@@ -372,15 +374,16 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 		SELECT
 			fbp.id, fbp.property_id, fbp.reference_number, fbp.payout_id, fbp.row_type, fbp.check_in_date, fbp.check_out_date,
 			fbp.guest_name, fbp.reservation_status, fbp.currency, fbp.payment_status, fbp.amount_cents, fbp.commission_cents,
-			fbp.payment_service_fee_cents, fbp.net_cents, fbp.payout_date, fbp.transaction_id, fbp.occupancy_id, fbp.raw_row_json,
+			fbp.payment_service_fee_cents, fbp.net_cents, fbp.payout_date, fbp.transaction_id, fbp.occupancy_id, fbp.raw_payout_row_json,
 			fbp.created_at, fbp.updated_at,
 			(
 				SELECT i.id FROM invoices i
 				WHERE i.property_id = fbp.property_id AND i.finance_booking_payout_id = fbp.id
 				LIMIT 1
 			) AS linked_invoice_id,
-			occ.source_event_uid, occ.start_at, occ.end_at, COALESCE(occ.guest_display_name, occ.raw_summary)
-		FROM finance_booking_payouts fbp
+			occ.source_event_uid, occ.start_at, occ.end_at, COALESCE(occ.guest_display_name, occ.raw_summary),
+			fbp.has_payout_data, fbp.has_statement_data
+		FROM finance_bookings fbp
 		LEFT JOIN occupancies occ
 		  ON occ.id = fbp.occupancy_id
 		 AND occ.property_id = fbp.property_id
@@ -408,14 +411,18 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 		var r FinanceBookingPayoutListRow
 		var payoutDate, created, updated string
 		var occStart, occEnd sql.NullString
+		var hasPayout, hasStatement int
 		if err := rows.Scan(
 			&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate,
 			&r.GuestName, &r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents,
 			&r.PaymentServiceFeeCents, &r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.RawRowJSON,
 			&created, &updated, &r.LinkedInvoiceID, &r.OccupancySourceEventUID, &occStart, &occEnd, &r.OccupancySummary,
+			&hasPayout, &hasStatement,
 		); err != nil {
 			return nil, err
 		}
+		r.HasPayoutData = hasPayout != 0
+		r.HasStatementData = hasStatement != 0
 		r.PayoutDate, _ = time.Parse(time.RFC3339, payoutDate)
 		r.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		r.UpdatedAt, _ = time.Parse(time.RFC3339, updated)

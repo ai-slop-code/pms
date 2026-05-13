@@ -227,6 +227,7 @@ watch([pid, month], () => {
             <th class="num">Net</th>
             <th class="num">Breakdown</th>
             <th>Mapping</th>
+            <th>Sources</th>
             <th>Invoice</th>
             <th>Map action</th>
           </tr>
@@ -251,6 +252,23 @@ watch([pid, month], () => {
             <UiBadge :tone="p.occupancy_id ? 'success' : 'warning'" dot>
               {{ p.occupancy_id ? 'Mapped' : 'Unmapped' }}
             </UiBadge>
+          </td>
+          <td>
+            <div class="sources-cell">
+              <UiBadge
+                v-if="p.has_payout_data"
+                tone="info"
+                dot
+                :title="'Imported from a Booking.com Payout Info CSV — cash figures (net, fees, payout date) come from this source.'"
+              >Payout</UiBadge>
+              <UiBadge
+                v-if="p.has_statement_data"
+                tone="success"
+                dot
+                :title="'Imported from a Booking.com Statement CSV — accrual figures (booked-on, persons, commission %, status) come from this source.'"
+              >Statement</UiBadge>
+              <span v-if="!p.has_payout_data && !p.has_statement_data" class="muted">—</span>
+            </div>
           </td>
           <td>
             <span v-if="p.linked_invoice_id" class="invoice-link">#{{ p.linked_invoice_id }}</span>
@@ -321,6 +339,11 @@ watch([pid, month], () => {
   display: inline-block;
   width: 1.8rem;
   color: var(--color-text-muted);
+}
+.sources-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 .map-cell__input {
   width: 100%;

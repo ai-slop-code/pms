@@ -518,6 +518,126 @@ func (s *Service) ReconcileCleanerDailyLogsSince(ctx context.Context, propertyID
 	return stats, nil
 }
 
+// GuestReconcileStats summarises the work done by ReconcileGuestDailyEntries.
+// AuthMatchedEvents counts unlocks that resolved to a known guest occupancy
+// (after cleaner-alias filtering); UpsertedDays counts the unique
+// (occupancy, day) pairs persisted in the latest reconcile pass.
+type GuestReconcileStats struct {
+	FetchedEvents     int
+	CleanerSkipped    int
+	AuthMatchedEvents int
+	EntryLikeEvents   int
+	UpsertedDays      int
+	FallbackAnyEvent  bool
+	OccupancyKeyCount int
+	CleanerAliasCount int
+	RequestedSinceUTC string
+}
+
+// ReconcileGuestDailyEntries reconciles guest unlock events for the
+// configured lookback window. Results power the Analytics → Performance
+// guest check-in heatmap (PMS_12 task 3).
+func (s *Service) ReconcileGuestDailyEntries(ctx context.Context, propertyID int64) (*GuestReconcileStats, error) {
+	since := time.Now().UTC().AddDate(0, 0, -cleanerLogLookbackDays)
+	return s.ReconcileGuestDailyEntriesSince(ctx, propertyID, since)
+}
+
+// ReconcileGuestDailyEntriesSince fetches Smartlock events since the given
+// instant, partitions guest unlocks from cleaner unlocks, and persists the
+// earliest entry per (occupancy, day) into nuki_guest_daily_entries.
+//
+// The implementation deliberately mirrors ReconcileCleanerDailyLogsSince:
+// same lookback default, same TZ-aware bucketing, same fallback to "any
+// matched event" when the upstream Nuki log doesn't classify entry-like
+// events. Cleaner aliases are loaded with cleanerAuthAliases and applied
+// as an exclusion list so a stay isn't credited with the cleaner's unlock.
+func (s *Service) ReconcileGuestDailyEntriesSince(ctx context.Context, propertyID int64, since time.Time) (*GuestReconcileStats, error) {
+	stats := &GuestReconcileStats{}
+	if s.Client == nil {
+		s.Client = NewClient(Config{})
+	}
+	_, profile, cred, loc, _, _, _, _, err := s.loadNukiSyncContext(ctx, propertyID, true)
+	if err != nil {
+		return stats, err
+	}
+	occupancyByAuth, err := s.Store.ListGeneratedNukiAccessCodesByExternalID(ctx, propertyID)
+	if err != nil {
+		return stats, err
+	}
+	stats.OccupancyKeyCount = len(occupancyByAuth)
+	if len(occupancyByAuth) == 0 {
+		return stats, nil
+	}
+	cleanerAuth := ""
+	if profile != nil && profile.CleanerNukiAuthID.Valid {
+		cleanerAuth = strings.TrimSpace(profile.CleanerNukiAuthID.String)
+	}
+	aliases := s.cleanerAuthAliases(ctx, propertyID, cleanerAuth)
+	stats.CleanerAliasCount = len(aliases)
+
+	reconcileSince := since.UTC()
+	if reconcileSince.IsZero() {
+		reconcileSince = time.Now().In(loc).AddDate(0, 0, -cleanerLogLookbackDays).UTC()
+	}
+	stats.RequestedSinceUTC = reconcileSince.Format(time.RFC3339)
+	events, err := s.Client.ListSmartlockEvents(ctx, cred, reconcileSince, "")
+	if err != nil {
+		return stats, err
+	}
+	stats.FetchedEvents = len(events)
+
+	type bucketKey struct {
+		occupancyID int64
+		day         string
+	}
+	firstByKey := map[bucketKey]SmartlockEvent{}
+	anyByKey := map[bucketKey]SmartlockEvent{}
+	for _, ev := range events {
+		if cleanerAuth != "" && matchesAnyCleanerAuthID(ev.AuthID, ev.PayloadJSON, aliases) {
+			stats.CleanerSkipped++
+			continue
+		}
+		authID := strings.TrimSpace(ev.AuthID)
+		if authID == "" {
+			continue
+		}
+		occID, ok := occupancyByAuth[authID]
+		if !ok {
+			continue
+		}
+		stats.AuthMatchedEvents++
+		key := bucketKey{occupancyID: occID, day: ev.OccurredAt.In(loc).Format("2006-01-02")}
+		if anyExisting, anyOK := anyByKey[key]; !anyOK || ev.OccurredAt.Before(anyExisting.OccurredAt) {
+			anyByKey[key] = ev
+		}
+		if !ev.IsEntryLike {
+			continue
+		}
+		stats.EntryLikeEvents++
+		if existing, ok := firstByKey[key]; !ok || ev.OccurredAt.Before(existing.OccurredAt) {
+			firstByKey[key] = ev
+		}
+	}
+	if len(firstByKey) == 0 && len(anyByKey) > 0 {
+		firstByKey = anyByKey
+		stats.FallbackAnyEvent = true
+	}
+	for key, ev := range firstByKey {
+		ref := strings.TrimSpace(ev.ExternalID)
+		if err := s.Store.UpsertNukiGuestDailyEntry(ctx, &store.NukiGuestDailyEntry{
+			PropertyID:         propertyID,
+			OccupancyID:        key.occupancyID,
+			DayDate:            key.day,
+			FirstEntryAt:       ev.OccurredAt.UTC(),
+			NukiEventReference: sql.NullString{String: ref, Valid: ref != ""},
+		}); err != nil {
+			return stats, err
+		}
+		stats.UpsertedDays++
+	}
+	return stats, nil
+}
+
 func (s *Service) cleanerAuthAliases(ctx context.Context, propertyID int64, configured string) map[string]struct{} {
 	out := map[string]struct{}{}
 	add := func(v string) {
