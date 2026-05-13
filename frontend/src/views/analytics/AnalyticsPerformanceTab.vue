@@ -7,6 +7,8 @@ import {
   eur, pct, heatCellColor, cancellationBucketLabel, dowLabel as dowLabelFn, monthLabels,
 } from './helpers'
 import type { HeatmapCell, MonthlyTrendRow, NetPerStayRow, PerformanceResponse } from '@/api/types/analytics'
+import type { GuestCheckinHeatmapResponse } from '@/api/types/analytics'
+import GuestCheckinHeatmap from './GuestCheckinHeatmap.vue'
 
 const UiLineChart = defineAsyncComponent(() => import('@/components/charts/UiLineChart.vue'))
 
@@ -17,6 +19,7 @@ const props = defineProps<{
   perfYear: number
   perfYoy: boolean
   weekStartsOn: 'monday' | 'sunday'
+  guestCheckinHeatmap: GuestCheckinHeatmapResponse | null
 }>()
 
 const emit = defineEmits<{
@@ -100,6 +103,51 @@ const netChartAxes = [
 const netChartAriaLabel = computed(
   () => `Net per stay line chart across ${netRowsFiltered.value.length} stays.`,
 )
+
+// FEAT-05: statement-derived cohorts and commission trend.
+const hasStatementData = computed(() => props.performance?.has_statement_data ?? false)
+
+const cancellationBookingCohort = computed(() => props.performance?.cancellation_by_booking_month ?? [])
+const cancellationArrivalCohort = computed(() => props.performance?.cancellation_by_arrival_month ?? [])
+
+const cancellationBookingChartLabels = computed(() =>
+  cancellationBookingCohort.value.map((r) => r.month),
+)
+const cancellationBookingChartSeries = computed(() => [
+  {
+    label: 'Cancellation rate (booked)',
+    data: cancellationBookingCohort.value.map((r) => r.rate),
+    formatValue: (v: number) => pct(v),
+  },
+])
+const cancellationArrivalChartLabels = computed(() =>
+  cancellationArrivalCohort.value.map((r) => r.month),
+)
+const cancellationArrivalChartSeries = computed(() => [
+  {
+    label: 'Cancellation rate (arrival)',
+    data: cancellationArrivalCohort.value.map((r) => r.rate),
+    formatValue: (v: number) => pct(v),
+  },
+])
+const cancellationCohortAxes = [
+  { id: 'y', position: 'left' as const, tickFormat: (v: number) => `${Math.round(v * 100)}%`, min: 0 },
+]
+
+const commissionTrend = computed(() => props.performance?.commission_rate_trend ?? [])
+const commissionTrendLabels = computed(() => commissionTrend.value.map((r) => r.month))
+const commissionTrendSeries = computed(() => [
+  {
+    label: 'Weighted commission rate',
+    data: commissionTrend.value.map((r) => r.rate),
+    formatValue: (v: number) => pct(v),
+  },
+])
+const commissionTrendAxes = [
+  { id: 'y', position: 'left' as const, tickFormat: (v: number) => `${Math.round(v * 100)}%`, min: 0 },
+]
+
+const commissionPerStay = computed(() => props.performance?.commission_per_stay ?? [])
 
 const dowRows = computed(() => {
   const rows = props.performance?.dow_occupancy ?? []
@@ -383,6 +431,91 @@ function onHeatKeydown(e: KeyboardEvent) {
         </div>
       </div>
 
+      <h3 class="block-head">Cancellation rate — booking cohort</h3>
+      <div class="card">
+        <p v-if="!hasStatementData" class="muted">
+          No Booking.com statement data uploaded yet — booking-cohort cancellation
+          rate will appear after the first statement import.
+        </p>
+        <p v-else-if="cancellationBookingCohort.length === 0" class="muted">
+          No cancellations recorded in the selected window.
+        </p>
+        <UiLineChart
+          v-else
+          ariaLabel="Cancellation rate grouped by booking month, statement-derived."
+          :labels="cancellationBookingChartLabels"
+          :series="cancellationBookingChartSeries"
+          :axes="cancellationCohortAxes"
+        />
+      </div>
+
+      <h3 class="block-head">Cancellation rate — arrival cohort</h3>
+      <div class="card">
+        <p v-if="!hasStatementData" class="muted">
+          No Booking.com statement data uploaded yet — arrival-cohort cancellation
+          rate will appear after the first statement import.
+        </p>
+        <p v-else-if="cancellationArrivalCohort.length === 0" class="muted">
+          No cancellations recorded in the selected window.
+        </p>
+        <UiLineChart
+          v-else
+          ariaLabel="Cancellation rate grouped by arrival month, statement-derived."
+          :labels="cancellationArrivalChartLabels"
+          :series="cancellationArrivalChartSeries"
+          :axes="cancellationCohortAxes"
+        />
+      </div>
+
+      <h3 class="block-head">Weighted commission rate</h3>
+      <div class="card">
+        <p v-if="!hasStatementData" class="muted">
+          No statement data — commission trend will populate after the first
+          Booking.com statement import.
+        </p>
+        <p v-else-if="commissionTrend.length === 0" class="muted">
+          No active stays with commission data in the selected window.
+        </p>
+        <UiLineChart
+          v-else
+          ariaLabel="Weighted commission rate by booking month, statement-derived."
+          :labels="commissionTrendLabels"
+          :series="commissionTrendSeries"
+          :axes="commissionTrendAxes"
+        />
+      </div>
+
+      <h3 class="block-head">Commission per stay</h3>
+      <div class="card">
+        <p v-if="!hasStatementData" class="muted">
+          No statement data — commission per stay will populate after the first
+          Booking.com statement import.
+        </p>
+        <table v-else-if="commissionPerStay.length > 0" class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Reference</th>
+              <th scope="col">Guest</th>
+              <th scope="col">Check-in</th>
+              <th scope="col">Gross</th>
+              <th scope="col">Commission</th>
+              <th scope="col">Rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in commissionPerStay" :key="r.booking_id">
+              <td>{{ r.reference }}</td>
+              <td>{{ r.guest_name }}</td>
+              <td>{{ r.check_in_date }}</td>
+              <td>{{ eur(r.gross_cents) }}</td>
+              <td>{{ eur(r.commission_cents) }}</td>
+              <td>{{ pct(r.rate) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="muted">No active stays with statement commission data in this window.</p>
+      </div>
+
       <h2 class="section-heading cleaning mt-section">
         <span class="accent" />Cleaning
       </h2>
@@ -405,6 +538,10 @@ function onHeatKeydown(e: KeyboardEvent) {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div class="mt-section">
+        <GuestCheckinHeatmap :heatmap="guestCheckinHeatmap" />
       </div>
     </div>
   </div>

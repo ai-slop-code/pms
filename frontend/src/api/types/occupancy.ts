@@ -12,6 +12,16 @@ export interface Occupancy {
   raw_summary: string
   last_synced_at: string
   has_payout_data?: boolean
+  // Closure / external-sale labelling (PMS_14). Absent when the row has
+  // no manual label.
+  closure_state?: 'closed' | 'external_sale' | null
+  closure_reason?: string | null
+  closure_category?: string | null
+  closed_at?: string | null
+  closed_by_user_id?: number | null
+  external_net_amount_cents?: number | null
+  external_currency?: string | null
+  external_channel?: string | null
 }
 
 /** Lightweight occupancy shape used by MessagesView's generate picker. */

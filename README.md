@@ -81,21 +81,21 @@ backend host, or a fully manual build — see the same document.
 ## Container images
 
 Pre-built multi-arch (`linux/amd64`, `linux/arm64`) images are published to
-GitHub Container Registry on every push to `main` and on every `vX.Y.Z`
-tag by the [`Publish images`](.github/workflows/publish-images.yml)
-workflow:
+GitHub Container Registry on every push to `main` and on every
+`release/vX.Y.Z` tag by the
+[`Publish images`](.github/workflows/publish-images.yml) workflow:
 
 - `ghcr.io/<owner>/<repo>-backend:<tag>`
 - `ghcr.io/<owner>/<repo>-frontend:<tag>`
 
 Available tags:
 
-| Tag                | Source                                    |
-| ------------------ | ----------------------------------------- |
-| `latest`           | latest push to `main` and latest `vX.Y.Z` |
-| `main`             | every push to `main`                      |
-| `sha-<short>`      | every commit                              |
-| `vX.Y.Z` / `vX.Y` / `vX` | semver tag pushes                   |
+| Tag                | Source                                              |
+| ------------------ | --------------------------------------------------- |
+| `latest`           | latest push to `main` and latest `release/vX.Y.Z`   |
+| `main`             | every push to `main`                                |
+| `sha-<short>`      | every commit                                        |
+| `X.Y.Z` / `X.Y` / `X` | pushes of a `release/vX.Y.Z` tag                 |
 
 To consume the published images instead of building locally, replace the
 `build:` blocks in [`deploy/docker-compose.yml`](deploy/docker-compose.yml)
@@ -119,26 +119,11 @@ covers both deployment modes:
   backend; full checklist in
   [docs/deployment/README.md](docs/deployment/README.md#3b-cross-origin-spa-and-api-on-different-domains).
 
-### One-time repository setup
-
-1. **Make the repository public**, or grant the deployment host a PAT
-   with the `read:packages` scope. By default GHCR images inherit the
-   repository's visibility — pushing from a private repo creates private
-   packages.
-2. **Allow GitHub Actions to write packages**: *Settings → Actions →
-   General → Workflow permissions → Read and write permissions*. The
-   workflow already requests `packages: write`, but the repo-level
-   toggle must permit it.
-3. **(Optional) Make the package public** after the first successful
-   run: open https://github.com/users/&lt;owner&gt;/packages/container/&lt;repo&gt;-backend
-   → *Package settings* → *Change visibility* → *Public*. This lets
-   `docker pull` work without authentication.
-
 ### Cutting a release
 
 ```bash
-git tag v1.2.3
-git push origin v1.2.3
+git tag release/v1.2.3
+git push origin release/v1.2.3
 ```
 
 The workflow picks up the tag, runs both image builds in parallel
@@ -153,8 +138,8 @@ you want to host the frontend on S3, Cloudflare Pages, GitHub Pages,
 nginx, Apache, or any other static host while running the backend
 elsewhere.
 
-- **On tagged releases** (`vX.Y.Z`): the tarball is attached to the
-  GitHub Release page automatically.
+- **On tagged releases** (`release/vX.Y.Z`): the tarball is attached to
+  the GitHub Release page automatically.
 - **On every push to `main`**: it is uploaded as a workflow artefact
   (retained for 30 days). Open the run in *Actions → Publish images →
   Frontend static bundle* and download `pms-frontend-<branch>-<sha>`.
@@ -162,8 +147,8 @@ elsewhere.
 Deploying the bundle:
 
 ```bash
-curl -LO https://github.com/<owner>/<repo>/releases/download/v1.2.3/pms-frontend-v1.2.3.tar.gz
-curl -LO https://github.com/<owner>/<repo>/releases/download/v1.2.3/pms-frontend-v1.2.3.tar.gz.sha256
+curl -LO https://github.com/<owner>/<repo>/releases/download/release/v1.2.3/pms-frontend-v1.2.3.tar.gz
+curl -LO https://github.com/<owner>/<repo>/releases/download/release/v1.2.3/pms-frontend-v1.2.3.tar.gz.sha256
 sha256sum -c pms-frontend-v1.2.3.tar.gz.sha256
 tar -xzf pms-frontend-v1.2.3.tar.gz       # extracts to ./dist/
 # (optional) point the SPA at a backend on a different origin

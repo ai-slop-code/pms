@@ -47,7 +47,10 @@ const emit = defineEmits<{ select: [invoice: Invoice] }>()
         </div>
         <div class="ili-row ili-sub">
           <span>{{ invoice.customer.company_name || invoice.customer.name || 'Customer' }}</span>
-          <UiBadge tone="neutral" size="sm">v{{ invoice.version }}</UiBadge>
+          <span class="ili-tags">
+            <UiBadge v-if="invoice.language" tone="neutral" size="sm">{{ invoice.language.toUpperCase() }}</UiBadge>
+            <UiBadge tone="neutral" size="sm">v{{ invoice.version }}</UiBadge>
+          </span>
         </div>
         <div class="ili-row ili-sub muted">
           <span>{{ fmtDay(invoice.stay_start_date) }} – {{ fmtDay(invoice.stay_end_date) }}</span>
@@ -124,5 +127,10 @@ const emit = defineEmits<{ select: [invoice: Invoice] }>()
 .ili-sub {
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
+}
+.ili-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 </style>

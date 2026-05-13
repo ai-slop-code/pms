@@ -148,7 +148,7 @@ func (s *Store) ListFinanceTransactions(ctx context.Context, propertyID int64, m
 			COALESCE(CASE WHEN fbp.occupancy_id IS NOT NULL THEN 1 ELSE 0 END, 0)
 		FROM finance_transactions ft
 		LEFT JOIN finance_categories fc ON fc.id = ft.category_id
-		LEFT JOIN finance_booking_payouts fbp
+		LEFT JOIN finance_bookings fbp
 		  ON fbp.property_id = ft.property_id
 		 AND fbp.reference_number = ft.source_reference_id
 		WHERE ft.property_id = ?`
@@ -198,7 +198,7 @@ func (s *Store) GetFinanceTransactionByID(ctx context.Context, propertyID, id in
 			COALESCE(CASE WHEN fbp.occupancy_id IS NOT NULL THEN 1 ELSE 0 END, 0)
 		FROM finance_transactions ft
 		LEFT JOIN finance_categories fc ON fc.id = ft.category_id
-		LEFT JOIN finance_booking_payouts fbp
+		LEFT JOIN finance_bookings fbp
 		  ON fbp.property_id = ft.property_id
 		 AND fbp.reference_number = ft.source_reference_id
 		WHERE ft.property_id = ? AND ft.id = ?

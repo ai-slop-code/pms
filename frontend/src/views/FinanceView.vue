@@ -64,6 +64,50 @@ const txForm = ref({
 
 const payoutImportFile = ref<File | null>(null)
 
+interface ImportPreviewInsert {
+  reference: string
+  guest_name?: string
+  check_in_date?: string
+  check_out_date?: string
+  amount_cents?: number
+  status?: string
+  status_changed?: boolean
+}
+interface ImportPreviewUpdate {
+  reference: string
+  guest_name?: string
+  status_changed?: boolean
+  changes?: { field: string }[]
+}
+interface ImportPreviewSkipped {
+  reference: string
+  reason: string
+  hotel_id?: string
+}
+interface ImportPreviewRejected {
+  line: number
+  reason: string
+}
+interface ImportPreviewResponse {
+  ok: boolean
+  preview_token: string
+  source_type: string
+  hotel_id?: string
+  file_sha256: string
+  period_start?: string
+  period_end?: string
+  duplicate_of_import_id?: number
+  inserts: ImportPreviewInsert[]
+  updates: ImportPreviewUpdate[]
+  unchanged_count: number
+  skipped_other_hotel: ImportPreviewSkipped[]
+  rejected: ImportPreviewRejected[]
+}
+
+const importPreview = ref<ImportPreviewResponse | null>(null)
+const importPreviewOpen = ref(false)
+const importCommitting = ref(false)
+
 const categoryForm = ref({
   code: '',
   title: '',
@@ -141,27 +185,52 @@ async function importBookingPayoutCSV() {
   try {
     const fd = new FormData()
     fd.append('file', payoutImportFile.value)
-    const r = await api<{
-      ok: boolean
-      imported: number
-      duplicates: number
-      mapped: number
-      failed: number
-      warnings?: string[]
-    }>(`/api/properties/${pid.value}/finance/booking-payouts/import`, { method: 'POST', body: fd })
-    const warningNote = r.warnings && r.warnings.length ? ` Warnings: ${r.warnings.length}.` : ''
-    toast.success(
-      `Imported ${r.imported}, duplicates ${r.duplicates}, mapped ${r.mapped}, failed ${r.failed}.${warningNote}`,
-      'CSV import done',
+    const r = await api<ImportPreviewResponse>(
+      `/api/properties/${pid.value}/finance/imports/preview`,
+      { method: 'POST', body: fd },
     )
-    payoutImportFile.value = null
-    await loadAll()
+    importPreview.value = r
+    importPreviewOpen.value = true
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Failed to import Booking.com payout CSV'
+    const msg = e instanceof Error ? e.message : 'Failed to upload Booking.com CSV'
     error.value = msg
     toast.error(msg)
   } finally {
     importingPayouts.value = false
+  }
+}
+
+async function commitBookingImport() {
+  const preview = importPreview.value
+  if (!pid.value || !preview) return
+  importCommitting.value = true
+  try {
+    const r = await api<{
+      ok: boolean
+      source_type: string
+      row_count_total: number
+      row_count_inserted: number
+      row_count_updated: number
+      row_count_unchanged: number
+      row_count_skipped_other_hotel: number
+      row_count_rejected: number
+    }>(`/api/properties/${pid.value}/finance/imports/commit`, {
+      method: 'POST',
+      json: { preview_token: preview.preview_token },
+    })
+    toast.success(
+      `Imported ${r.row_count_inserted} new, updated ${r.row_count_updated}, unchanged ${r.row_count_unchanged}.`,
+      'CSV import committed',
+    )
+    importPreviewOpen.value = false
+    importPreview.value = null
+    payoutImportFile.value = null
+    await loadAll()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Failed to commit Booking.com CSV'
+    toast.error(msg)
+  } finally {
+    importCommitting.value = false
   }
 }
 
@@ -415,6 +484,77 @@ watch(
       <template #footer>
         <UiButton variant="secondary" :disabled="editSubmitting" @click="editDialogOpen = false">Cancel</UiButton>
         <UiButton variant="primary" :loading="editSubmitting" @click="submitEditTransaction">Save</UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog
+      :open="importPreviewOpen"
+      title="Booking.com CSV preview"
+      size="lg"
+      @update:open="importPreviewOpen = $event"
+    >
+      <div v-if="importPreview" class="import-preview">
+        <p class="import-preview__meta">
+          Source: <strong>{{ importPreview.source_type }}</strong>
+          <span v-if="importPreview.hotel_id"> · Hotel ID {{ importPreview.hotel_id }}</span>
+          <span v-if="importPreview.period_start || importPreview.period_end">
+            · Period {{ importPreview.period_start }} – {{ importPreview.period_end }}
+          </span>
+        </p>
+        <p v-if="importPreview.duplicate_of_import_id" class="import-preview__warn">
+          This file (SHA-256 match) was previously committed as import #{{ importPreview.duplicate_of_import_id }}.
+        </p>
+        <ul class="import-preview__counts">
+          <li><strong>{{ importPreview.inserts.length }}</strong> new bookings</li>
+          <li><strong>{{ importPreview.updates.length }}</strong> updated bookings</li>
+          <li><strong>{{ importPreview.unchanged_count }}</strong> unchanged</li>
+          <li v-if="importPreview.skipped_other_hotel.length">
+            <strong>{{ importPreview.skipped_other_hotel.length }}</strong> skipped (other hotel)
+          </li>
+          <li v-if="importPreview.rejected.length">
+            <strong>{{ importPreview.rejected.length }}</strong> rejected
+          </li>
+        </ul>
+        <details v-if="importPreview.inserts.length" class="import-preview__list">
+          <summary>New bookings ({{ importPreview.inserts.length }})</summary>
+          <ul>
+            <li v-for="ins in importPreview.inserts.slice(0, 50)" :key="ins.reference">
+              {{ ins.reference }} — {{ ins.guest_name || '—' }}
+              <span v-if="ins.check_in_date">({{ ins.check_in_date }} → {{ ins.check_out_date }})</span>
+              <span v-if="ins.status">[{{ ins.status }}]</span>
+            </li>
+          </ul>
+        </details>
+        <details v-if="importPreview.updates.length" class="import-preview__list">
+          <summary>Updated bookings ({{ importPreview.updates.length }})</summary>
+          <ul>
+            <li v-for="upd in importPreview.updates.slice(0, 50)" :key="upd.reference">
+              {{ upd.reference }} — {{ upd.guest_name || '—' }}
+              <span v-if="upd.status_changed" class="import-preview__flag">status changed</span>
+              <span v-if="upd.changes?.length"> · {{ upd.changes.map(c => c.field).join(', ') }}</span>
+            </li>
+          </ul>
+        </details>
+        <details v-if="importPreview.skipped_other_hotel.length" class="import-preview__list">
+          <summary>Skipped — other hotel ({{ importPreview.skipped_other_hotel.length }})</summary>
+          <ul>
+            <li v-for="sk in importPreview.skipped_other_hotel.slice(0, 50)" :key="sk.reference">
+              {{ sk.reference }} — hotel {{ sk.hotel_id || '?' }}
+            </li>
+          </ul>
+        </details>
+        <details v-if="importPreview.rejected.length" class="import-preview__list">
+          <summary>Rejected ({{ importPreview.rejected.length }})</summary>
+          <ul>
+            <li v-for="r in importPreview.rejected.slice(0, 50)" :key="r.line">
+              Line {{ r.line }}: {{ r.reason }}
+            </li>
+          </ul>
+        </details>
+      </div>
+      <template #footer>
+        <UiButton variant="secondary" :disabled="importCommitting" @click="importPreviewOpen = false">Cancel</UiButton>
+        <UiButton variant="primary" :loading="importCommitting" @click="commitBookingImport">Commit</UiButton>
       </template>
     </UiDialog>
   </div>

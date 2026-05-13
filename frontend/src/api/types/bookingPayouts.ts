@@ -22,6 +22,8 @@ export interface BookingPayoutRow {
   occupancy_end_at?: string
   occupancy_summary?: string
   linked_invoice_id?: number | null
+  has_payout_data: boolean
+  has_statement_data: boolean
 }
 
 /**

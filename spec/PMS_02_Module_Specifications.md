@@ -106,6 +106,10 @@ Import property occupancy from configurable ICS sources, store raw and normalize
 - Source identity should rely on stable UID or best available event fingerprint.
 - Occupancy is the primary shared record used by Nuki, messages, and optionally invoices.
 - JSON endpoint access must use a token separate from the normal browser session if intended for automation use.
+- Occupancies may be manually labelled by an operator (PMS_14):
+  - `closed` — drops out of sales analytics (numerator and denominator) and suppresses Nuki code generation.
+  - `external_sale` — counts as a sold night, contributes its operator-entered net amount to gross revenue, and suppresses Nuki code generation.
+  - Labels survive ICS resync: `UpsertOccupancy` does not clear `closure_state` or related fields when re-importing the same UID.
 
 ### Normalization Rules
 - Store raw source data unchanged where possible.
@@ -120,6 +124,9 @@ Import property occupancy from configurable ICS sources, store raw and normalize
 - `GET /api/properties/{id}/occupancy-sync/runs`
 - `PATCH /api/properties/{id}/occupancy-source`
 - `GET /api/properties/{id}/occupancy-export?token=...`
+- `POST /api/properties/{id}/occupancies/{occupancyId}/close` — admin-only; body `{ reason, category }`.
+- `POST /api/properties/{id}/occupancies/{occupancyId}/external-sale` — admin-only; body `{ net_amount_cents, currency, channel, reason }`.
+- `POST /api/properties/{id}/occupancies/{occupancyId}/reopen` — admin-only; clears the closure label.
 
 ### Suggested JSON Export Fields
 - occupancy id
@@ -132,11 +139,12 @@ Import property occupancy from configurable ICS sources, store raw and normalize
 - status
 - raw summary
 - last synced at
+- categories (array; emits `PMS-CLOSURE` or `PMS-EXTERNAL-SALE` per PMS_14 §3.5; absent for normal stays)
 
 ### Suggested Database Entities
 - `occupancy_sources`
 - `occupancy_raw_events`
-- `occupancies`
+- `occupancies` — extended in migration 000019 with closure columns: `closure_state` (`closed` | `external_sale` | NULL), `closure_reason`, `closure_category`, `closed_by_user_id`, `closed_at`, `external_net_amount_cents`, `external_currency`, `external_channel`.
 - `occupancy_sync_runs`
 - `occupancy_api_tokens`
 
@@ -600,6 +608,7 @@ All routes are registered under the authenticated router group in `backend/inter
 - `GET /api/properties/{id}/analytics/demand?from=YYYY-MM-DD&to=YYYY-MM-DD` — lead-time distribution, length-of-stay distribution, ADR-by-month/DOW/lead-bucket, gap-nights list, orphan-midweek list, returning-guests summary.
 - `GET /api/properties/{id}/analytics/pace?window=YYYY-MM` — cumulative booking-pace curve for the arrival window, plus the same-named window a year earlier.
 - `GET /api/properties/{id}/analytics/returning-guests?limit=50&offset=0` — paginated drill-down `{ name, stay_count, first_stay, last_stay }`.
+- `GET /api/properties/{id}/analytics/guest-checkin-heatmap?from=YYYY-MM-DD&to=YYYY-MM-DD` — 24-bucket hour-of-day histogram of first guest unlock per stay per day. Cleaner unlocks are excluded by matching the property's `cleaner_nuki_auth_id` (and aliases derived from `nuki_keypad_codes.raw_json`); guest unlocks are resolved to their owning occupancy through `nuki_access_codes.external_nuki_id`. Closed stays (PMS_14 §3) are excluded; externally-sold stays are kept. Default range is the current month in property TZ.
 - `GET /api/properties/{id}/analytics/freshness` — `{ last_ics_sync_at, last_payout_date, unmatched_payouts_count, staleness_level: 'ok'|'warn'|'stale' }`.
 
 Every list response echoes back the input filters and a `generated_at` RFC3339 timestamp.
@@ -617,7 +626,7 @@ Every list response echoes back the input filters and a `generated_at` RFC3339 t
 ### Suggested Database Entities
 **No new tables in v1.** All metrics are live-computed from existing schema:
 - `occupancies`, `occupancy_sync_runs` — nights, occupancy, lead time, cancellations, pace, gap nights.
-- `finance_booking_payouts` — ADR, RevPAR, gross/net/commission/fees, returning-guest name source.
+- `finance_booking_payouts` — ADR, RevPAR, gross/net/commission/fees, returning-guest name source. *(Renamed to `finance_bookings` in FEAT-04 and extended with statement-derived columns and `has_payout_data` / `has_statement_data` flags; the analytics query above is unchanged.)*
 - `finance_transactions`, `cleaning_monthly_summaries` — net-per-stay cleaning allocation, cost-per-night roll-up.
 
 **Optional v2 addition (flagged, do not build in v1):** `analytics_snapshots(property_id, metric_code, period_key, value_cents_or_ratio, computed_at)` — add only if p95 latency on any endpoint exceeds 500 ms on realistic data.
