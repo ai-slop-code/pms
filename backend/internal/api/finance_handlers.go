@@ -916,7 +916,7 @@ func (s *Server) importFinanceBookingPayouts(w http.ResponseWriter, r *http.Requ
 		existing, err := s.Store.GetBookingPayoutByReference(r.Context(), pid, row.ReferenceNumber)
 		if err == nil && existing != nil {
 			resp.Duplicates++
-			if !existing.TransactionID.Valid || existing.TransactionID.Int64 <= 0 {
+			if (!existing.TransactionID.Valid || existing.TransactionID.Int64 <= 0) && existing.NetCents != 0 {
 				txInput := &store.FinanceTransaction{
 					PropertyID:      pid,
 					TransactionDate: existing.PayoutDate,

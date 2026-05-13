@@ -139,10 +139,19 @@ func main() {
 	}
 	fmt.Printf("\nFound %d orphan booking payout(s) (finance_bookings.transaction_id IS NULL):\n", len(orphans))
 	categoryCache := map[int64]int64{}
-	var backfilled, skipped int
+	var backfilled, skipped, skippedZero int
 	for _, op := range orphans {
 		fmt.Printf("  property=%d ref=%s payout_date=%s net=%d\n",
 			op.PropertyID, op.ReferenceNumber, op.PayoutDate.UTC().Format("2006-01-02"), op.NetCents)
+		if op.NetCents == 0 {
+			// By convention (see UpsertBookingFinanceTransaction in
+			// finance_bookings_merge.go) we never create a finance
+			// transaction for a zero-net booking row, since it
+			// represents a cancellation / no-show / commission-only
+			// statement row with no cash flow. Skip silently.
+			skippedZero++
+			continue
+		}
 		if *dryRun {
 			continue
 		}
@@ -176,8 +185,10 @@ func main() {
 		backfilled++
 	}
 	if *dryRun {
-		fmt.Printf("\nDRY RUN: would backfill %d orphan booking payout(s).\n", len(orphans))
+		fmt.Printf("\nDRY RUN: would backfill %d orphan booking payout(s) (skipping %d zero-net rows).\n",
+			len(orphans)-skippedZero, skippedZero)
 		return
 	}
-	fmt.Printf("\nBackfilled %d / %d orphan booking payout(s) (skipped %d).\n", backfilled, len(orphans), skipped)
+	fmt.Printf("\nBackfilled %d / %d orphan booking payout(s) (skipped %d zero-net, %d errors).\n",
+		backfilled, len(orphans), skippedZero, skipped)
 }
