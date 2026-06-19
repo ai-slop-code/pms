@@ -73,10 +73,12 @@ type MergeOutcome struct {
 // CanonicalBooking which the caller persists.
 //
 // Precedence (per spec PMS_Statement_Ingestion_Spec):
-//   - statement wins for: amount, commission, fee, dates, guest_name,
-//     status, original_amount, persons, rooms, room_nights, booker_name,
+//   - statement wins for: commission, fee, dates, guest_name, status,
+//     original_amount, persons, rooms, room_nights, booker_name,
 //     guest_request, invoice_number, hotel_id, property_label, country,
 //     commission_pct
+//   - amount_cents: payout CSV "Amount" wins (guest-paid total for invoicing);
+//     statement "Final amount" fills only when no payout amount exists yet
 //   - payout wins for: net_cents, payout_id, payout_date, row_type,
 //     reservation_status, payment_status
 //   - currency: first writer wins (never overwrite)
@@ -136,7 +138,7 @@ func mergePayout(b *CanonicalBooking, row Row, rawJSON string, out *MergeOutcome
 	setStrIfWins(&b.CheckOutDate, valOrNil(row.CheckOutDate), "check_out_date", false, out)
 	setStrIfWins(&b.GuestName, valOrNil(row.GuestName), "guest_name", false, out)
 	if row.AmountCents != 0 {
-		setIntPtrIfWins(&b.AmountCents, &row.AmountCents, "amount_cents", false, out)
+		setIntPtrIfWins(&b.AmountCents, &row.AmountCents, "amount_cents", true, out)
 	}
 	if row.CommissionCents != 0 {
 		setIntPtrIfWins(&b.CommissionCents, &row.CommissionCents, "commission_cents", false, out)
@@ -177,7 +179,7 @@ func mergeStatement(b *CanonicalBooking, row Row, rawJSON string, out *MergeOutc
 		out.StatusChanged = true
 	}
 	if row.AmountCents != 0 {
-		setIntPtrIfWins(&b.AmountCents, &row.AmountCents, "amount_cents", true, out)
+		setIntPtrIfWins(&b.AmountCents, &row.AmountCents, "amount_cents", false, out)
 	}
 	if row.OriginalAmountCents != 0 {
 		setIntPtrIfWins(&b.OriginalAmountCents, &row.OriginalAmountCents, "original_amount_cents", true, out)

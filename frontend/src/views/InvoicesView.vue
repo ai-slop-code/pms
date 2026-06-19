@@ -278,6 +278,7 @@ async function regenerateSelectedInvoice() {
       { method: 'POST' },
     )
     selectedInvoice.value = response.invoice
+    applyInvoiceToForm(response.invoice)
     success.value = 'Invoice PDF regenerated.'
     await loadList()
   } catch (e) {

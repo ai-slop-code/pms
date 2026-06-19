@@ -76,3 +76,21 @@ func TestFinanceBookingPayoutSummary_fixesGuestMojibake(t *testing.T) {
 		t.Fatalf("got %v want Fatıh Altuntaş", s)
 	}
 }
+
+func TestBookingPayoutRawAmountCents_fromPayoutSnapshot(t *testing.T) {
+	raw := sql.NullString{String: `{"amount":"64.89","booking number":"6756848168"}`, Valid: true}
+	cents, ok := bookingPayoutRawAmountCents(raw)
+	if !ok {
+		t.Fatal("expected amount from raw payout JSON")
+	}
+	if cents != 6489 {
+		t.Fatalf("got %d want 6489", cents)
+	}
+}
+
+func TestBookingPayoutRawAmountCents_missingAmount(t *testing.T) {
+	raw := sql.NullString{String: `{"net":"52.26"}`, Valid: true}
+	if _, ok := bookingPayoutRawAmountCents(raw); ok {
+		t.Fatal("expected no amount when key absent")
+	}
+}

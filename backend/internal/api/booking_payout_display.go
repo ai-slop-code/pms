@@ -3,6 +3,8 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"math"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -146,6 +148,45 @@ func bookingPayoutRawKeySkip(kl string) bool {
 		return true
 	}
 	return false
+}
+
+// bookingPayoutRawAmountCents reads the guest-paid gross from the payout CSV snapshot
+// (column "Amount", stored as lowercase "amount" in raw_payout_row_json).
+func bookingPayoutRawAmountCents(raw sql.NullString) (int, bool) {
+	if !raw.Valid {
+		return 0, false
+	}
+	s := strings.TrimSpace(raw.String)
+	if s == "" {
+		return 0, false
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(s), &m); err != nil || len(m) == 0 {
+		return 0, false
+	}
+	v := strings.TrimSpace(m["amount"])
+	if v == "" {
+		return 0, false
+	}
+	cents, err := parseCSVAmountToCents(v)
+	if err != nil || cents <= 0 {
+		return 0, false
+	}
+	return cents, true
+}
+
+func parseCSVAmountToCents(v string) (int, error) {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return 0, nil
+	}
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, ",", ".")
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, err
+	}
+	return int(math.Round(f * 100)), nil
 }
 
 // financeBookingPayoutSummary is a single line for invoice/finance pickers: listing/host from CSV

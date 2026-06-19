@@ -191,6 +191,8 @@ func (s *Server) listInvoicePayoutLinkCandidates(w http.ResponseWriter, r *http.
 	}
 	out := make([]financeBookingPayoutRow, 0, len(rows))
 	for _, rr := range rows {
+		billable := payoutInvoiceBillableCents(&rr.FinanceBookingPayout)
+		billableCents := int64(billable)
 		out = append(out, financeBookingPayoutRow{
 			ID:                     rr.ID,
 			ReferenceNumber:        rr.ReferenceNumber,
@@ -204,7 +206,7 @@ func (s *Server) listInvoicePayoutLinkCandidates(w http.ResponseWriter, r *http.
 			ReservationStatus:      nullStringPtr(rr.ReservationStatus),
 			Currency:               nullStringPtr(rr.Currency),
 			PaymentStatus:          nullStringPtr(rr.PaymentStatus),
-			AmountCents:            nullInt64Ptr(rr.AmountCents),
+			AmountCents:            &billableCents,
 			CommissionCents:        nullInt64Ptr(rr.CommissionCents),
 			PaymentServiceFeeCents: nullInt64Ptr(rr.PaymentServiceFeeCents),
 			NetCents:               rr.NetCents,
@@ -414,6 +416,10 @@ func (s *Server) regenerateInvoice(w http.ResponseWriter, r *http.Request) {
 	// invoice itself and is not derivable from the property.
 	if err := s.refreshInvoiceSupplierFromProperty(r.Context(), row); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to refresh supplier snapshot")
+		return
+	}
+	if err := s.refreshInvoiceBillableFromLinkedPayout(r.Context(), row); err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to refresh invoice amount from booking payout")
 		return
 	}
 	if _, err := s.renderAndAttachInvoiceVersion(r.Context(), pid, row, row.Version+1); err != nil {
@@ -827,6 +833,33 @@ func (s *Server) refreshInvoiceSupplierFromProperty(ctx context.Context, row *st
 	return nil
 }
 
+// refreshInvoiceBillableFromLinkedPayout updates amount_total_cents from the linked
+// booking payout's CSV "Amount" (guest-paid total). Regenerate uses this so fixing
+// payout ingestion or re-linking a stay refreshes stale invoice totals.
+func (s *Server) refreshInvoiceBillableFromLinkedPayout(ctx context.Context, row *store.Invoice) error {
+	if !row.FinanceBookingPayoutID.Valid || row.FinanceBookingPayoutID.Int64 <= 0 {
+		return nil
+	}
+	payout, err := s.Store.GetBookingPayoutByID(ctx, row.PropertyID, row.FinanceBookingPayoutID.Int64)
+	if err != nil {
+		return err
+	}
+	billable := payoutInvoiceBillableCents(payout)
+	if billable <= 0 {
+		return nil
+	}
+	if row.AmountTotalCents == billable {
+		return nil
+	}
+	row.AmountTotalCents = billable
+	updated, err := s.Store.UpdateInvoice(ctx, row)
+	if err != nil {
+		return err
+	}
+	*row = *updated
+	return nil
+}
+
 func defaultInvoiceSupplier(property *store.Property, profile *store.PropertyProfile) invoicePartySnapshot {
 	name := strings.TrimSpace(profile.BillingName.String)
 	if name == "" {
@@ -932,11 +965,15 @@ func WriteInvoiceStoreError(w http.ResponseWriter, err error) {
 	}
 }
 
-// payoutInvoiceBillableCents is the gross price to bill on the invoice: CSV "amount" (guest-facing
-// total) when imported; otherwise net payout for legacy or incomplete rows.
+// payoutInvoiceBillableCents is the gross price to bill on the invoice: payout CSV "Amount"
+// (what the guest paid via Booking.com). Statement "Original amount" / "Final amount" must not
+// override this — they can differ from the payout figure after promotions or reconciliation.
 func payoutInvoiceBillableCents(p *store.FinanceBookingPayout) int {
 	if p == nil {
 		return 0
+	}
+	if cents, ok := bookingPayoutRawAmountCents(p.RawRowJSON); ok {
+		return cents
 	}
 	if p.AmountCents.Valid && p.AmountCents.Int64 > 0 {
 		return int(p.AmountCents.Int64)

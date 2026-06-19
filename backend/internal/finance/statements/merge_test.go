@@ -94,9 +94,25 @@ func TestMerge_PayoutThenStatement(t *testing.T) {
 	if second.Result.NetCents == nil || *second.Result.NetCents != 7000 {
 		t.Fatalf("net dropped: %v", second.Result.NetCents)
 	}
+	if second.Result.AmountCents == nil || *second.Result.AmountCents != 10000 {
+		t.Fatalf("amount_cents overwritten by statement: %v", second.Result.AmountCents)
+	}
 	// Statement-owned column must be filled.
 	if second.Result.HotelID == nil || *second.Result.HotelID != "13452548" {
 		t.Fatalf("hotel id missing: %v", second.Result.HotelID)
+	}
+}
+
+func TestMerge_StatementThenPayout_AmountFromPayout(t *testing.T) {
+	stmt := mkStatementRow("X1", "OK")
+	stmt.AmountCents = 6598 // statement Original/Final amount
+	first := Merge(nil, stmt)
+	cb := first.Result
+	payout := mkPayoutRow("X1", "ok", 7000)
+	payout.AmountCents = 6489 // payout CSV Amount (guest paid)
+	second := Merge(&cb, payout)
+	if second.Result.AmountCents == nil || *second.Result.AmountCents != 6489 {
+		t.Fatalf("amount_cents = %v, want 6489 from payout", second.Result.AmountCents)
 	}
 }
 
