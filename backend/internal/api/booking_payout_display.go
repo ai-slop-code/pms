@@ -133,7 +133,7 @@ func bookingPayoutHostName(raw sql.NullString) *string {
 
 func bookingPayoutRawKeySkip(kl string) bool {
 	switch kl {
-	case "guest name", "reference number", "refference number", "net", "payout date",
+	case "guest name", "reference number", "refference number", "booking number", "net", "payout date",
 		"type", "currency", "reservation status", "payment status", "payout id":
 		return true
 	}

@@ -1211,8 +1211,11 @@ func parseBookingPayoutCSV(in io.Reader, loc *time.Location) ([]bookingPayoutCSV
 		idx[key] = i
 	}
 	if _, ok := idx["reference number"]; !ok {
-		if i, aliasOK := idx["refference number"]; aliasOK {
-			idx["reference number"] = i
+		for _, alias := range []string{"refference number", "booking number"} {
+			if i, aliasOK := idx[alias]; aliasOK {
+				idx["reference number"] = i
+				break
+			}
 		}
 	}
 	required := []string{"reference number", "net", "payout date"}

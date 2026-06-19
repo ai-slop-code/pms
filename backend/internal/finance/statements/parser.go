@@ -164,14 +164,25 @@ func detectFormat(idx map[string]int) SourceType {
 
 func has(idx map[string]int, key string) bool { _, ok := idx[key]; return ok }
 
+// aliasPayoutReferenceColumn maps Booking.com payout header variants onto the
+// canonical "reference number" key (legacy "Reference number", typo
+// "Refference number", 2026+ "Booking number").
+func aliasPayoutReferenceColumn(idx map[string]int) {
+	if has(idx, "reference number") {
+		return
+	}
+	for _, alias := range []string{"refference number", "booking number"} {
+		if i, ok := idx[alias]; ok {
+			idx["reference number"] = i
+			return
+		}
+	}
+}
+
 // ---------------- Payout parser ----------------
 
 func parsePayout(r *csv.Reader, idx map[string]int, loc *time.Location) (*ParseResult, error) {
-	if !has(idx, "reference number") {
-		if i, ok := idx["refference number"]; ok {
-			idx["reference number"] = i
-		}
-	}
+	aliasPayoutReferenceColumn(idx)
 	for _, k := range []string{"reference number", "net", "payout date"} {
 		if !has(idx, k) {
 			return nil, fmt.Errorf("payout csv missing required column: %s", k)

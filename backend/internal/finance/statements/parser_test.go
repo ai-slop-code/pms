@@ -64,6 +64,24 @@ func TestParsePayout_HappyPath(t *testing.T) {
 	}
 }
 
+func TestParsePayout_BookingNumberColumn(t *testing.T) {
+	// Booking.com renamed "Reference number" → "Booking number" in 2026 exports.
+	body := loadFixture(t, "May_2026_PayoutInfo.csv")
+	res, err := DetectAndParse(strings.NewReader(body), testLoc(t))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.Source != SourcePayout {
+		t.Fatalf("source = %v, want payout", res.Source)
+	}
+	if len(res.Rows) == 0 {
+		t.Fatal("no rows parsed")
+	}
+	if res.Rows[0].ReferenceNumber != "6756848168" {
+		t.Fatalf("reference = %q, want 6756848168", res.Rows[0].ReferenceNumber)
+	}
+}
+
 func TestParseStatement_HappyPath(t *testing.T) {
 	body := loadFixture(t, "September_Statement.csv")
 	res, err := DetectAndParse(strings.NewReader(body), testLoc(t))
