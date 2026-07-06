@@ -150,6 +150,72 @@ func TestGenerateCodes_CreatesAndUpdatesWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestGenerateCodes_PreservesGeneratedWindowWhenBookingClosedBlockExpands(t *testing.T) {
+	st := newTestStore(t)
+	pid := setupPropertyForNuki(t, st)
+	fc := &fakeClient{}
+	svc := &Service{Store: st, Client: fc}
+	ctx := context.Background()
+	now := time.Now().UTC()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 2)
+	originalEnd := start.AddDate(0, 0, 1)
+	expandedEnd := start.AddDate(0, 0, 3)
+	runID, err := st.StartOccupancySyncRun(ctx, pid, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occ := &store.Occupancy{
+		PropertyID:       pid,
+		SourceType:       "booking_ics",
+		SourceEventUID:   "merged-booking-block",
+		StartAt:          start,
+		EndAt:            originalEnd,
+		Status:           "active",
+		RawSummary:       sql.NullString{String: "CLOSED - Not available", Valid: true},
+		GuestDisplayName: sql.NullString{String: "Lenka", Valid: true},
+		ContentHash:      "initial",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := st.GetOccupancyBySourceEventUID(ctx, pid, "merged-booking-block")
+	if err != nil || saved == nil {
+		t.Fatalf("occupancy err=%v nil=%v", err, saved == nil)
+	}
+	validFrom, validUntil := occupancyWindow(*saved, time.UTC, 14, 0, 10, 0)
+	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
+		PropertyID:       pid,
+		OccupancyID:      saved.ID,
+		CodeLabel:        "Booking-Lenka",
+		ExternalNukiID:   sql.NullString{String: "ext-lenka", Valid: true},
+		ValidFrom:        validFrom,
+		ValidUntil:       validUntil,
+		Status:           "generated",
+		AccessCodeMasked: sql.NullString{String: "******", Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	occ.EndAt = expandedEnd
+	occ.ContentHash = "expanded"
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.GenerateCodes(ctx, pid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	if fc.updateCalls != 0 {
+		t.Fatalf("updateCalls=%d want 0", fc.updateCalls)
+	}
+	code, err := st.GetNukiCodeByOccupancyID(ctx, pid, saved.ID)
+	if err != nil || code == nil {
+		t.Fatalf("code err=%v nil=%v", err, code == nil)
+	}
+	if !code.ValidFrom.Equal(validFrom) || !code.ValidUntil.Equal(validUntil) {
+		t.Fatalf("window=%s..%s want %s..%s", code.ValidFrom, code.ValidUntil, validFrom, validUntil)
+	}
+}
+
 func TestGenerateCodes_FailureMarksCodeNotGenerated(t *testing.T) {
 	st := newTestStore(t)
 	pid := setupPropertyForNuki(t, st)

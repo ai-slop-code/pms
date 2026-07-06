@@ -2,6 +2,7 @@ package occupancy
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"sync"
 	"testing"
@@ -149,6 +150,234 @@ END:VCALENDAR
 	occ, err := st.GetOccupancyBySourceEventUID(ctx, pid, "valid-1@t")
 	if err != nil || occ == nil {
 		t.Fatalf("valid occupancy missing err=%v", err)
+	}
+}
+
+func TestSyncProperty_KeepsStableMultiNightBookingUnavailableBlocks(t *testing.T) {
+	st := newTestStore(t)
+	payload := `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:f119449a97461f913129e2bcf11ffaab@booking.com
+DTSTAMP:20260706T131906Z
+DTSTART;VALUE=DATE:20260706
+DTEND;VALUE=DATE:20260709
+SUMMARY:CLOSED - Not available
+END:VEVENT
+END:VCALENDAR
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.ReplaceAll(payload, "\n", "\r\n")))
+	}))
+	defer srv.Close()
+
+	pid := createPropertyWithICS(t, st, srv.URL)
+	svc := &Service{Store: st, HTTP: srv.Client()}
+	ctx := context.Background()
+	if err := svc.SyncProperty(ctx, pid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListOccupancies(ctx, pid, "", time.UTC, nil, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d want 1", len(rows))
+	}
+	if rows[0].SourceEventUID != "f119449a97461f913129e2bcf11ffaab@booking.com" {
+		t.Fatalf("uid=%q", rows[0].SourceEventUID)
+	}
+	if got := rows[0].StartAt.Format(time.RFC3339); got != "2026-07-06T00:00:00Z" {
+		t.Fatalf("start=%s", got)
+	}
+	if got := rows[0].EndAt.Format(time.RFC3339); got != "2026-07-09T00:00:00Z" {
+		t.Fatalf("end=%s", got)
+	}
+}
+
+func TestSyncProperty_SplitsExpandedBookingUnavailableBlockWithGeneratedGuestCode(t *testing.T) {
+	st := newTestStore(t)
+	payload := `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:f119449a97461f913129e2bcf11ffaab@booking.com
+DTSTAMP:20260706T131906Z
+DTSTART;VALUE=DATE:20260706
+DTEND;VALUE=DATE:20260707
+SUMMARY:CLOSED - Not available
+END:VEVENT
+END:VCALENDAR
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.ReplaceAll(payload, "\n", "\r\n")))
+	}))
+	defer srv.Close()
+
+	pid := createPropertyWithICS(t, st, srv.URL)
+	svc := &Service{Store: st, HTTP: srv.Client()}
+	ctx := context.Background()
+	if err := svc.SyncProperty(ctx, pid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	occ, err := st.GetOccupancyBySourceEventUID(ctx, pid, "f119449a97461f913129e2bcf11ffaab@booking.com")
+	if err != nil || occ == nil {
+		t.Fatalf("occupancy err=%v nil=%v", err, occ == nil)
+	}
+	if err := st.UpdateOccupancyGuestDisplayName(ctx, pid, occ.ID, ptrStr("Lenka")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
+		PropertyID:       pid,
+		OccupancyID:      occ.ID,
+		CodeLabel:        "Booking-Lenka",
+		ExternalNukiID:   sql.NullString{String: "ext-lenka", Valid: true},
+		ValidFrom:        time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
+		ValidUntil:       time.Date(2026, 7, 7, 7, 0, 0, 0, time.UTC),
+		Status:           "generated",
+		AccessCodeMasked: sql.NullString{String: "******", Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	payload = strings.Replace(payload, "DTEND;VALUE=DATE:20260707", "DTEND;VALUE=DATE:20260709", 1)
+	if err := svc.SyncProperty(ctx, pid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListOccupancies(ctx, pid, "", time.UTC, nil, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := make([]store.Occupancy, 0)
+	for _, row := range rows {
+		if row.Status == "active" || row.Status == "updated" {
+			active = append(active, row)
+		}
+	}
+	if len(active) != 3 {
+		t.Fatalf("active rows=%d want 3", len(active))
+	}
+	wantStarts := []string{"2026-07-06T00:00:00Z", "2026-07-07T00:00:00Z", "2026-07-08T00:00:00Z"}
+	for i, row := range active {
+		if row.SourceEventUID == "f119449a97461f913129e2bcf11ffaab@booking.com" {
+			t.Fatalf("row %d kept unsplit uid", i)
+		}
+		if got := row.StartAt.Format(time.RFC3339); got != wantStarts[i] {
+			t.Fatalf("row %d start=%s want %s", i, got, wantStarts[i])
+		}
+		if got := row.EndAt.Sub(row.StartAt); got != 24*time.Hour {
+			t.Fatalf("row %d duration=%s want 24h", i, got)
+		}
+	}
+}
+
+func TestSyncProperty_PreservesManualNightSplit(t *testing.T) {
+	st := newTestStore(t)
+	payload := `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:august-block@booking.com
+DTSTAMP:20260706T131906Z
+DTSTART;VALUE=DATE:20260807
+DTEND;VALUE=DATE:20260811
+SUMMARY:CLOSED - Not available
+END:VEVENT
+END:VCALENDAR
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.ReplaceAll(payload, "\n", "\r\n")))
+	}))
+	defer srv.Close()
+
+	pid := createPropertyWithICS(t, st, srv.URL)
+	svc := &Service{Store: st, HTTP: srv.Client()}
+	ctx := context.Background()
+	if err := svc.SyncProperty(ctx, pid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	occ, err := st.GetOccupancyBySourceEventUID(ctx, pid, "august-block@booking.com")
+	if err != nil || occ == nil {
+		t.Fatalf("occupancy err=%v nil=%v", err, occ == nil)
+	}
+	if err := st.CloseOccupancyNight(ctx, pid, occ.ID, 1, "2026-08-10", "closed", "maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SyncProperty(ctx, pid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListOccupancies(ctx, pid, "", time.UTC, nil, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeOriginal := 0
+	closedManual := 0
+	for _, row := range rows {
+		if row.SourceEventUID == "august-block@booking.com" && (row.Status == "active" || row.Status == "updated") {
+			activeOriginal++
+		}
+		if row.SourceEventUID == "manual_split:august-block@booking.com:closed:20260810" && row.Status == "active" && row.ClosureState.Valid && row.ClosureState.String == store.ClosureStateClosed {
+			closedManual++
+		}
+	}
+	if activeOriginal != 0 {
+		t.Fatalf("active original rows=%d want 0", activeOriginal)
+	}
+	if closedManual != 1 {
+		t.Fatalf("closed manual rows=%d want 1", closedManual)
+	}
+}
+
+func TestSyncProperty_PreservesManualNightlySplit(t *testing.T) {
+	st := newTestStore(t)
+	payload := `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:july-merged@booking.com
+DTSTAMP:20260706T131906Z
+DTSTART;VALUE=DATE:20260730
+DTEND;VALUE=DATE:20260801
+SUMMARY:CLOSED - Not available
+END:VEVENT
+END:VCALENDAR
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.ReplaceAll(payload, "\n", "\r\n")))
+	}))
+	defer srv.Close()
+
+	pid := createPropertyWithICS(t, st, srv.URL)
+	svc := &Service{Store: st, HTTP: srv.Client()}
+	ctx := context.Background()
+	if err := svc.SyncProperty(ctx, pid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	occ, err := st.GetOccupancyBySourceEventUID(ctx, pid, "july-merged@booking.com")
+	if err != nil || occ == nil {
+		t.Fatalf("occupancy err=%v nil=%v", err, occ == nil)
+	}
+	if err := st.SplitOccupancyIntoNights(ctx, pid, occ.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SyncProperty(ctx, pid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListOccupancies(ctx, pid, "", time.UTC, nil, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeOriginal := 0
+	activeManual := 0
+	for _, row := range rows {
+		if row.SourceEventUID == "july-merged@booking.com" && (row.Status == "active" || row.Status == "updated") {
+			activeOriginal++
+		}
+		if strings.HasPrefix(row.SourceEventUID, "manual_split:july-merged@booking.com:night:") && row.Status == "active" {
+			activeManual++
+		}
+	}
+	if activeOriginal != 0 {
+		t.Fatalf("active original rows=%d want 0", activeOriginal)
+	}
+	if activeManual != 2 {
+		t.Fatalf("active manual rows=%d want 2", activeManual)
 	}
 }
 

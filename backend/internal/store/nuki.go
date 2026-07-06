@@ -746,12 +746,29 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		    OR (` + nukiLabelWindowLinkPredicate("nac", "nk") + `)
 		)
 		WHERE o.property_id = ?
-		  AND o.status IN ('active', 'updated')
 		  AND o.closure_state IS NULL
-		  AND o.end_at >= ?
-		ORDER BY o.start_at ASC
+		  AND (
+		      (o.status IN ('active', 'updated') AND o.end_at >= ? AND NOT (
+		          LOWER(COALESCE(o.raw_summary, '')) LIKE '%closed%'
+		          AND LOWER(COALESCE(o.raw_summary, '')) LIKE '%not available%'
+		          AND EXISTS (
+		              SELECT 1
+		              FROM occupancies old_o
+		              INNER JOIN nuki_access_codes old_nac ON old_nac.property_id = old_o.property_id AND old_nac.occupancy_id = old_o.id
+		              WHERE old_o.property_id = o.property_id
+		                AND old_o.status = 'deleted_from_source'
+		                AND old_nac.status = 'generated'
+		                AND old_nac.valid_until >= ?
+		                AND substr(old_nac.valid_from, 1, 10) = substr(o.start_at, 1, 10)
+		                AND substr(old_nac.valid_until, 1, 10) = substr(o.end_at, 1, 10)
+		          )
+		      ))
+		      OR (o.status = 'deleted_from_source' AND nac.status = 'generated' AND nac.valid_until >= ?)
+		  )
+		ORDER BY COALESCE(nac.valid_from, o.start_at) ASC
 		LIMIT ?`
-	rows, err := s.DB.QueryContext(ctx, query, propertyID, time.Now().UTC().Format(time.RFC3339), limit)
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows, err := s.DB.QueryContext(ctx, query, propertyID, now, now, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -796,4 +813,43 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		deduped = append(deduped, r)
 	}
 	return deduped, nil
+}
+
+func (s *Store) HasShorterGeneratedNukiCodeForSourceUID(ctx context.Context, propertyID int64, sourceUID string, targetStart, targetEnd time.Time) (bool, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT nac.valid_from, nac.valid_until
+		FROM nuki_access_codes nac
+		INNER JOIN occupancies o ON o.id = nac.occupancy_id
+		WHERE nac.property_id = ?
+		  AND o.property_id = nac.property_id
+		  AND o.source_event_uid = ?
+		  AND o.guest_display_name IS NOT NULL
+		  AND TRIM(o.guest_display_name) != ''
+		  AND nac.status = 'generated'`, propertyID, sourceUID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	targetStart = targetStart.UTC()
+	targetEnd = targetEnd.UTC()
+	for rows.Next() {
+		var fromRaw, untilRaw string
+		if err := rows.Scan(&fromRaw, &untilRaw); err != nil {
+			return false, err
+		}
+		from, err := time.Parse(time.RFC3339, fromRaw)
+		if err != nil {
+			continue
+		}
+		until, err := time.Parse(time.RFC3339, untilRaw)
+		if err != nil {
+			continue
+		}
+		from = from.UTC()
+		until = until.UTC()
+		if !from.Before(targetStart) && !until.After(targetEnd) && until.Sub(from) < targetEnd.Sub(targetStart) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }

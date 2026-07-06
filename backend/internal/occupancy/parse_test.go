@@ -76,6 +76,36 @@ END:VCALENDAR
 	}
 }
 
+func TestParseICalendar_KeepsMultiNightBookingUnavailableBlocks(t *testing.T) {
+	const ics = `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:f119449a97461f913129e2bcf11ffaab@booking.com
+DTSTAMP:20260706T131906Z
+DTSTART;VALUE=DATE:20260706
+DTEND;VALUE=DATE:20260709
+SUMMARY:CLOSED - Not available
+END:VEVENT
+END:VCALENDAR
+`
+	evs, err := ParseICalendar([]byte(strings.ReplaceAll(ics, "\n", "\r\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("events=%d want 1", len(evs))
+	}
+	if evs[0].UID != "f119449a97461f913129e2bcf11ffaab@booking.com" {
+		t.Fatalf("uid=%q", evs[0].UID)
+	}
+	if got := evs[0].StartUTC.Format(time.RFC3339); got != "2026-07-06T00:00:00Z" {
+		t.Fatalf("start=%s", got)
+	}
+	if got := evs[0].EndUTC.Format(time.RFC3339); got != "2026-07-09T00:00:00Z" {
+		t.Fatalf("end=%s", got)
+	}
+}
+
 func TestParseICalendar_Cancelled(t *testing.T) {
 	const ics = `BEGIN:VCALENDAR
 VERSION:2.0

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -398,5 +399,68 @@ func TestFindOrCreateOccupancyForPayoutStayDates_ReusesExistingStay(t *testing.T
 	}
 	if payoutSynthetic != nil {
 		t.Fatalf("did not expect synthetic payout occupancy when matching occupancy exists")
+	}
+}
+
+func TestFindOrCreateOccupancyForStatementStayDates_CreatesStatementStayAndSupersedesGenericICS(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	ctx := context.Background()
+	loc := time.UTC
+	runID, err := st.StartOccupancySyncRun(ctx, pid, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 7; i <= 9; i++ {
+		start := time.Date(2026, 8, i, 0, 0, 0, 0, time.UTC)
+		if err := st.UpsertOccupancy(ctx, &Occupancy{
+			PropertyID:     pid,
+			SourceType:     "booking_ics",
+			SourceEventUID: "ics-split-202608" + fmt.Sprintf("%02d", i),
+			StartAt:        start,
+			EndAt:          start.AddDate(0, 0, 1),
+			Status:         "active",
+			RawSummary:     sql.NullString{String: "CLOSED - Not available", Valid: true},
+			ContentHash:    fmt.Sprintf("h-%d", i),
+		}, runID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	occ, err := st.FindOrCreateOccupancyForStatementStayDates(ctx, pid, "ST-3003", "2026-08-07", "2026-08-10", "August Guest", loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if occ == nil {
+		t.Fatal("expected statement occupancy")
+	}
+	if occ.SourceType != "booking_statement" {
+		t.Fatalf("source_type=%q want booking_statement", occ.SourceType)
+	}
+	if occ.SourceEventUID != "booking_statement:ST-3003" {
+		t.Fatalf("source uid=%q", occ.SourceEventUID)
+	}
+	if err := st.SupersedeGenericICSBlocksForFinanceStayDates(ctx, pid, "2026-08-07", "2026-08-10", loc, occ.ID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListOccupancies(ctx, pid, "", loc, nil, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeStatement := 0
+	deletedICS := 0
+	for _, row := range rows {
+		switch {
+		case row.ID == occ.ID && row.Status == "active":
+			activeStatement++
+		case row.SourceType == "booking_ics" && row.Status == "deleted_from_source":
+			deletedICS++
+		}
+	}
+	if activeStatement != 1 {
+		t.Fatalf("active statement rows=%d want 1", activeStatement)
+	}
+	if deletedICS != 3 {
+		t.Fatalf("deleted generic ics rows=%d want 3", deletedICS)
 	}
 }

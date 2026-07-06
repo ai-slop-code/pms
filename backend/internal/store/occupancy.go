@@ -66,6 +66,8 @@ type Occupancy struct {
 const (
 	ClosureStateClosed       = "closed"
 	ClosureStateExternalSale = "external_sale"
+	manualSplitSourceType    = "manual"
+	manualSplitUIDPrefix     = "manual_split:"
 )
 
 type UpcomingOccupancy struct {
@@ -569,6 +571,169 @@ func (s *Store) CloseOccupancy(ctx context.Context, propertyID, occupancyID, use
 		return s.checkOccupancyLabelled(ctx, propertyID, occupancyID)
 	}
 	return nil
+}
+
+func (s *Store) CloseOccupancyNight(ctx context.Context, propertyID, occupancyID, userID int64, nightDate, reason, category string) error {
+	row, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+	if err != nil {
+		return err
+	}
+	if row.ClosureState.Valid {
+		return ErrOccupancyAlreadyLabelled
+	}
+	night, err := time.Parse("2006-01-02", strings.TrimSpace(nightDate))
+	if err != nil {
+		return fmt.Errorf("invalid night")
+	}
+	night = time.Date(night.Year(), night.Month(), night.Day(), 0, 0, 0, 0, time.UTC)
+	nightEnd := night.AddDate(0, 0, 1)
+	start := toUTCMidnight(row.StartAt)
+	end := toUTCMidnight(row.EndAt)
+	if night.Before(start) || !nightEnd.After(start) || nightEnd.After(end) {
+		return sql.ErrNoRows
+	}
+	if start.Equal(night) && end.Equal(nightEnd) {
+		return s.CloseOccupancy(ctx, propertyID, occupancyID, userID, reason, category)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE occupancies
+		SET status = 'deleted_from_source', last_synced_at = ?
+		WHERE property_id = ? AND id = ?`, now, propertyID, occupancyID); err != nil {
+		return err
+	}
+	baseUID := row.SourceEventUID
+	if start.Before(night) {
+		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, baseUID, "before", start, night, nil, nil, userID, now); err != nil {
+			return err
+		}
+	}
+	if err := s.insertManualSplitOccupancyTx(ctx, tx, row, baseUID, "closed", night, nightEnd, &reason, &category, userID, now); err != nil {
+		return err
+	}
+	if nightEnd.Before(end) {
+		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, baseUID, "after", nightEnd, end, nil, nil, userID, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SplitOccupancyIntoNights(ctx context.Context, propertyID, occupancyID int64) error {
+	row, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+	if err != nil {
+		return err
+	}
+	if row.ClosureState.Valid {
+		return ErrOccupancyAlreadyLabelled
+	}
+	start := toUTCMidnight(row.StartAt)
+	end := toUTCMidnight(row.EndAt)
+	days := int(end.Sub(start).Hours() / 24)
+	if days <= 1 || !start.AddDate(0, 0, days).Equal(end) {
+		return errors.New("occupancy is not a multi-night all-day stay")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE occupancies
+		SET status = 'deleted_from_source', last_synced_at = ?
+		WHERE property_id = ? AND id = ?`, now, propertyID, occupancyID); err != nil {
+		return err
+	}
+	for i := 0; i < days; i++ {
+		night := start.AddDate(0, 0, i)
+		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "night", night, night.AddDate(0, 0, 1), nil, nil, 0, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) HasManualSplitForSourceEventUID(ctx context.Context, propertyID int64, sourceUID string) (bool, error) {
+	var id int64
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT id
+		FROM occupancies
+		WHERE property_id = ?
+		  AND source_type = ?
+		  AND source_event_uid LIKE ?
+		  AND status IN ('active', 'updated')
+		LIMIT 1`, propertyID, manualSplitSourceType, manualSplitUIDPrefix+sourceUID+":%").Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (s *Store) insertManualSplitOccupancyTx(ctx context.Context, tx *sql.Tx, base *Occupancy, baseUID, role string, start, end time.Time, reason, category *string, userID int64, now string) error {
+	uid := fmt.Sprintf("%s%s:%s:%s", manualSplitUIDPrefix, baseUID, role, start.Format("20060102"))
+	status := "active"
+	closureState := interface{}(nil)
+	closureReason := interface{}(nil)
+	closureCategory := interface{}(nil)
+	closedBy := interface{}(nil)
+	closedAt := interface{}(nil)
+	if role == "closed" {
+		closureState = ClosureStateClosed
+		closureReason = nullableString(ptrStringValue(reason))
+		closureCategory = nullableString(ptrStringValue(category))
+		closedBy = userID
+		closedAt = now
+	}
+	var summary interface{}
+	if base.RawSummary.Valid {
+		summary = base.RawSummary.String
+	}
+	var guest interface{}
+	if base.GuestDisplayName.Valid {
+		guest = base.GuestDisplayName.String
+	}
+	contentHash := fmt.Sprintf("manual-split:%d:%s:%s:%s", base.ID, role, start.Format(time.RFC3339), end.Format(time.RFC3339))
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO occupancies (
+			property_id, source_type, source_event_uid, start_at, end_at, status,
+			raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id,
+			closure_state, closure_reason, closure_category, closed_by_user_id, closed_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+		ON CONFLICT(property_id, source_event_uid) DO UPDATE SET
+			start_at = excluded.start_at,
+			end_at = excluded.end_at,
+			status = excluded.status,
+			raw_summary = excluded.raw_summary,
+			guest_display_name = excluded.guest_display_name,
+			content_hash = excluded.content_hash,
+			last_synced_at = excluded.last_synced_at,
+			closure_state = excluded.closure_state,
+			closure_reason = excluded.closure_reason,
+			closure_category = excluded.closure_category,
+			closed_by_user_id = excluded.closed_by_user_id,
+			closed_at = excluded.closed_at`,
+		base.PropertyID, manualSplitSourceType, uid, start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), status,
+		summary, guest, contentHash, now, now, closureState, closureReason, closureCategory, closedBy, closedAt)
+	return err
+}
+
+func ptrStringValue(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func toUTCMidnight(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // MarkOccupancyExternalSale labels the row as sold via a different channel. The

@@ -41,6 +41,7 @@ const closureReasonMaxLen = 500
 type closeOccupancyBody struct {
 	Reason   string `json:"reason"`
 	Category string `json:"category"`
+	Night    string `json:"night"`
 }
 
 type externalSaleBody struct {
@@ -80,6 +81,7 @@ func (s *Server) postOccupancyClose(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Reason = strings.TrimSpace(body.Reason)
 	body.Category = strings.TrimSpace(body.Category)
+	body.Night = strings.TrimSpace(body.Night)
 	if len(body.Reason) > closureReasonMaxLen {
 		WriteError(w, http.StatusBadRequest, "reason too long")
 		return
@@ -92,7 +94,11 @@ func (s *Server) postOccupancyClose(w http.ResponseWriter, r *http.Request) {
 	}
 	idStr := strconv.FormatInt(occID, 10)
 	s.audit(r, actor, "occupancy_close", "occupancy", idStr, "attempt")
-	err = s.Store.CloseOccupancy(r.Context(), propID, occID, actor.ID, body.Reason, body.Category)
+	if body.Night != "" {
+		err = s.Store.CloseOccupancyNight(r.Context(), propID, occID, actor.ID, body.Night, body.Reason, body.Category)
+	} else {
+		err = s.Store.CloseOccupancy(r.Context(), propID, occID, actor.ID, body.Reason, body.Category)
+	}
 	if err != nil {
 		writeOccupancyLabelError(w, err)
 		return
@@ -146,6 +152,27 @@ func (s *Server) postOccupancyExternalSale(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.audit(r, actor, "occupancy_mark_external_sale", "occupancy", idStr, "success")
+	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
+}
+
+func (s *Server) postOccupancySplitNights(w http.ResponseWriter, r *http.Request) {
+	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
+	if !ok {
+		return
+	}
+	_, occID, err := parsePropertyAndOccupancyIDs(r)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	idStr := strconv.FormatInt(occID, 10)
+	s.audit(r, actor, "occupancy_split_nights", "occupancy", idStr, "attempt")
+	err = s.Store.SplitOccupancyIntoNights(r.Context(), propID, occID)
+	if err != nil {
+		writeOccupancyLabelError(w, err)
+		return
+	}
+	s.audit(r, actor, "occupancy_split_nights", "occupancy", idStr, "success")
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
 }
 

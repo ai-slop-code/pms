@@ -82,7 +82,10 @@ func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger st
 	if err != nil {
 		return s.failRun(ctx, runID, "parse_ics: "+err.Error(), &res.StatusCode, 0, 0)
 	}
-	parsed := parsedRes.Events
+	parsed, err := s.expandBookingUnavailableEvents(ctx, propertyID, parsedRes.Events)
+	if err != nil {
+		return s.failRun(ctx, runID, err.Error(), &res.StatusCode, parsedRes.SeenEvents, 0)
+	}
 
 	seen := make([]string, 0, len(parsed))
 	upserted := 0
@@ -138,6 +141,62 @@ func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger st
 		msg = &s
 	}
 	return s.Store.FinishOccupancySyncRun(ctx, runID, status, msg, &res.StatusCode, parsedRes.SeenEvents, upserted)
+}
+
+func (s *Service) expandBookingUnavailableEvents(ctx context.Context, propertyID int64, events []*ParsedEvent) ([]*ParsedEvent, error) {
+	out := make([]*ParsedEvent, 0, len(events))
+	for _, ev := range events {
+		parts, err := s.splitBookingUnavailableEventIfNeeded(ctx, propertyID, ev)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, parts...)
+	}
+	return out, nil
+}
+
+func (s *Service) splitBookingUnavailableEventIfNeeded(ctx context.Context, propertyID int64, ev *ParsedEvent) ([]*ParsedEvent, error) {
+	if ev == nil || ev.Cancelled || !isBookingUnavailableSummary(ev.Summary) {
+		return []*ParsedEvent{ev}, nil
+	}
+	start := ev.StartUTC.UTC()
+	end := ev.EndUTC.UTC()
+	if start.Hour() != 0 || start.Minute() != 0 || start.Second() != 0 || start.Nanosecond() != 0 {
+		return []*ParsedEvent{ev}, nil
+	}
+	if end.Hour() != 0 || end.Minute() != 0 || end.Second() != 0 || end.Nanosecond() != 0 {
+		return []*ParsedEvent{ev}, nil
+	}
+	days := int(end.Sub(start).Hours() / 24)
+	if days <= 1 || !start.AddDate(0, 0, days).Equal(end) {
+		return []*ParsedEvent{ev}, nil
+	}
+	manualSplit, err := s.Store.HasManualSplitForSourceEventUID(ctx, propertyID, ev.UID)
+	if err != nil {
+		return nil, fmt.Errorf("check_manual_split: %w", err)
+	}
+	if manualSplit {
+		return nil, nil
+	}
+	shouldSplit, err := s.Store.HasShorterGeneratedNukiCodeForSourceUID(ctx, propertyID, ev.UID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("check_split_booking_unavailable: %w", err)
+	}
+	if !shouldSplit {
+		return []*ParsedEvent{ev}, nil
+	}
+	out := make([]*ParsedEvent, 0, days)
+	for i := 0; i < days; i++ {
+		partStart := start.AddDate(0, 0, i)
+		partEnd := partStart.AddDate(0, 0, 1)
+		part := *ev
+		part.UID = fmt.Sprintf("%s#night-%s", ev.UID, partStart.Format("20060102"))
+		part.StartUTC = partStart
+		part.EndUTC = partEnd
+		part.ContentHash = hashOccupancy(part.UID, part.StartUTC, part.EndUTC, part.Summary, part.Sequence, part.ICalStatus)
+		out = append(out, &part)
+	}
+	return out, nil
 }
 
 func (s *Service) failRun(ctx context.Context, runID int64, msg string, httpStatus *int, seen, upserted int) error {

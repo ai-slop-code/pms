@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"pms/backend/internal/testutil"
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,5 +75,203 @@ func TestMarkOccupanciesDeletedFromSource_OnlyFuture(t *testing.T) {
 	}
 	if got := statusByUID["future-uid"]; got != "deleted_from_source" {
 		t.Fatalf("future uid status = %q, want deleted_from_source", got)
+	}
+}
+
+func TestListUpcomingStaysForNuki_IncludesFutureGeneratedDeletedFromSource(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "owner-nuki@test.local", "hash", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProperty(ctx, u.ID, "P1", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := st.StartOccupancySyncRun(ctx, p.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 2)
+	end := start.AddDate(0, 0, 1)
+	occ := &Occupancy{
+		PropertyID:       p.ID,
+		SourceType:       "booking_ics",
+		SourceEventUID:   "deleted-with-code",
+		StartAt:          start,
+		EndAt:            end,
+		Status:           "deleted_from_source",
+		RawSummary:       sql.NullString{String: "CLOSED - Not available", Valid: true},
+		GuestDisplayName: sql.NullString{String: "Alexander", Valid: true},
+		ContentHash:      "h1",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := st.GetOccupancyBySourceEventUID(ctx, p.ID, "deleted-with-code")
+	if err != nil || saved == nil {
+		t.Fatalf("occupancy err=%v nil=%v", err, saved == nil)
+	}
+	if err := st.UpsertNukiCode(ctx, &NukiAccessCode{
+		PropertyID:       p.ID,
+		OccupancyID:      saved.ID,
+		CodeLabel:        "Booking-Alexander",
+		ExternalNukiID:   sql.NullString{String: "ext-alexander", Valid: true},
+		ValidFrom:        start.Add(12 * time.Hour),
+		ValidUntil:       end.Add(7 * time.Hour),
+		Status:           "generated",
+		AccessCodeMasked: sql.NullString{String: "******", Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertOccupancy(ctx, &Occupancy{
+		PropertyID:     p.ID,
+		SourceType:     "booking_ics",
+		SourceEventUID: "split-active-same-night",
+		StartAt:        start,
+		EndAt:          end,
+		Status:         "active",
+		RawSummary:     sql.NullString{String: "CLOSED - Not available", Valid: true},
+		ContentHash:    "h2",
+	}, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := st.ListUpcomingStaysForNuki(ctx, p.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d want 1", len(rows))
+	}
+	if rows[0].OccupancyID != saved.ID || rows[0].OccupancyStatus != "deleted_from_source" {
+		t.Fatalf("unexpected row: %+v", rows[0])
+	}
+	if !rows[0].GeneratedStatus.Valid || rows[0].GeneratedStatus.String != "generated" {
+		t.Fatalf("generated status=%#v", rows[0].GeneratedStatus)
+	}
+}
+
+func TestCloseOccupancyNight_SplitsMultiNightStayAndClosesOnlySelectedNight(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "owner-close-night@test.local", "hash", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProperty(ctx, u.ID, "P1", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := st.StartOccupancySyncRun(ctx, p.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occ := &Occupancy{
+		PropertyID:     p.ID,
+		SourceType:     "booking_ics",
+		SourceEventUID: "august-block",
+		StartAt:        time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC),
+		EndAt:          time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC),
+		Status:         "active",
+		RawSummary:     sql.NullString{String: "CLOSED - Not available", Valid: true},
+		ContentHash:    "h1",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := st.GetOccupancyBySourceEventUID(ctx, p.ID, "august-block")
+	if err != nil || saved == nil {
+		t.Fatalf("occupancy err=%v nil=%v", err, saved == nil)
+	}
+	if err := st.CloseOccupancyNight(ctx, p.ID, saved.ID, u.ID, "2026-08-10", "maintenance", "maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListOccupancies(ctx, p.ID, "", time.UTC, nil, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusByUID := map[string]Occupancy{}
+	for _, row := range rows {
+		statusByUID[row.SourceEventUID] = row
+	}
+	if got := statusByUID["august-block"].Status; got != "deleted_from_source" {
+		t.Fatalf("original status=%s want deleted_from_source", got)
+	}
+	before := statusByUID["manual_split:august-block:before:20260807"]
+	if before.Status != "active" || before.StartAt.Format(time.RFC3339) != "2026-08-07T00:00:00Z" || before.EndAt.Format(time.RFC3339) != "2026-08-10T00:00:00Z" {
+		t.Fatalf("before row=%+v", before)
+	}
+	closed := statusByUID["manual_split:august-block:closed:20260810"]
+	if closed.Status != "active" || !closed.ClosureState.Valid || closed.ClosureState.String != ClosureStateClosed {
+		t.Fatalf("closed row=%+v", closed)
+	}
+	if closed.StartAt.Format(time.RFC3339) != "2026-08-10T00:00:00Z" || closed.EndAt.Format(time.RFC3339) != "2026-08-11T00:00:00Z" {
+		t.Fatalf("closed window=%s..%s", closed.StartAt, closed.EndAt)
+	}
+	hasManual, err := st.HasManualSplitForSourceEventUID(ctx, p.ID, "august-block")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasManual {
+		t.Fatal("expected manual split marker")
+	}
+}
+
+func TestSplitOccupancyIntoNights_CreatesManualNightRows(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "owner-split-night@test.local", "hash", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProperty(ctx, u.ID, "P1", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := st.StartOccupancySyncRun(ctx, p.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occ := &Occupancy{
+		PropertyID:     p.ID,
+		SourceType:     "booking_ics",
+		SourceEventUID: "july-merged",
+		StartAt:        time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
+		EndAt:          time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		Status:         "active",
+		RawSummary:     sql.NullString{String: "CLOSED - Not available", Valid: true},
+		ContentHash:    "h1",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := st.GetOccupancyBySourceEventUID(ctx, p.ID, "july-merged")
+	if err != nil || saved == nil {
+		t.Fatalf("occupancy err=%v nil=%v", err, saved == nil)
+	}
+	if err := st.SplitOccupancyIntoNights(ctx, p.ID, saved.ID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListOccupancies(ctx, p.ID, "", time.UTC, nil, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeManual := 0
+	for _, row := range rows {
+		if row.SourceEventUID == "july-merged" && row.Status != "deleted_from_source" {
+			t.Fatalf("original status=%s want deleted_from_source", row.Status)
+		}
+		if strings.HasPrefix(row.SourceEventUID, "manual_split:july-merged:night:") && row.Status == "active" {
+			activeManual++
+			if row.EndAt.Sub(row.StartAt) != 24*time.Hour {
+				t.Fatalf("manual duration=%s", row.EndAt.Sub(row.StartAt))
+			}
+		}
+	}
+	if activeManual != 2 {
+		t.Fatalf("active manual nights=%d want 2", activeManual)
 	}
 }

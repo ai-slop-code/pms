@@ -315,6 +315,70 @@ func (s *Store) FindOrCreateOccupancyForPayoutStayDates(
 	referenceNumber, checkInDate, checkOutDate, guestName string,
 	loc *time.Location,
 ) (*Occupancy, error) {
+	return s.findOrCreateOccupancyForFinanceStayDates(ctx, propertyID, "booking_payout", referenceNumber, checkInDate, checkOutDate, guestName, loc)
+}
+
+func (s *Store) FindOrCreateOccupancyForStatementStayDates(
+	ctx context.Context,
+	propertyID int64,
+	referenceNumber, checkInDate, checkOutDate, guestName string,
+	loc *time.Location,
+) (*Occupancy, error) {
+	return s.findOrCreateOccupancyForFinanceStayDates(ctx, propertyID, "booking_statement", referenceNumber, checkInDate, checkOutDate, guestName, loc)
+}
+
+func (s *Store) SupersedeGenericICSBlocksForFinanceStayDates(ctx context.Context, propertyID int64, checkInDate, checkOutDate string, loc *time.Location, keepOccupancyID int64) error {
+	if loc == nil {
+		loc = time.UTC
+	}
+	checkInDate = strings.TrimSpace(checkInDate)
+	checkOutDate = strings.TrimSpace(checkOutDate)
+	if checkInDate == "" || checkOutDate == "" {
+		return nil
+	}
+	inDate, err := time.ParseInLocation("2006-01-02", checkInDate, loc)
+	if err != nil {
+		return nil
+	}
+	outDate, err := time.ParseInLocation("2006-01-02", checkOutDate, loc)
+	if err != nil || !outDate.After(inDate) {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = s.DB.ExecContext(ctx, `
+		UPDATE occupancies
+		SET status = 'deleted_from_source', last_synced_at = ?
+		WHERE property_id = ?
+		  AND id != ?
+		  AND source_type = 'booking_ics'
+		  AND status IN ('active', 'updated')
+		  AND (guest_display_name IS NULL OR TRIM(guest_display_name) = '')
+		  AND LOWER(COALESCE(raw_summary, '')) LIKE '%closed%'
+		  AND LOWER(COALESCE(raw_summary, '')) LIKE '%not available%'
+		  AND start_at >= ?
+		  AND end_at <= ?
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM nuki_access_codes nac
+		      WHERE nac.property_id = occupancies.property_id
+		        AND nac.occupancy_id = occupancies.id
+		        AND nac.status = 'generated'
+		  )`,
+		now,
+		propertyID,
+		keepOccupancyID,
+		inDate.UTC().Format(time.RFC3339),
+		outDate.UTC().Format(time.RFC3339),
+	)
+	return err
+}
+
+func (s *Store) findOrCreateOccupancyForFinanceStayDates(
+	ctx context.Context,
+	propertyID int64,
+	sourceType, referenceNumber, checkInDate, checkOutDate, guestName string,
+	loc *time.Location,
+) (*Occupancy, error) {
 	if loc == nil {
 		loc = time.UTC
 	}
@@ -340,21 +404,21 @@ func (s *Store) FindOrCreateOccupancyForPayoutStayDates(
 	}
 
 	ref := strings.TrimSpace(referenceNumber)
-	sourceUID := payoutOccupancyUID(ref, checkInDate, checkOutDate)
+	sourceUID := financeOccupancyUID(sourceType, ref, checkInDate, checkOutDate)
 	guest := strings.TrimSpace(guestName)
 	summary := guest
 	if summary == "" {
 		if ref != "" {
-			summary = "Booking.com payout " + ref
+			summary = financeOccupancySummary(sourceType, ref)
 		} else {
-			summary = "Booking.com payout stay " + checkInDate + " - " + checkOutDate
+			summary = financeOccupancySummary(sourceType, "") + " stay " + checkInDate + " - " + checkOutDate
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	contentHash := payoutOccupancyHash(ref, checkInDate, checkOutDate, guest)
+	contentHash := payoutOccupancyHash(sourceType+":"+ref, checkInDate, checkOutDate, guest)
 	_, err = s.DB.ExecContext(ctx, `
 		INSERT INTO occupancies (property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id)
-		VALUES (?, 'booking_payout', ?, ?, ?, 'active', ?, ?, ?, ?, ?, NULL)
+		VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, NULL)
 		ON CONFLICT(property_id, source_event_uid) DO UPDATE SET
 			start_at = excluded.start_at,
 			end_at = excluded.end_at,
@@ -364,6 +428,7 @@ func (s *Store) FindOrCreateOccupancyForPayoutStayDates(
 			content_hash = excluded.content_hash,
 			last_synced_at = excluded.last_synced_at`,
 		propertyID,
+		sourceType,
 		sourceUID,
 		inDate.UTC().Format(time.RFC3339),
 		outDate.UTC().Format(time.RFC3339),
@@ -380,10 +445,29 @@ func (s *Store) FindOrCreateOccupancyForPayoutStayDates(
 }
 
 func payoutOccupancyUID(referenceNumber, checkInDate, checkOutDate string) string {
-	if referenceNumber != "" {
-		return "booking_payout:" + referenceNumber
+	return financeOccupancyUID("booking_payout", referenceNumber, checkInDate, checkOutDate)
+}
+
+func financeOccupancyUID(sourceType, referenceNumber, checkInDate, checkOutDate string) string {
+	prefix := "booking_payout"
+	if sourceType == "booking_statement" {
+		prefix = "booking_statement"
 	}
-	return "booking_payout:" + checkInDate + ":" + checkOutDate
+	if referenceNumber != "" {
+		return prefix + ":" + referenceNumber
+	}
+	return prefix + ":" + checkInDate + ":" + checkOutDate
+}
+
+func financeOccupancySummary(sourceType, referenceNumber string) string {
+	label := "Booking.com payout"
+	if sourceType == "booking_statement" {
+		label = "Booking.com statement"
+	}
+	if strings.TrimSpace(referenceNumber) == "" {
+		return label
+	}
+	return label + " " + strings.TrimSpace(referenceNumber)
 }
 
 func payoutOccupancyHash(referenceNumber, checkInDate, checkOutDate, guestName string) string {

@@ -25,6 +25,18 @@ const emit = defineEmits<{
 function onInput(occupancyId: number, event: Event) {
   emit('update:pinName', occupancyId, (event.target as HTMLInputElement).value)
 }
+
+function displayStart(stay: UpcomingStay) {
+  return stay.generated_status === 'generated' && stay.generated_valid_from
+    ? stay.generated_valid_from
+    : stay.start_at
+}
+
+function displayEnd(stay: UpcomingStay) {
+  return stay.generated_status === 'generated' && stay.generated_valid_until
+    ? stay.generated_valid_until
+    : stay.end_at
+}
 </script>
 
 <template>
@@ -55,9 +67,9 @@ function onInput(occupancyId: number, event: Event) {
           <small v-if="savingStayName[s.occupancy_id]" class="muted">Saving…</small>
         </td>
         <td>
-          <time :datetime="s.start_at" :title="isoTitle(s.start_at)">{{ formatShortDate(s.start_at) }}</time>
+          <time :datetime="displayStart(s)" :title="isoTitle(displayStart(s))">{{ formatShortDate(displayStart(s)) }}</time>
           →
-          <time :datetime="s.end_at" :title="isoTitle(s.end_at)">{{ formatShortDate(s.end_at) }}</time>
+          <time :datetime="displayEnd(s)" :title="isoTitle(displayEnd(s))">{{ formatShortDate(displayEnd(s)) }}</time>
         </td>
         <td>
           <template v-if="s.generated_status === 'generated' && s.generated_code_id">

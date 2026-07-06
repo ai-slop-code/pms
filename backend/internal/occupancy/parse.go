@@ -143,6 +143,11 @@ func fallbackEventUID(start, end time.Time, summary string, seq int, status stri
 	return "fp-" + hex.EncodeToString(sum[:16])
 }
 
+func isBookingUnavailableSummary(summary string) bool {
+	s := strings.ToLower(strings.Join(strings.Fields(summary), " "))
+	return strings.Contains(s, "closed") && strings.Contains(s, "not available")
+}
+
 func parseYYYYMMDDField(value string) (time.Time, error) {
 	value = strings.TrimSpace(value)
 	if i := strings.IndexByte(value, 'T'); i >= 0 {

@@ -121,19 +121,19 @@ type financePreviewFieldKV struct {
 }
 
 type financeImportPreviewResponse struct {
-	OK                  bool                          `json:"ok"`
-	PreviewToken        string                        `json:"preview_token"`
-	SourceType          string                        `json:"source_type"`
-	HotelID             string                        `json:"hotel_id,omitempty"`
-	FileSHA256          string                        `json:"file_sha256"`
-	PeriodStart         string                        `json:"period_start,omitempty"`
-	PeriodEnd           string                        `json:"period_end,omitempty"`
-	DuplicateOfImportID *int64                        `json:"duplicate_of_import_id,omitempty"`
-	Inserts             []financeImportPreviewInsert  `json:"inserts"`
-	Updates             []financeImportPreviewUpdate  `json:"updates"`
-	UnchangedCount      int                           `json:"unchanged_count"`
-	Skipped             []financePreviewSkippedEntry  `json:"skipped_other_hotel"`
-	Rejected            []statements.Rejection        `json:"rejected"`
+	OK                  bool                         `json:"ok"`
+	PreviewToken        string                       `json:"preview_token"`
+	SourceType          string                       `json:"source_type"`
+	HotelID             string                       `json:"hotel_id,omitempty"`
+	FileSHA256          string                       `json:"file_sha256"`
+	PeriodStart         string                       `json:"period_start,omitempty"`
+	PeriodEnd           string                       `json:"period_end,omitempty"`
+	DuplicateOfImportID *int64                       `json:"duplicate_of_import_id,omitempty"`
+	Inserts             []financeImportPreviewInsert `json:"inserts"`
+	Updates             []financeImportPreviewUpdate `json:"updates"`
+	UnchangedCount      int                          `json:"unchanged_count"`
+	Skipped             []financePreviewSkippedEntry `json:"skipped_other_hotel"`
+	Rejected            []statements.Rejection       `json:"rejected"`
 }
 
 type financeImportCommitRequest struct {
@@ -436,6 +436,8 @@ func (s *Server) postFinanceImportCommit(w http.ResponseWriter, r *http.Request)
 		}
 		if preview.SourceType == statements.SourcePayout {
 			s.commitPayoutBookingSideEffects(r.Context(), pid, bookingID, entry, loc)
+		} else if preview.SourceType == statements.SourceStatement {
+			s.commitStatementBookingSideEffects(r.Context(), pid, bookingID, entry, loc)
 		}
 	}
 	imp.RowCountTotal = imp.RowCountInserted + imp.RowCountUpdated + imp.RowCountUnchanged + imp.RowCountSkippedOtherHotel + imp.RowCountRejected
@@ -478,6 +480,24 @@ func (s *Server) commitPayoutBookingSideEffects(ctx context.Context, propertyID,
 		}
 		_ = s.Store.UpsertBookingFinanceTransaction(ctx, propertyID, bookingID, entry.Reference, entry.NetCents, txDate, entry.BookingIncomeID, entry.PayoutID)
 	}
+}
+
+func (s *Server) commitStatementBookingSideEffects(ctx context.Context, propertyID, bookingID int64, entry financePreviewPlanEntry, loc *time.Location) {
+	if bookingID <= 0 || strings.EqualFold(strDeref(entry.Result.Status), "CANCELLED") {
+		return
+	}
+	checkIn := strDeref(entry.Result.CheckInDate)
+	checkOut := strDeref(entry.Result.CheckOutDate)
+	guest := strDeref(entry.Result.GuestName)
+	occ, err := s.Store.FindOrCreateOccupancyForStatementStayDates(ctx, propertyID, entry.Reference, checkIn, checkOut, guest, loc)
+	if err != nil || occ == nil {
+		return
+	}
+	if strings.TrimSpace(guest) != "" {
+		_ = s.Store.UpdateOccupancyGuestDisplayName(ctx, propertyID, occ.ID, &guest)
+	}
+	_ = s.Store.LinkBookingToOccupancy(ctx, propertyID, entry.Reference, occ.ID, bookingID)
+	_ = s.Store.SupersedeGenericICSBlocksForFinanceStayDates(ctx, propertyID, checkIn, checkOut, loc, occ.ID)
 }
 
 // ---- imports list ----------------------------------------------------------

@@ -272,6 +272,10 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 				code.ExternalNukiID = sql.NullString{}
 			}
 		}
+		if shouldPreserveGeneratedWindow(o, code, from, until) {
+			from = code.ValidFrom.UTC()
+			until = code.ValidUntil.UTC()
+		}
 
 		needsUpdate := code.ValidFrom.UTC().Format(time.RFC3339) != from.UTC().Format(time.RFC3339) ||
 			code.ValidUntil.UTC().Format(time.RFC3339) != until.UTC().Format(time.RFC3339) ||
@@ -904,6 +908,32 @@ func occupancyWindow(o store.Occupancy, loc *time.Location, inH, inM, outH, outM
 		validUntil = validFrom.Add(2 * time.Hour)
 	}
 	return validFrom, validUntil
+}
+
+func shouldPreserveGeneratedWindow(o store.Occupancy, code *store.NukiAccessCode, targetFrom, targetUntil time.Time) bool {
+	if code == nil || code.Status != "generated" {
+		return false
+	}
+	if !o.GuestDisplayName.Valid || strings.TrimSpace(o.GuestDisplayName.String) == "" {
+		return false
+	}
+	if !isBookingUnavailableSummary(o.RawSummary.String) {
+		return false
+	}
+	existingFrom := code.ValidFrom.UTC()
+	existingUntil := code.ValidUntil.UTC()
+	if existingFrom.IsZero() || !existingUntil.After(existingFrom) || !targetUntil.After(targetFrom) {
+		return false
+	}
+	if !existingFrom.Before(targetFrom) && !existingUntil.After(targetUntil) && existingUntil.Sub(existingFrom) < targetUntil.Sub(targetFrom) {
+		return true
+	}
+	return false
+}
+
+func isBookingUnavailableSummary(summary string) bool {
+	s := strings.ToLower(strings.Join(strings.Fields(summary), " "))
+	return strings.Contains(s, "closed") && strings.Contains(s, "not available")
 }
 
 func parseHM(v string, defH, defM int) (int, int) {

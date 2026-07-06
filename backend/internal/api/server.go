@@ -20,14 +20,14 @@ import (
 )
 
 type Server struct {
-	Store              *store.Store
-	SessionTTL         time.Duration
-	Occ                *occupancy.Service
-	Nuki               *nuki.Service
-	DataDir            string
-	CookieSecure       bool
-	CookieSameSite     http.SameSite
-	LoginRateLimiter   *middleware.KeyedLimiter
+	Store            *store.Store
+	SessionTTL       time.Duration
+	Occ              *occupancy.Service
+	Nuki             *nuki.Service
+	DataDir          string
+	CookieSecure     bool
+	CookieSameSite   http.SameSite
+	LoginRateLimiter *middleware.KeyedLimiter
 	// TOTPIssuer is shown as the account label in authenticator apps.
 	TOTPIssuer string
 	// TOTPDevBypass short-circuits the 2FA challenge for enrolled users.
@@ -144,6 +144,7 @@ func (s *Server) Routes() chi.Router {
 				r.Get("/properties/{id}/occupancy-sync/runs", s.listOccupancySyncRuns)
 				r.Post("/properties/{id}/occupancies/{occupancyId}/close", s.postOccupancyClose)
 				r.Post("/properties/{id}/occupancies/{occupancyId}/external-sale", s.postOccupancyExternalSale)
+				r.Post("/properties/{id}/occupancies/{occupancyId}/split-nights", s.postOccupancySplitNights)
 				r.Post("/properties/{id}/occupancies/{occupancyId}/reopen", s.postOccupancyReopen)
 				r.Get("/properties/{id}/occupancy-source", s.getOccupancySource)
 				r.Patch("/properties/{id}/occupancy-source", s.patchOccupancySource)
@@ -196,21 +197,21 @@ func (s *Server) Routes() chi.Router {
 				r.Post("/properties/{id}/invoices/{invoiceId}/regenerate", s.regenerateInvoice)
 				r.Get("/properties/{id}/invoices/{invoiceId}/download", s.downloadInvoice)
 				r.Get("/properties/{id}/invoice-sequence/next-preview", s.previewNextInvoiceSequence)
-			r.Get("/properties/{id}/message-templates", s.listMessageTemplates)
-			r.Post("/properties/{id}/message-templates", s.postMessageTemplate)
-			r.Patch("/properties/{id}/message-templates/{templateId}", s.patchMessageTemplate)
-			r.Delete("/properties/{id}/message-templates/{templateId}", s.deleteMessageTemplate)
-			r.Get("/properties/{id}/messages/generate", s.generateMessage)
-			r.Get("/properties/{id}/messages/cleaning", s.generateCleaningMessage)
-			r.Get("/properties/{id}/analytics/freshness", s.getAnalyticsFreshness)
-			r.Get("/properties/{id}/analytics/outlook", s.getAnalyticsOutlook)
-			r.Get("/properties/{id}/analytics/performance", s.getAnalyticsPerformance)
-			r.Get("/properties/{id}/analytics/demand", s.getAnalyticsDemand)
-			r.Get("/properties/{id}/analytics/pace", s.getAnalyticsPace)
-			r.Get("/properties/{id}/analytics/returning-guests", s.getAnalyticsReturningGuests)
-			r.Get("/properties/{id}/analytics/guest-checkin-heatmap", s.getAnalyticsGuestCheckinHeatmap)
-			r.Post("/properties/{id}/analytics/guest-checkin/reconcile/run", s.runGuestCheckinReconcile)
-			r.Get("/admin/backup", s.getAdminBackup)
+				r.Get("/properties/{id}/message-templates", s.listMessageTemplates)
+				r.Post("/properties/{id}/message-templates", s.postMessageTemplate)
+				r.Patch("/properties/{id}/message-templates/{templateId}", s.patchMessageTemplate)
+				r.Delete("/properties/{id}/message-templates/{templateId}", s.deleteMessageTemplate)
+				r.Get("/properties/{id}/messages/generate", s.generateMessage)
+				r.Get("/properties/{id}/messages/cleaning", s.generateCleaningMessage)
+				r.Get("/properties/{id}/analytics/freshness", s.getAnalyticsFreshness)
+				r.Get("/properties/{id}/analytics/outlook", s.getAnalyticsOutlook)
+				r.Get("/properties/{id}/analytics/performance", s.getAnalyticsPerformance)
+				r.Get("/properties/{id}/analytics/demand", s.getAnalyticsDemand)
+				r.Get("/properties/{id}/analytics/pace", s.getAnalyticsPace)
+				r.Get("/properties/{id}/analytics/returning-guests", s.getAnalyticsReturningGuests)
+				r.Get("/properties/{id}/analytics/guest-checkin-heatmap", s.getAnalyticsGuestCheckinHeatmap)
+				r.Post("/properties/{id}/analytics/guest-checkin/reconcile/run", s.runGuestCheckinReconcile)
+				r.Get("/admin/backup", s.getAdminBackup)
 			})
 		})
 	})

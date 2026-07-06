@@ -50,10 +50,14 @@ const dialogMode = ref<'close' | 'external_sale'>('close')
 const dialogBusy = ref(false)
 const dialogError = ref('')
 const dialogTarget = ref<Occ | null>(null)
+const dialogTargetNight = ref('')
 const dialogStayLabel = computed(() => {
   const o = dialogTarget.value
   if (!o) return ''
-  return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
+  const prefix = dialogTargetNight.value
+    ? `${dialogTargetNight.value} night from `
+    : ''
+  return `${prefix}${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
 })
 // Calendar day-actions popup state (PMS_14).
 const dayDialogOpen = ref(false)
@@ -71,9 +75,20 @@ function stayLabel(o: Occ) {
   return `${o.start_at?.slice(0, 10)} → ${o.end_at?.slice(0, 10)} · ${o.raw_summary || o.source_event_uid || 'Stay'}`
 }
 
+function stayNights(o: Occ) {
+  const start = Date.parse(o.start_at)
+  const end = Date.parse(o.end_at)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0
+  return Math.round((end - start) / 86_400_000)
+}
+
+function canSplitNights(o: Occ) {
+  return !isLabelled(o) && stayNights(o) > 1
+}
+
 function openCloseFromDay(o: Occ) {
   dayDialogOpen.value = false
-  openCloseDialog(o)
+  openCloseDialog(o, dayDialogDate.value)
 }
 function openExternalSaleFromDay(o: Occ) {
   dayDialogOpen.value = false
@@ -83,8 +98,13 @@ async function reopenFromDay(o: Occ) {
   dayDialogOpen.value = false
   await reopenStay(o)
 }
-function openCloseDialog(o: Occ) {
+async function splitNightsFromDay(o: Occ) {
+  dayDialogOpen.value = false
+  await splitStayNights(o)
+}
+function openCloseDialog(o: Occ, night = '') {
   dialogTarget.value = o
+  dialogTargetNight.value = night
   dialogMode.value = 'close'
   dialogError.value = ''
   dialogOpen.value = true
@@ -92,6 +112,7 @@ function openCloseDialog(o: Occ) {
 
 function openExternalSaleDialog(o: Occ) {
   dialogTarget.value = o
+  dialogTargetNight.value = ''
   dialogMode.value = 'external_sale'
   dialogError.value = ''
   dialogOpen.value = true
@@ -107,8 +128,13 @@ async function submitDialog(payload: ClosureSubmit) {
   dialogBusy.value = true
   dialogError.value = ''
   try {
-    await api(path, { method: 'POST', json: payload })
+    const json =
+      dialogMode.value === 'close' && dialogTargetNight.value
+        ? { ...payload, night: dialogTargetNight.value }
+        : payload
+    await api(path, { method: 'POST', json })
     dialogOpen.value = false
+    dialogTargetNight.value = ''
     success.value = dialogMode.value === 'close' ? 'Stay marked as closed.' : 'Stay marked as externally sold.'
     if (tab.value === 'list') await loadList()
     else if (tab.value === 'calendar') await loadCalendar()
@@ -136,6 +162,26 @@ async function reopenStay(o: Occ) {
     else if (tab.value === 'calendar') await loadCalendar()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to reopen stay'
+  }
+}
+
+async function splitStayNights(o: Occ) {
+  if (!pid.value) return
+  const ok = await confirm({
+    title: 'Split into nightly stays',
+    message: `Split ${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} into one row per night? Future ICS syncs will preserve this manual split.`,
+    confirmLabel: 'Split nights',
+  })
+  if (!ok) return
+  error.value = ''
+  success.value = ''
+  try {
+    await api(`/api/properties/${pid.value}/occupancies/${o.id}/split-nights`, { method: 'POST' })
+    success.value = 'Stay split into nightly rows.'
+    if (tab.value === 'list') await loadList()
+    else if (tab.value === 'calendar') await loadCalendar()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to split stay'
   }
 }
 
@@ -400,6 +446,9 @@ watch(
                   </UiButton>
                   <UiButton size="sm" variant="ghost" :disabled="dialogBusy" @click="openExternalSaleFromDay(o)">
                     Externally sold
+                  </UiButton>
+                  <UiButton v-if="canSplitNights(o)" size="sm" variant="ghost" :disabled="dialogBusy" @click="splitNightsFromDay(o)">
+                    Split nights
                   </UiButton>
                 </template>
                 <UiButton v-else size="sm" variant="ghost" :disabled="dialogBusy" @click="reopenFromDay(o)">
