@@ -587,6 +587,7 @@ watch(
       <FinanceTransactionsTab
         v-if="tab === 'transactions'"
         v-model:tx-form="txForm"
+        :property-id="pid"
         :transactions="transactions"
         :categories="categories"
         :payout-import-file="payoutImportFile"

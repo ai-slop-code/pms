@@ -15,6 +15,7 @@ import { displayDirection, displaySource, directionTone, type TxForm } from './h
 import type { FinanceCategory, FinanceTransaction } from '@/api/types/finance'
 
 const props = defineProps<{
+  propertyId: number | null
   transactions: FinanceTransaction[]
   categories: FinanceCategory[]
   payoutImportFile: File | null
@@ -37,6 +38,10 @@ const emit = defineEmits<{
 }>()
 
 const eur = (cents?: number | null) => formatEuros(cents ?? 0)
+
+const attachmentFileName = (path: string) => path.split('/').pop() || path
+const attachmentDownloadUrl = (tx: FinanceTransaction) =>
+  `/api/properties/${props.propertyId}/finance/transactions/${tx.id}/attachment/download`
 
 const filteredTransactions = computed(() => {
   return props.transactions.filter((t) => {
@@ -161,7 +166,14 @@ const filteredTransactions = computed(() => {
             >{{ t.mapped_to_stay ? 'Yes' : 'No' }}</UiBadge>
             <span v-else class="muted">—</span>
           </td>
-          <td class="muted">{{ t.attachment_path || '—' }}</td>
+          <td>
+            <a
+              v-if="t.attachment_path && propertyId"
+              class="attachment-link"
+              :href="attachmentDownloadUrl(t)"
+            >{{ attachmentFileName(t.attachment_path) }}</a>
+            <span v-else class="muted">—</span>
+          </td>
           <td class="row-actions">
             <UiButton v-if="!t.is_auto_generated" variant="ghost" size="sm" @click="emit('edit', t)">Edit</UiButton>
             <UiButton v-if="!t.is_auto_generated" variant="danger" size="sm" @click="emit('delete', t)">Delete</UiButton>
@@ -194,6 +206,11 @@ const filteredTransactions = computed(() => {
   color: var(--color-primary);
 }
 .action-link:hover { text-decoration: none; }
+.attachment-link {
+  color: var(--color-primary);
+  font-size: var(--font-size-sm);
+}
+.attachment-link:hover { text-decoration: none; }
 .payout-import {
   display: flex;
   align-items: flex-end;

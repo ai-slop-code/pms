@@ -535,6 +535,42 @@ func (s *Server) deleteFinanceTransaction(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) downloadFinanceTransactionAttachment(w http.ResponseWriter, r *http.Request) {
+	actor, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Finance, permissions.LevelRead)
+	if !ok {
+		return
+	}
+	tid, err := strconv.ParseInt(chi.URLParam(r, "transactionId"), 10, 64)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid transaction id")
+		return
+	}
+	tx, err := s.Store.GetFinanceTransactionByID(r.Context(), pid, tid)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "transaction not found")
+		return
+	}
+	if !tx.AttachmentPath.Valid || strings.TrimSpace(tx.AttachmentPath.String) == "" {
+		WriteError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	cleanRel := filepath.ToSlash(filepath.Clean(filepath.FromSlash(tx.AttachmentPath.String)))
+	wantPrefix := filepath.ToSlash(filepath.Join("attachments", fmt.Sprintf("%d", pid))) + "/"
+	if !strings.HasPrefix(cleanRel, wantPrefix) {
+		WriteError(w, http.StatusInternalServerError, "invalid attachment path")
+		return
+	}
+	fullPath, err := s.resolveDataFilePath(cleanRel)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "invalid attachment path")
+		return
+	}
+	filename := filepath.Base(cleanRel)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	s.audit(r, actor, "finance_attachment_download", "finance_transaction", strconv.FormatInt(tid, 10), "success")
+	http.ServeFile(w, r, fullPath)
+}
+
 func (s *Server) openFinanceMonth(w http.ResponseWriter, r *http.Request) {
 	s.syncFinanceGeneratedEntriesWithReason(w, r, "manual", "finance_month_open")
 }
