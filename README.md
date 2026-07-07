@@ -10,7 +10,8 @@ ad-hoc notes:
 - **Access management** — issues, rotates and revokes Nuki keypad codes
   per stay, with automatic expiry windows.
 - **Cleaning** — schedules, logs and analyses cleaner activity, plus
-  per-property fees, adjustments and payouts.
+  per-property fees, adjustments, payouts and optional Google Calendar
+  cleaning events.
 - **Finance** — tracks bookings, payouts, expenses and platform fees;
   reconciles imported booking-payout reports against actual stays.
 - **Invoicing** — generates compliant PDF invoices with sequential numbers,
@@ -230,6 +231,13 @@ cd frontend && npm audit --omit=dev      # SPA prod-tree audit
 ```
 
 CI runs the same matrix on every PR (`.github/workflows/ci.yml`).
+
+## Google Calendar Cleaning Sync
+
+PMS can create Google Calendar cleaning events after guest check-out. Setup
+requires a Google service account and a calendar shared with that account.
+See [docs/deployment/google-calendar-cleaning.md](docs/deployment/google-calendar-cleaning.md)
+for the step-by-step guide.
 
 ## Contributing
 

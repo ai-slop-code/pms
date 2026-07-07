@@ -37,6 +37,11 @@ Business-analyst view of the "manually mark a night as closed" feature
 introduced in v1.1: problem framing, definitions, stakeholder Q&A, and
 phased implementation order. Companion to PMS_12 §2.
 
+### `PMS_15_Google_Calendar_Cleaning_Events_Spec.md`
+Future native Google Calendar integration for checkout-driven cleaning
+events, including same-day turnover event-title logic, idempotent event
+reconciliation, Google credential handling, UI requirements, and tests.
+
 ## Recommended Reading Order
 1. `PMS_00_Implementation_Prompt.md`
 2. `PMS_01_Architecture_and_Global_Spec.md`
@@ -45,17 +50,23 @@ phased implementation order. Companion to PMS_12 §2.
 5. `PMS_04_Analytics_Data_Inventory.md`
 6. `PMS_13_Coding_Conventions.md`
 7. `PMS_14_Closed_Nights_BA_Spec.md`
-8. `initial_prompt.md`
-9. `Prompt_answers.md`
+8. `PMS_15_Google_Calendar_Cleaning_Events_Spec.md`
+9. `initial_prompt.md`
+10. `Prompt_answers.md`
 
 ## External API references
 - **Nuki Smart Lock API** (OpenAPI / Swagger UI): https://api.nuki.io/
+- **Google Calendar API**: https://developers.google.com/calendar/api
 
 ## Important v1 Scope Note
 Direct Google Calendar integration is not part of v1. The intended v1 approach is:
 - sync occupancies from ICS
 - expose occupancies through the authenticated JSON endpoint
 - use `n8n` externally if Google Calendar synchronization is needed
+
+When native Google Calendar cleaning-event sync is selected for a later phase,
+use `PMS_15_Google_Calendar_Cleaning_Events_Spec.md` as the implementation
+source of truth.
 
 ## Suggested Usage
 - Use `PMS_00_Implementation_Prompt.md` when starting implementation with an AI coding agent.

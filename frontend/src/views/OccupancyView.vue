@@ -16,6 +16,7 @@ import OccupancyClosureDialog, {
 import UiDialog from '@/components/ui/UiDialog.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
+import UiInput from '@/components/ui/UiInput.vue'
 import { closureLabel, closureTone, isLabelled, formatExternalAmount } from '@/views/occupancy/closure'
 import { monthKey, parseMonthKey } from '@/utils/month'
 import type {
@@ -51,13 +52,22 @@ const dialogBusy = ref(false)
 const dialogError = ref('')
 const dialogTarget = ref<Occ | null>(null)
 const dialogTargetNight = ref('')
+const splitDialogOpen = ref(false)
+const splitDialogBusy = ref(false)
+const splitDialogError = ref('')
+const splitDialogTarget = ref<Occ | null>(null)
+const splitStartNight = ref('')
+const splitEndNight = ref('')
 const dialogStayLabel = computed(() => {
   const o = dialogTarget.value
   if (!o) return ''
-  const prefix = dialogTargetNight.value
-    ? `${dialogTargetNight.value} night from `
-    : ''
+  const prefix = dialogTargetNight.value ? `${dialogTargetNight.value} night from ` : ''
   return `${prefix}${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
+})
+const splitDialogStayLabel = computed(() => {
+  const o = splitDialogTarget.value
+  if (!o) return ''
+  return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
 })
 // Calendar day-actions popup state (PMS_14).
 const dayDialogOpen = ref(false)
@@ -98,9 +108,9 @@ async function reopenFromDay(o: Occ) {
   dayDialogOpen.value = false
   await reopenStay(o)
 }
-async function splitNightsFromDay(o: Occ) {
+function splitNightsFromDay(o: Occ) {
   dayDialogOpen.value = false
-  await splitStayNights(o)
+  openSplitDialog(o, dayDialogDate.value)
 }
 function openCloseDialog(o: Occ, night = '') {
   dialogTarget.value = o
@@ -135,7 +145,8 @@ async function submitDialog(payload: ClosureSubmit) {
     await api(path, { method: 'POST', json })
     dialogOpen.value = false
     dialogTargetNight.value = ''
-    success.value = dialogMode.value === 'close' ? 'Stay marked as closed.' : 'Stay marked as externally sold.'
+    success.value =
+      dialogMode.value === 'close' ? 'Stay marked as closed.' : 'Stay marked as externally sold.'
     if (tab.value === 'list') await loadList()
     else if (tab.value === 'calendar') await loadCalendar()
   } catch (e) {
@@ -165,24 +176,64 @@ async function reopenStay(o: Occ) {
   }
 }
 
-async function splitStayNights(o: Occ) {
-  if (!pid.value) return
-  const ok = await confirm({
-    title: 'Split into nightly stays',
-    message: `Split ${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} into one row per night? Future ICS syncs will preserve this manual split.`,
-    confirmLabel: 'Split nights',
-  })
-  if (!ok) return
+function openSplitDialog(o: Occ, night = '') {
+  const stayStart = o.start_at.slice(0, 10)
+  const stayLastNight = addISODate(o.end_at.slice(0, 10), -1)
+  const initialNight = night && night >= stayStart && night <= stayLastNight ? night : stayStart
+  splitDialogTarget.value = o
+  splitStartNight.value = initialNight
+  splitEndNight.value = initialNight
+  splitDialogError.value = ''
+  splitDialogOpen.value = true
+}
+
+async function submitSplitDialog() {
+  if (!pid.value || !splitDialogTarget.value) return
   error.value = ''
   success.value = ''
+  splitDialogError.value = ''
+  const o = splitDialogTarget.value
+  const stayStart = o.start_at.slice(0, 10)
+  const stayLastNight = addISODate(o.end_at.slice(0, 10), -1)
+  if (!isISODate(splitStartNight.value) || !isISODate(splitEndNight.value)) {
+    splitDialogError.value = 'Choose a valid first and last night.'
+    return
+  }
+  if (
+    splitStartNight.value < stayStart ||
+    splitEndNight.value > stayLastNight ||
+    splitEndNight.value < splitStartNight.value
+  ) {
+    splitDialogError.value = `Choose nights inside ${stayStart} → ${stayLastNight}.`
+    return
+  }
+  const checkoutDate = addISODate(splitEndNight.value, 1)
   try {
-    await api(`/api/properties/${pid.value}/occupancies/${o.id}/split-nights`, { method: 'POST' })
+    splitDialogBusy.value = true
+    await api(`/api/properties/${pid.value}/occupancies/${o.id}/split-nights`, {
+      method: 'POST',
+      json: { start_date: splitStartNight.value, end_date: checkoutDate },
+    })
+    splitDialogOpen.value = false
     success.value = 'Stay split into nightly rows.'
     if (tab.value === 'list') await loadList()
     else if (tab.value === 'calendar') await loadCalendar()
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to split stay'
+    splitDialogError.value = e instanceof Error ? e.message : 'Failed to split stay'
+  } finally {
+    splitDialogBusy.value = false
   }
+}
+
+function isISODate(v: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) && addISODate(v, 0) === v
+}
+
+function addISODate(v: string, days: number) {
+  const [year, monthNumber, day] = v.split('-').map((part) => Number(part))
+  if (!year || !monthNumber || !day) return ''
+  const d = new Date(Date.UTC(year, monthNumber - 1, day + days))
+  return d.toISOString().slice(0, 10)
 }
 
 function prevMonth() {
@@ -249,10 +300,9 @@ async function runManualSync() {
   error.value = ''
   success.value = ''
   try {
-    const r = await api<{ ok: boolean; error?: string }>(
-      `/api/properties/${pid.value}/occupancy-sync/run`,
-      { method: 'POST' },
-    )
+    const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/occupancy-sync/run`, {
+      method: 'POST',
+    })
     if (!r.ok) error.value = r.error || 'Occupancy sync failed'
     else success.value = 'Occupancy sync completed.'
     await loadSyncPanel()
@@ -287,10 +337,10 @@ async function createToken() {
   success.value = ''
   newTokenPlain.value = ''
   try {
-    const r = await api<{ id: number; token: string }>(
-      `/api/properties/${pid.value}/occupancy-api-tokens`,
-      { method: 'POST', json: {} },
-    )
+    const r = await api<{ id: number; token: string }>(`/api/properties/${pid.value}/occupancy-api-tokens`, {
+      method: 'POST',
+      json: {},
+    })
     newTokenPlain.value = r.token
     await loadSyncPanel()
     success.value = 'Export token created. Save it now; it will not be shown again.'
@@ -419,6 +469,40 @@ watch(
         @submit="submitDialog"
       />
 
+      <UiDialog v-model:open="splitDialogOpen" title="Split nights" size="sm">
+        <form class="split-dialog" @submit.prevent="submitSplitDialog">
+          <p class="split-dialog__copy">
+            Choose the nights to split out for {{ splitDialogStayLabel }}. Dates are nights, so a one-night
+            maintenance split uses the same first and last night.
+          </p>
+          <div class="split-dialog__grid">
+            <UiInput
+              v-model="splitStartNight"
+              type="date"
+              label="First night"
+              required
+              :disabled="splitDialogBusy"
+            />
+            <UiInput
+              v-model="splitEndNight"
+              type="date"
+              label="Last night"
+              required
+              :disabled="splitDialogBusy"
+            />
+          </div>
+          <p v-if="splitDialogError" class="split-dialog__error">{{ splitDialogError }}</p>
+        </form>
+        <template #footer>
+          <UiButton variant="ghost" :disabled="splitDialogBusy" @click="splitDialogOpen = false"
+            >Cancel</UiButton
+          >
+          <UiButton variant="primary" :loading="splitDialogBusy" @click="submitSplitDialog"
+            >Split selected nights</UiButton
+          >
+        </template>
+      </UiDialog>
+
       <UiDialog
         v-model:open="dayDialogOpen"
         :title="dayDialogDate ? `Stays on ${dayDialogDate}` : 'Stays'"
@@ -441,17 +525,39 @@ watch(
               </div>
               <div class="day-dialog__actions">
                 <template v-if="!isLabelled(o)">
-                  <UiButton size="sm" variant="ghost" :disabled="dialogBusy" @click="openCloseFromDay(o)">
+                  <UiButton
+                    size="sm"
+                    variant="ghost"
+                    :disabled="dialogBusy || splitDialogBusy"
+                    @click="openCloseFromDay(o)"
+                  >
                     Close
                   </UiButton>
-                  <UiButton size="sm" variant="ghost" :disabled="dialogBusy" @click="openExternalSaleFromDay(o)">
+                  <UiButton
+                    size="sm"
+                    variant="ghost"
+                    :disabled="dialogBusy || splitDialogBusy"
+                    @click="openExternalSaleFromDay(o)"
+                  >
                     Externally sold
                   </UiButton>
-                  <UiButton v-if="canSplitNights(o)" size="sm" variant="ghost" :disabled="dialogBusy" @click="splitNightsFromDay(o)">
+                  <UiButton
+                    v-if="canSplitNights(o)"
+                    size="sm"
+                    variant="ghost"
+                    :disabled="dialogBusy || splitDialogBusy"
+                    @click="splitNightsFromDay(o)"
+                  >
                     Split nights
                   </UiButton>
                 </template>
-                <UiButton v-else size="sm" variant="ghost" :disabled="dialogBusy" @click="reopenFromDay(o)">
+                <UiButton
+                  v-else
+                  size="sm"
+                  variant="ghost"
+                  :disabled="dialogBusy || splitDialogBusy"
+                  @click="reopenFromDay(o)"
+                >
                   Reopen
                 </UiButton>
               </div>
@@ -467,6 +573,25 @@ watch(
 </template>
 
 <style scoped>
+.split-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.split-dialog__copy {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+.split-dialog__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.split-dialog__error {
+  margin: 0;
+  color: var(--danger-fg);
+  font-size: var(--font-size-sm);
+}
 .day-dialog__empty {
   margin: 0;
   color: var(--color-text-muted);
@@ -511,5 +636,10 @@ watch(
   display: flex;
   gap: var(--space-1);
   flex-shrink: 0;
+}
+@media (max-width: 767.98px) {
+  .split-dialog__grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

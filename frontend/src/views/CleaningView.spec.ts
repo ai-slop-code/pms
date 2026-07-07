@@ -50,7 +50,7 @@ function seedProperty(id = 3) {
 }
 
 /**
- * The view fires seven parallel `Promise.all` calls on mount. Route each by
+ * The view fires several parallel `Promise.all` calls on mount. Route each by
  * URL substring so tests only describe the pieces they care about. Anything
  * unmatched returns an empty-shaped response the view treats as harmless.
  */
@@ -71,6 +71,19 @@ function apiRouter(handlers: Record<string, () => unknown>) {
     if (url.includes('/cleaning/heatmap')) return Promise.resolve({ buckets: [] })
     if (url.includes('/cleaning/fees')) return Promise.resolve({ fees: [] })
     if (url.includes('/cleaning/adjustments')) return Promise.resolve({ adjustments: [] })
+    if (url.includes('/cleaning-calendar/settings')) {
+      return Promise.resolve({
+        settings: {
+          enabled: false,
+          default_duration_minutes: 180,
+          title_prefix: 'Upratovanie:',
+          same_day_label: 'Pride Host',
+          no_guest_label: 'Bez Hosta',
+          google_client_configured: false,
+        },
+      })
+    }
+    if (url.includes('/cleaning-calendar/events')) return Promise.resolve({ events: [] })
     if (url.includes('/settings')) return Promise.resolve({ profile: {} })
     if (url.includes('/nuki/codes')) return Promise.resolve({ codes: [] })
     return Promise.resolve({})
@@ -112,8 +125,45 @@ describe('CleaningView', () => {
     await flushPromises()
     expect(w.text()).toContain('2026-04-02')
     expect(w.text()).toContain('2026-04-05')
-    // Seven GET calls on mount.
-    expect(apiMock.mock.calls.length).toBeGreaterThanOrEqual(7)
+    expect(apiMock.mock.calls.length).toBeGreaterThanOrEqual(9)
+  })
+
+  it('renders Google cleaning calendar settings and events', async () => {
+    seedProperty()
+    apiRouter({
+      '/cleaning-calendar/settings': () => ({
+        settings: {
+          enabled: true,
+          calendar_id: 'cleaning@example.com',
+          default_duration_minutes: 180,
+          title_prefix: 'Upratovanie:',
+          same_day_label: 'Pride Host',
+          no_guest_label: 'Bez Hosta',
+          google_client_configured: true,
+        },
+      }),
+      '/cleaning-calendar/events': () => ({
+        events: [
+          {
+            id: 9,
+            occupancy_id: 3,
+            google_calendar_id: 'cleaning@example.com',
+            cleaning_date: '2026-04-02',
+            starts_at: '2026-04-02T09:00:00Z',
+            ends_at: '2026-04-02T12:00:00Z',
+            same_day_arrival: false,
+            title: 'Upratovanie: Bez Hosta',
+            status: 'synced',
+            updated_at: '2026-04-01T00:00:00Z',
+          },
+        ],
+      }),
+    })
+    const w = mount(CleaningView)
+    await flushPromises()
+    expect(w.text()).toContain('Google cleaning calendar')
+    expect(w.text()).toContain('Upratovanie: Bez Hosta')
+    expect(w.text()).toContain('synced')
   })
 
   it('surfaces an error banner when the initial load rejects', async () => {

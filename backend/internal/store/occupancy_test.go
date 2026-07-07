@@ -275,3 +275,64 @@ func TestSplitOccupancyIntoNights_CreatesManualNightRows(t *testing.T) {
 		t.Fatalf("active manual nights=%d want 2", activeManual)
 	}
 }
+
+func TestSplitOccupancyIntoNightRange_SplitsOnlySelectedNights(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "owner-split-range@test.local", "hash", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProperty(ctx, u.ID, "P1", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := st.StartOccupancySyncRun(ctx, p.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occ := &Occupancy{
+		PropertyID:     p.ID,
+		SourceType:     "booking_ics",
+		SourceEventUID: "august-reservation",
+		StartAt:        time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC),
+		EndAt:          time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC),
+		Status:         "active",
+		RawSummary:     sql.NullString{String: "Reservation", Valid: true},
+		ContentHash:    "h1",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := st.GetOccupancyBySourceEventUID(ctx, p.ID, "august-reservation")
+	if err != nil || saved == nil {
+		t.Fatalf("occupancy err=%v nil=%v", err, saved == nil)
+	}
+	if err := st.SplitOccupancyIntoNightRange(ctx, p.ID, saved.ID, "2026-08-10", "2026-08-11"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListOccupancies(ctx, p.ID, "", time.UTC, nil, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byUID := map[string]Occupancy{}
+	for _, row := range rows {
+		byUID[row.SourceEventUID] = row
+	}
+	if got := byUID["august-reservation"].Status; got != "deleted_from_source" {
+		t.Fatalf("original status=%s want deleted_from_source", got)
+	}
+	before := byUID["manual_split:august-reservation:before:20260807"]
+	if before.Status != "active" || before.StartAt.Format(time.RFC3339) != "2026-08-07T00:00:00Z" || before.EndAt.Format(time.RFC3339) != "2026-08-10T00:00:00Z" {
+		t.Fatalf("before row=%+v", before)
+	}
+	night := byUID["manual_split:august-reservation:night:20260810"]
+	if night.Status != "active" || night.StartAt.Format(time.RFC3339) != "2026-08-10T00:00:00Z" || night.EndAt.Format(time.RFC3339) != "2026-08-11T00:00:00Z" {
+		t.Fatalf("night row=%+v", night)
+	}
+	for uid := range byUID {
+		if strings.HasPrefix(uid, "manual_split:august-reservation:night:") && uid != "manual_split:august-reservation:night:20260810" {
+			t.Fatalf("unexpected split night row %s", uid)
+		}
+	}
+}

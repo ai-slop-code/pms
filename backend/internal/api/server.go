@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"pms/backend/internal/auth"
+	"pms/backend/internal/cleaningcalendar"
 	"pms/backend/internal/ctxuser"
 	"pms/backend/internal/middleware"
 	"pms/backend/internal/nuki"
@@ -24,6 +25,7 @@ type Server struct {
 	SessionTTL       time.Duration
 	Occ              *occupancy.Service
 	Nuki             *nuki.Service
+	CleaningCalendar *cleaningcalendar.Service
 	DataDir          string
 	CookieSecure     bool
 	CookieSameSite   http.SameSite
@@ -169,6 +171,15 @@ func (s *Server) Routes() chi.Router {
 				r.Get("/properties/{id}/cleaning/adjustments", s.getCleaningAdjustments)
 				r.Post("/properties/{id}/cleaning/adjustments", s.postCleaningAdjustment)
 				r.Post("/properties/{id}/cleaning/reconcile/run", s.runCleaningReconcile)
+				r.Get("/properties/{id}/cleaning-calendar/settings", s.getCleaningCalendarSettings)
+				r.Patch("/properties/{id}/cleaning-calendar/settings", s.patchCleaningCalendarSettings)
+				r.Get("/properties/{id}/cleaning-calendar/google/calendars", s.getCleaningCalendarGoogleCalendars)
+				r.Post("/properties/{id}/cleaning-calendar/google/connect", s.postCleaningCalendarGoogleConnect)
+				r.Post("/properties/{id}/cleaning-calendar/google/disconnect", s.postCleaningCalendarGoogleDisconnect)
+				r.Get("/properties/{id}/cleaning-calendar/events", s.listCleaningCalendarEvents)
+				r.Get("/properties/{id}/cleaning-calendar/runs", s.listCleaningCalendarRuns)
+				r.Post("/properties/{id}/cleaning-calendar/reconcile", s.runCleaningCalendarReconcile)
+				r.Post("/properties/{id}/cleaning-calendar/events/{eventId}/retry", s.retryCleaningCalendarEvent)
 				r.Get("/properties/{id}/finance/transactions", s.listFinanceTransactions)
 				r.Post("/properties/{id}/finance/transactions", s.postFinanceTransaction)
 				r.Get("/properties/{id}/finance/booking-payouts", s.listFinanceBookingPayouts)

@@ -15,6 +15,9 @@ place rather than rebuilding the file from snippets in this doc. Sections
 below only highlight the variables that *change meaning* between layouts
 (e.g. `PMS_TRUSTED_PROXY`, `PMS_API_BASE_URL`, `PMS_COOKIE_SAMESITE`).
 
+For Google Calendar cleaning-event sync setup, see
+[`google-calendar-cleaning.md`](google-calendar-cleaning.md).
+
 ## 1. Docker Compose (recommended)
 
 Prerequisites: Docker ≥ 24, a domain pointing at the host, ports 80/443 open.

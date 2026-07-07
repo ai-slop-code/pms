@@ -51,6 +51,11 @@ type externalSaleBody struct {
 	Reason         string `json:"reason"`
 }
 
+type splitNightsBody struct {
+	StartDate string `json:"start_date"`
+	EndDate   string `json:"end_date"`
+}
+
 func parsePropertyAndOccupancyIDs(r *http.Request) (int64, int64, error) {
 	propID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -165,9 +170,18 @@ func (s *Server) postOccupancySplitNights(w http.ResponseWriter, r *http.Request
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	var body splitNightsBody
+	if r.ContentLength != 0 {
+		if err := ReadJSON(r, &body); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+	}
+	body.StartDate = strings.TrimSpace(body.StartDate)
+	body.EndDate = strings.TrimSpace(body.EndDate)
 	idStr := strconv.FormatInt(occID, 10)
 	s.audit(r, actor, "occupancy_split_nights", "occupancy", idStr, "attempt")
-	err = s.Store.SplitOccupancyIntoNights(r.Context(), propID, occID)
+	err = s.Store.SplitOccupancyIntoNightRange(r.Context(), propID, occID, body.StartDate, body.EndDate)
 	if err != nil {
 		writeOccupancyLabelError(w, err)
 		return
@@ -202,6 +216,8 @@ func writeOccupancyLabelError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrOccupancyAlreadyLabelled):
 		WriteError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, store.ErrInvalidOccupancySplit):
+		WriteError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, sql.ErrNoRows):
 		WriteError(w, http.StatusNotFound, "occupancy not found")
 	default:

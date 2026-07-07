@@ -22,6 +22,7 @@ import (
 	"pms/backend/internal/api"
 	"pms/backend/internal/auth"
 	"pms/backend/internal/backup"
+	"pms/backend/internal/cleaningcalendar"
 	"pms/backend/internal/config"
 	"pms/backend/internal/crypto/secretbox"
 	"pms/backend/internal/dbconn"
@@ -100,6 +101,25 @@ func main() {
 		log.Printf("created first super_admin user %s (must change password on first login)", cfg.FirstSuperadmin.Email)
 	}
 	occSvc := &occupancy.Service{Store: st}
+	var googleCalendarClient cleaningcalendar.CalendarClient
+	if raw := os.Getenv("PMS_GOOGLE_SERVICE_ACCOUNT_JSON"); raw != "" {
+		client, err := cleaningcalendar.NewServiceAccountClient([]byte(raw), nil)
+		if err != nil {
+			log.Printf("google cleaning calendar: invalid PMS_GOOGLE_SERVICE_ACCOUNT_JSON: %v", err)
+		} else {
+			googleCalendarClient = client
+		}
+	} else if path := os.Getenv("PMS_GOOGLE_SERVICE_ACCOUNT_FILE"); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("google cleaning calendar: read PMS_GOOGLE_SERVICE_ACCOUNT_FILE: %v", err)
+		} else if client, err := cleaningcalendar.NewServiceAccountClient(raw, nil); err != nil {
+			log.Printf("google cleaning calendar: invalid PMS_GOOGLE_SERVICE_ACCOUNT_FILE: %v", err)
+		} else {
+			googleCalendarClient = client
+		}
+	}
+	cleaningCalendarSvc := &cleaningcalendar.Service{Store: st, Client: googleCalendarClient}
 	nukiSvc := &nuki.Service{
 		Store: st,
 		Client: nuki.NewClient(nuki.Config{
@@ -124,6 +144,7 @@ func main() {
 		SessionTTL:              cfg.SessionTTL,
 		Occ:                     occSvc,
 		Nuki:                    nukiSvc,
+		CleaningCalendar:        cleaningCalendarSvc,
 		DataDir:                 cfg.DataDir,
 		CookieSecure:            cfg.CookieSecure,
 		CookieSameSite:          sameSite,
@@ -167,8 +188,36 @@ func main() {
 				log.Printf("occupancy sync property %d: %v", id, err)
 				continue
 			}
+			if _, err := cleaningCalendarSvc.ReconcileProperty(bg, id, "occupancy_sync"); err != nil {
+				log.Printf("cleaning calendar reconcile property %d: %v", id, err)
+			}
 		}
 		metrics.RecordSchedulerRun("occupancy_sync", "ran")
+	})
+
+	go runScheduler(rootCtx, "cleaning_calendar_reconcile", cfg.OccupancySyncInterval, func(bg context.Context) {
+		ok, err := st.TryAcquireJobLease(bg, "cleaning_calendar_reconcile", instanceID, leaseTTL(cfg.OccupancySyncInterval))
+		if err != nil {
+			metrics.RecordSchedulerRun("cleaning_calendar_reconcile", "error")
+			log.Printf("cleaning calendar scheduler: lease error: %v", err)
+			return
+		}
+		if !ok {
+			metrics.RecordSchedulerRun("cleaning_calendar_reconcile", "skipped")
+			return
+		}
+		ids, err := st.ListPropertyIDsWithGoogleCleaningSync(bg)
+		if err != nil {
+			metrics.RecordSchedulerRun("cleaning_calendar_reconcile", "error")
+			log.Printf("cleaning calendar scheduler: list properties: %v", err)
+			return
+		}
+		for _, id := range ids {
+			if _, err := cleaningCalendarSvc.ReconcileProperty(bg, id, "scheduled"); err != nil {
+				log.Printf("cleaning calendar reconcile property %d: %v", id, err)
+			}
+		}
+		metrics.RecordSchedulerRun("cleaning_calendar_reconcile", "ran")
 	})
 
 	go runScheduler(rootCtx, "nuki_cleanup", cfg.NukiCleanupInterval, func(bg context.Context) {

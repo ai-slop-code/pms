@@ -146,16 +146,16 @@ func (s *Server) getOccupancyExportPublic(w http.ResponseWriter, r *http.Request
 		return
 	}
 	type row struct {
-		ID               int64    `json:"id"`
-		PropertyID       int64    `json:"property_id"`
-		PropertyName     string   `json:"property_name"`
-		SourceType       string   `json:"source_type"`
-		ExternalEventUID string   `json:"external_event_uid"`
-		StayStart        string   `json:"stay_start"`
-		StayEnd          string   `json:"stay_end"`
-		Status           string   `json:"status"`
-		RawSummary       string   `json:"raw_summary,omitempty"`
-		LastSyncedAt     string   `json:"last_synced_at"`
+		ID               int64  `json:"id"`
+		PropertyID       int64  `json:"property_id"`
+		PropertyName     string `json:"property_name"`
+		SourceType       string `json:"source_type"`
+		ExternalEventUID string `json:"external_event_uid"`
+		StayStart        string `json:"stay_start"`
+		StayEnd          string `json:"stay_end"`
+		Status           string `json:"status"`
+		RawSummary       string `json:"raw_summary,omitempty"`
+		LastSyncedAt     string `json:"last_synced_at"`
 		// Categories mirrors the iCal CATEGORIES field per PMS_14 §3.5
 		// so downstream consumers can filter labelled nights without
 		// leaking the operator-entered amount/channel.
@@ -308,6 +308,12 @@ func (s *Server) postOccupancySyncRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: err.Error()})
 		return
+	}
+	if s.CleaningCalendar != nil {
+		if _, err := s.CleaningCalendar.ReconcileProperty(r.Context(), id, "occupancy_sync"); err != nil {
+			WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: "occupancy synced, cleaning calendar failed: " + err.Error()})
+			return
+		}
 	}
 	s.audit(r, actor, "occupancy_sync", "property", strconv.FormatInt(id, 10), "success")
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})

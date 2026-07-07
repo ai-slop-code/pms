@@ -12,6 +12,7 @@ import UiSelect from '@/components/ui/UiSelect.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiCard from '@/components/ui/UiCard.vue'
 import UiKpiCard from '@/components/ui/UiKpiCard.vue'
+import UiBadge from '@/components/ui/UiBadge.vue'
 import UiInlineBanner from '@/components/ui/UiInlineBanner.vue'
 import UiEmptyState from '@/components/ui/UiEmptyState.vue'
 import CleaningHeatmap from '@/views/cleaning/CleaningHeatmap.vue'
@@ -27,6 +28,9 @@ import type {
   CleaningHeatBucket,
   CleaningNukiCodeRow,
   CleaningReconcileStats,
+  CleaningCalendarSettings,
+  CleaningCalendarEventRow,
+  CleaningCalendarReconcileStats,
 } from '@/api/types/cleaning'
 
 // Preserve the "€0.00 for nullish" behaviour the inline helper used to have,
@@ -39,6 +43,9 @@ const loading = ref(false)
 const savingFee = ref(false)
 const savingAdjustment = ref(false)
 const reconciling = ref(false)
+const savingCalendarSettings = ref(false)
+const reconcilingCalendar = ref(false)
+const retryingCalendarEventID = ref<number | null>(null)
 const error = ref('')
 const success = ref('')
 
@@ -48,6 +55,8 @@ const adjustments = ref<CleaningAdjustmentRow[]>([])
 const heatmap = ref<CleaningHeatBucket[]>([])
 const summary = ref<CleaningSummary | null>(null)
 const cleanerAuthID = ref('')
+const calendarSettings = ref<CleaningCalendarSettings | null>(null)
+const calendarEvents = ref<CleaningCalendarEventRow[]>([])
 
 const keypadAuthCandidates = ref<Array<{ value: string; label: string }>>([])
 const savingCleanerAuthID = ref(false)
@@ -59,12 +68,21 @@ const adjustmentForm = ref({
   reason: '',
 })
 
+const calendarForm = ref({
+  enabled: 'false',
+  calendar_id: '',
+  default_duration_minutes: 180,
+  title_prefix: 'Upratovanie:',
+  same_day_label: 'Pride Host',
+  no_guest_label: 'Bez Hosta',
+})
+
 async function loadAll() {
   if (!pid.value) return
   loading.value = true
   error.value = ''
   try {
-    const [logsRes, summaryRes, heatmapRes, feesRes, adjustmentsRes, settingsRes, codesRes] = await Promise.all([
+    const [logsRes, summaryRes, heatmapRes, feesRes, adjustmentsRes, settingsRes, codesRes, calendarSettingsRes, calendarEventsRes] = await Promise.all([
       api<{ logs: CleaningLogRow[] }>(`/api/properties/${pid.value}/cleaning/logs?month=${encodeURIComponent(month.value)}`),
       api<CleaningSummary>(`/api/properties/${pid.value}/cleaning/summary?month=${encodeURIComponent(month.value)}`),
       api<{ buckets: CleaningHeatBucket[] }>(`/api/properties/${pid.value}/cleaning/heatmap?month=${encodeURIComponent(month.value)}`),
@@ -74,12 +92,26 @@ async function loadAll() {
       ),
       api<{ profile: { cleaner_nuki_auth_id?: string } }>(`/api/properties/${pid.value}/settings`),
       api<{ codes: CleaningNukiCodeRow[] }>(`/api/properties/${pid.value}/nuki/codes`),
+      api<{ settings: CleaningCalendarSettings }>(`/api/properties/${pid.value}/cleaning-calendar/settings`),
+      api<{ events: CleaningCalendarEventRow[] }>(
+        `/api/properties/${pid.value}/cleaning-calendar/events?month=${encodeURIComponent(month.value)}`
+      ),
     ])
     logs.value = logsRes.logs
     summary.value = summaryRes
     heatmap.value = heatmapRes.buckets
     fees.value = feesRes.fees
     adjustments.value = adjustmentsRes.adjustments
+    calendarSettings.value = calendarSettingsRes.settings
+    calendarEvents.value = calendarEventsRes.events
+    calendarForm.value = {
+      enabled: calendarSettingsRes.settings.enabled ? 'true' : 'false',
+      calendar_id: calendarSettingsRes.settings.calendar_id || '',
+      default_duration_minutes: calendarSettingsRes.settings.default_duration_minutes,
+      title_prefix: calendarSettingsRes.settings.title_prefix,
+      same_day_label: calendarSettingsRes.settings.same_day_label,
+      no_guest_label: calendarSettingsRes.settings.no_guest_label,
+    }
     cleanerAuthID.value = settingsRes.profile?.cleaner_nuki_auth_id || ''
     if (!cleanerAuthID.value.trim()) {
       showCleanerAuthConfig.value = true
@@ -107,6 +139,88 @@ async function loadAll() {
   } finally {
     loading.value = false
   }
+}
+
+async function saveCalendarSettings() {
+  if (!pid.value) return
+  savingCalendarSettings.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    const res = await api<{ settings: CleaningCalendarSettings }>(
+      `/api/properties/${pid.value}/cleaning-calendar/settings`,
+      {
+        method: 'PATCH',
+        json: {
+          enabled: calendarForm.value.enabled === 'true',
+          calendar_id: calendarForm.value.calendar_id.trim() || null,
+          default_duration_minutes: Number(calendarForm.value.default_duration_minutes) || 180,
+          title_prefix: calendarForm.value.title_prefix.trim() || 'Upratovanie:',
+          same_day_label: calendarForm.value.same_day_label.trim() || 'Pride Host',
+          no_guest_label: calendarForm.value.no_guest_label.trim() || 'Bez Hosta',
+        },
+      }
+    )
+    calendarSettings.value = res.settings
+    success.value = 'Google cleaning calendar settings saved.'
+    await loadAll()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to save Google Calendar settings'
+  } finally {
+    savingCalendarSettings.value = false
+  }
+}
+
+async function runCalendarReconcileNow() {
+  if (!pid.value) return
+  reconcilingCalendar.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok: boolean; error?: string; stats?: CleaningCalendarReconcileStats }>(
+      `/api/properties/${pid.value}/cleaning-calendar/reconcile`,
+      { method: 'POST' }
+    )
+    if (!r.ok) {
+      error.value = r.error || 'Google cleaning calendar reconciliation failed'
+      await loadAll()
+      return
+    }
+    success.value = `Google cleaning calendar reconciled: seen ${r.stats?.events_seen ?? 0}, upserted ${r.stats?.events_upserted ?? 0}, removed ${r.stats?.events_removed ?? 0}.`
+    await loadAll()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to reconcile Google cleaning calendar'
+  } finally {
+    reconcilingCalendar.value = false
+  }
+}
+
+async function retryCalendarEvent(eventID: number) {
+  if (!pid.value) return
+  retryingCalendarEventID.value = eventID
+  error.value = ''
+  success.value = ''
+  try {
+    await api(`/api/properties/${pid.value}/cleaning-calendar/events/${eventID}/retry`, { method: 'POST' })
+    success.value = 'Google Calendar event retry completed.'
+    await loadAll()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to retry Google Calendar event'
+  } finally {
+    retryingCalendarEventID.value = null
+  }
+}
+
+function calendarStatusTone(status: CleaningCalendarEventRow['status']): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
+  if (status === 'synced') return 'success'
+  if (status === 'error') return 'danger'
+  if (status === 'pending') return 'warning'
+  return 'neutral'
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return '-'
+  return new Date(value).toLocaleString()
 }
 
 async function addFee(payload: {
@@ -248,6 +362,9 @@ watch([pid, month], () => {
           <UiButton variant="primary" :loading="reconciling" @click="runReconcileNow">
             Run reconciliation
           </UiButton>
+          <UiButton variant="secondary" :loading="reconcilingCalendar" @click="runCalendarReconcileNow">
+            Sync cleaning calendar
+          </UiButton>
           <UiButton
             v-if="hasCleanerAuthID && !showCleanerAuthConfig"
             variant="ghost"
@@ -284,6 +401,82 @@ watch([pid, month], () => {
             </div>
           </div>
         </UiCard>
+      </UiSection>
+
+      <UiSection
+        title="Google cleaning calendar"
+        description="Creates one PMS-managed Google Calendar event for each checkout and updates the title when a same-day guest appears."
+      >
+        <UiCard>
+          <UiInlineBanner
+            v-if="calendarSettings && !calendarSettings.google_client_configured"
+            tone="warning"
+            title="Google service account is not configured on the server. Events will stay in error until PMS_GOOGLE_SERVICE_ACCOUNT_JSON or PMS_GOOGLE_SERVICE_ACCOUNT_FILE is set."
+          />
+          <form class="calendar-form" @submit.prevent="saveCalendarSettings">
+            <UiSelect v-model="calendarForm.enabled" label="Calendar sync">
+              <option value="false">Disabled</option>
+              <option value="true">Enabled</option>
+            </UiSelect>
+            <UiInput
+              v-model="calendarForm.calendar_id"
+              label="Google Calendar ID"
+              placeholder="cleaning@example.com"
+            />
+            <UiInput
+              v-model.number="calendarForm.default_duration_minutes"
+              label="Default duration (minutes)"
+              type="number"
+              help="Used when there is no same-day check-in."
+            />
+            <UiInput v-model="calendarForm.title_prefix" label="Title prefix" />
+            <UiInput v-model="calendarForm.same_day_label" label="Same-day guest label" />
+            <UiInput v-model="calendarForm.no_guest_label" label="No-guest label" />
+            <div class="calendar-form__actions">
+              <UiButton type="submit" variant="primary" :loading="savingCalendarSettings">
+                Save calendar settings
+              </UiButton>
+              <UiButton variant="secondary" :loading="reconcilingCalendar" @click="runCalendarReconcileNow">
+                Reconcile now
+              </UiButton>
+            </div>
+          </form>
+        </UiCard>
+
+        <UiTable :empty="!calendarEvents.length" empty-text="No cleaning calendar events for this month.">
+          <template #head>
+            <tr>
+              <th>Date</th>
+              <th>Title</th>
+              <th>Time</th>
+              <th>Same-day guest</th>
+              <th>Status</th>
+              <th>Message</th>
+              <th class="num">Actions</th>
+            </tr>
+          </template>
+          <tr v-for="event in calendarEvents" :key="event.id">
+            <td>{{ event.cleaning_date }}</td>
+            <td>{{ event.title }}</td>
+            <td>{{ formatDateTime(event.starts_at) }} - {{ formatDateTime(event.ends_at) }}</td>
+            <td>{{ event.same_day_arrival ? 'Yes' : 'No' }}</td>
+            <td>
+              <UiBadge :tone="calendarStatusTone(event.status)" size="sm" dot>{{ event.status }}</UiBadge>
+            </td>
+            <td class="muted">
+              {{ event.error_message || event.warning_message || event.last_synced_at || '-' }}
+            </td>
+            <td class="num">
+              <UiButton
+                v-if="event.status === 'error'"
+                size="sm"
+                variant="secondary"
+                :loading="retryingCalendarEventID === event.id"
+                @click="retryCalendarEvent(event.id)"
+              >Retry</UiButton>
+            </td>
+          </tr>
+        </UiTable>
       </UiSection>
 
       <div v-if="summary" class="kpi-grid">
@@ -376,6 +569,19 @@ watch([pid, month], () => {
   display: flex;
   justify-content: flex-end;
   grid-column: 1 / -1;
+}
+.calendar-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+}
+.calendar-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
 }
 .amount-negative {
   color: var(--danger-fg);

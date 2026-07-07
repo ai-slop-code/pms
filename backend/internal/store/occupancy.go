@@ -255,17 +255,18 @@ func (s *Store) GetOccupancyByID(ctx context.Context, propertyID, occupancyID in
 
 func (s *Store) MarkOccupanciesDeletedFromSource(ctx context.Context, propertyID int64, sourceType string, keepUIDs []string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	deleteCutoff := toUTCMidnight(time.Now().UTC()).Format(time.RFC3339)
 	if len(keepUIDs) == 0 {
 		_, err := s.DB.ExecContext(ctx, `
 			UPDATE occupancies SET status = 'deleted_from_source', last_synced_at = ?
 			WHERE property_id = ? AND source_type = ? AND status NOT IN ('deleted_from_source')
 			AND end_at >= ?`,
-			now, propertyID, sourceType, now)
+			now, propertyID, sourceType, deleteCutoff)
 		return err
 	}
 	ph := make([]string, len(keepUIDs))
 	args := make([]interface{}, 0, len(keepUIDs)+4)
-	args = append(args, now, propertyID, sourceType, now)
+	args = append(args, now, propertyID, sourceType, deleteCutoff)
 	for i, u := range keepUIDs {
 		ph[i] = "?"
 		args = append(args, u)
@@ -545,6 +546,10 @@ func (s *Store) ListPropertyIDsWithICSURL(ctx context.Context) ([]int64, error) 
 // should never silently overwrite a label.
 var ErrOccupancyAlreadyLabelled = errors.New("occupancy already has a closure label; reopen first")
 
+// ErrInvalidOccupancySplit indicates that a requested split range does not map
+// cleanly to whole nights inside the occupancy stay window.
+var ErrInvalidOccupancySplit = errors.New("invalid occupancy split range")
+
 // CloseOccupancy marks the row as off-the-market closed. Sets closed_by_user_id
 // + closed_at audit columns and clears any external-sale fields. Refuses to
 // overwrite an existing label.
@@ -625,6 +630,10 @@ func (s *Store) CloseOccupancyNight(ctx context.Context, propertyID, occupancyID
 }
 
 func (s *Store) SplitOccupancyIntoNights(ctx context.Context, propertyID, occupancyID int64) error {
+	return s.SplitOccupancyIntoNightRange(ctx, propertyID, occupancyID, "", "")
+}
+
+func (s *Store) SplitOccupancyIntoNightRange(ctx context.Context, propertyID, occupancyID int64, startDate, endDate string) error {
 	row, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
 	if err != nil {
 		return err
@@ -636,7 +645,31 @@ func (s *Store) SplitOccupancyIntoNights(ctx context.Context, propertyID, occupa
 	end := toUTCMidnight(row.EndAt)
 	days := int(end.Sub(start).Hours() / 24)
 	if days <= 1 || !start.AddDate(0, 0, days).Equal(end) {
-		return errors.New("occupancy is not a multi-night all-day stay")
+		return ErrInvalidOccupancySplit
+	}
+	splitStart := start
+	splitEnd := end
+	startDate = strings.TrimSpace(startDate)
+	endDate = strings.TrimSpace(endDate)
+	if startDate != "" || endDate != "" {
+		if startDate == "" || endDate == "" {
+			return ErrInvalidOccupancySplit
+		}
+		splitStart, err = parseOccupancySplitDate(startDate)
+		if err != nil {
+			return err
+		}
+		splitEnd, err = parseOccupancySplitDate(endDate)
+		if err != nil {
+			return err
+		}
+		if splitStart.Before(start) || splitEnd.After(end) || !splitEnd.After(splitStart) {
+			return ErrInvalidOccupancySplit
+		}
+	}
+	splitDays := int(splitEnd.Sub(splitStart).Hours() / 24)
+	if splitDays <= 0 || !splitStart.AddDate(0, 0, splitDays).Equal(splitEnd) {
+		return ErrInvalidOccupancySplit
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -650,13 +683,31 @@ func (s *Store) SplitOccupancyIntoNights(ctx context.Context, propertyID, occupa
 		WHERE property_id = ? AND id = ?`, now, propertyID, occupancyID); err != nil {
 		return err
 	}
-	for i := 0; i < days; i++ {
-		night := start.AddDate(0, 0, i)
+	if start.Before(splitStart) {
+		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "before", start, splitStart, nil, nil, 0, now); err != nil {
+			return err
+		}
+	}
+	for i := 0; i < splitDays; i++ {
+		night := splitStart.AddDate(0, 0, i)
 		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "night", night, night.AddDate(0, 0, 1), nil, nil, 0, now); err != nil {
 			return err
 		}
 	}
+	if splitEnd.Before(end) {
+		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "after", splitEnd, end, nil, nil, 0, now); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+func parseOccupancySplitDate(v string) (time.Time, error) {
+	d, err := time.Parse("2006-01-02", strings.TrimSpace(v))
+	if err != nil {
+		return time.Time{}, ErrInvalidOccupancySplit
+	}
+	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC), nil
 }
 
 func (s *Store) HasManualSplitForSourceEventUID(ctx context.Context, propertyID int64, sourceUID string) (bool, error) {
