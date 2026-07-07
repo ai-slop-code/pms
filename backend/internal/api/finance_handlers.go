@@ -124,6 +124,23 @@ type financeSummaryBreakdownRow struct {
 	OutgoingCents int     `json:"outgoing_cents"`
 }
 
+type financeGeneratedEntrySyncRow struct {
+	Status           string  `json:"status"`
+	FirstSyncedAt    *string `json:"first_synced_at,omitempty"`
+	FirstSyncedBy    *int64  `json:"first_synced_by,omitempty"`
+	LastSyncedAt     *string `json:"last_synced_at,omitempty"`
+	LastSyncedBy     *int64  `json:"last_synced_by,omitempty"`
+	LastSyncedReason *string `json:"last_synced_reason,omitempty"`
+}
+
+type financeGeneratedEntrySyncChangesRow struct {
+	RecurringInserted      int `json:"recurring_inserted"`
+	RecurringUpdated       int `json:"recurring_updated"`
+	RecurringDeleted       int `json:"recurring_deleted"`
+	CleaningSalaryInserted int `json:"cleaning_salary_inserted"`
+	CleaningSalaryUpdated  int `json:"cleaning_salary_updated"`
+}
+
 type financeSummaryResponse struct {
 	Month                      string                       `json:"month"`
 	TotalIncomingCents         int                          `json:"total_incoming_cents"`
@@ -136,6 +153,14 @@ type financeSummaryResponse struct {
 	CleanerExpenseCents        int                          `json:"cleaner_expense_cents"`
 	CleanerMargin              float64                      `json:"cleaner_margin"`
 	Breakdown                  []financeSummaryBreakdownRow `json:"breakdown"`
+	GeneratedEntrySync         financeGeneratedEntrySyncRow `json:"generated_entry_sync"`
+}
+
+type financeGeneratedEntrySyncResponse struct {
+	OK                      bool                                `json:"ok"`
+	GeneratedEntrySync      financeGeneratedEntrySyncRow        `json:"generated_entry_sync"`
+	Changes                 financeGeneratedEntrySyncChangesRow `json:"changes"`
+	GeneratedRecurringCount int                                 `json:"generated_recurring_count"`
 }
 
 func categoryToRow(c store.FinanceCategory) financeCategoryRow {
@@ -169,6 +194,37 @@ func txToRow(t store.FinanceTransaction) financeTransactionRow {
 		MappedToStay:    t.MappedToStay,
 		CreatedAt:       t.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:       t.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func generatedEntrySyncToRow(sync *store.FinanceGeneratedEntrySync) financeGeneratedEntrySyncRow {
+	if sync == nil || sync.Status == "" {
+		return financeGeneratedEntrySyncRow{Status: "not_synced"}
+	}
+	row := financeGeneratedEntrySyncRow{
+		Status:           sync.Status,
+		FirstSyncedBy:    nullInt64Ptr(sync.FirstSyncedBy),
+		LastSyncedBy:     nullInt64Ptr(sync.LastSyncedBy),
+		LastSyncedReason: nullStringPtr(sync.LastSyncedReason),
+	}
+	if sync.FirstSyncedAt.Valid {
+		v := sync.FirstSyncedAt.Time.UTC().Format(time.RFC3339)
+		row.FirstSyncedAt = &v
+	}
+	if sync.LastSyncedAt.Valid {
+		v := sync.LastSyncedAt.Time.UTC().Format(time.RFC3339)
+		row.LastSyncedAt = &v
+	}
+	return row
+}
+
+func generatedEntrySyncChangesToRow(changes store.FinanceGeneratedEntrySyncChanges) financeGeneratedEntrySyncChangesRow {
+	return financeGeneratedEntrySyncChangesRow{
+		RecurringInserted:      changes.RecurringInserted,
+		RecurringUpdated:       changes.RecurringUpdated,
+		RecurringDeleted:       changes.RecurringDeleted,
+		CleaningSalaryInserted: changes.CleaningSalaryInserted,
+		CleaningSalaryUpdated:  changes.CleaningSalaryUpdated,
 	}
 }
 
@@ -480,6 +536,14 @@ func (s *Server) deleteFinanceTransaction(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) openFinanceMonth(w http.ResponseWriter, r *http.Request) {
+	s.syncFinanceGeneratedEntriesWithReason(w, r, "manual", "finance_month_open")
+}
+
+func (s *Server) syncFinanceGeneratedEntries(w http.ResponseWriter, r *http.Request) {
+	s.syncFinanceGeneratedEntriesWithReason(w, r, "manual", "finance_generated_entries_sync")
+}
+
+func (s *Server) syncFinanceGeneratedEntriesWithReason(w http.ResponseWriter, r *http.Request, reason, auditAction string) {
 	actor, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Finance, permissions.LevelWrite)
 	if !ok {
 		return
@@ -502,13 +566,18 @@ func (s *Server) openFinanceMonth(w http.ResponseWriter, r *http.Request) {
 	if actor != nil {
 		by = &actor.ID
 	}
-	n, err := s.Store.OpenFinanceMonth(r.Context(), pid, month, by, loc)
+	sync, changes, err := s.Store.SyncFinanceGeneratedEntriesForMonth(r.Context(), pid, month, by, loc, reason)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "open month failed")
+		WriteError(w, http.StatusInternalServerError, "sync generated entries failed")
 		return
 	}
-	s.audit(r, actor, "finance_month_open", "property", strconv.FormatInt(pid, 10), "success")
-	WriteJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "generated_recurring_count": n})
+	s.audit(r, actor, auditAction, "property", strconv.FormatInt(pid, 10), "success")
+	WriteJSON(w, http.StatusOK, financeGeneratedEntrySyncResponse{
+		OK:                      true,
+		GeneratedEntrySync:      generatedEntrySyncToRow(sync),
+		Changes:                 generatedEntrySyncChangesToRow(changes),
+		GeneratedRecurringCount: changes.RecurringInserted,
+	})
 }
 
 func (s *Server) getFinanceSummary(w http.ResponseWriter, r *http.Request) {
@@ -535,6 +604,11 @@ func (s *Server) getFinanceSummary(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	sync, err := s.Store.GetFinanceGeneratedEntrySync(r.Context(), pid, month)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	breakdown := make([]financeSummaryBreakdownRow, 0, len(sum.Breakdown))
 	for _, b := range sum.Breakdown {
 		breakdown = append(breakdown, financeSummaryBreakdownRow{
@@ -557,6 +631,7 @@ func (s *Server) getFinanceSummary(w http.ResponseWriter, r *http.Request) {
 		CleanerExpenseCents:        sum.CleanerExpenseCents,
 		CleanerMargin:              sum.CleanerMargin,
 		Breakdown:                  breakdown,
+		GeneratedEntrySync:         generatedEntrySyncToRow(sync),
 	})
 }
 
@@ -663,6 +738,10 @@ func (s *Server) postFinanceRecurringRule(w http.ResponseWriter, r *http.Request
 		WriteError(w, http.StatusInternalServerError, "create failed")
 		return
 	}
+	if err := s.resyncRecurringForAllOpenMonths(r.Context(), pid, actor, "recurring_rule_create"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "resync failed")
+		return
+	}
 	s.audit(r, actor, "finance_recurring_rule_create", "finance_recurring_rule", strconv.FormatInt(row.ID, 10), "success")
 	WriteJSON(w, http.StatusCreated, map[string]interface{}{"rule": recurringToRow(*row)})
 }
@@ -753,7 +832,7 @@ func (s *Server) patchFinanceRecurringRule(w http.ResponseWriter, r *http.Reques
 		WriteError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
-	if err := s.resyncRecurringForAllOpenMonths(r.Context(), pid, actor); err != nil {
+	if err := s.resyncRecurringForAllOpenMonths(r.Context(), pid, actor, "recurring_rule_update"); err != nil {
 		WriteError(w, http.StatusInternalServerError, "resync failed")
 		return
 	}
@@ -782,7 +861,7 @@ func (s *Server) deleteFinanceRecurringRule(w http.ResponseWriter, r *http.Reque
 	// Re-sync all opened months so any cleaning_salary or summary state is
 	// recomputed (the rule's own transactions are already gone in the same
 	// store-level transaction).
-	if err := s.resyncRecurringForAllOpenMonths(r.Context(), pid, actor); err != nil {
+	if err := s.resyncRecurringForAllOpenMonths(r.Context(), pid, actor, "recurring_rule_delete"); err != nil {
 		WriteError(w, http.StatusInternalServerError, "resync failed")
 		return
 	}
@@ -790,11 +869,11 @@ func (s *Server) deleteFinanceRecurringRule(w http.ResponseWriter, r *http.Reque
 	WriteJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 }
 
-// resyncRecurringForAllOpenMonths re-runs OpenFinanceMonth for every
-// already-opened month on the property. Used after a recurring rule mutation
-// so that auto-generated transactions reflect the new ruleset (and orphans
-// from deactivated/deleted rules are purged).
-func (s *Server) resyncRecurringForAllOpenMonths(ctx context.Context, pid int64, actor *store.User) error {
+// resyncRecurringForAllOpenMonths re-runs generated-entry sync for every
+// already-initialized month on the property. Used after a recurring rule
+// mutation so auto-generated transactions reflect the new ruleset (and
+// orphans from deactivated/deleted rules are purged).
+func (s *Server) resyncRecurringForAllOpenMonths(ctx context.Context, pid int64, actor *store.User, reason string) error {
 	months, err := s.Store.ListOpenedFinanceMonths(ctx, pid)
 	if err != nil {
 		return err
@@ -815,7 +894,7 @@ func (s *Server) resyncRecurringForAllOpenMonths(ctx context.Context, pid int64,
 		by = &actor.ID
 	}
 	for _, m := range months {
-		if _, err := s.Store.OpenFinanceMonth(ctx, pid, m, by, loc); err != nil {
+		if _, _, err := s.Store.SyncFinanceGeneratedEntriesForMonth(ctx, pid, m, by, loc, reason); err != nil {
 			return err
 		}
 	}

@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { api } from '@/api/http'
 import { useCurrentProperty } from '@/composables/useCurrentProperty'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { formatShortDateTime, isoTitle } from '@/utils/format'
 import UiPageHeader from '@/components/ui/UiPageHeader.vue'
 import UiToolbar from '@/components/ui/UiToolbar.vue'
 import UiTabs from '@/components/ui/UiTabs.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import UiBadge from '@/components/ui/UiBadge.vue'
 import UiInlineBanner from '@/components/ui/UiInlineBanner.vue'
 import UiEmptyState from '@/components/ui/UiEmptyState.vue'
 import UiDialog from '@/components/ui/UiDialog.vue'
@@ -34,6 +36,7 @@ const tab = ref<FinanceTab>('overview')
 
 const loading = ref(false)
 const busy = ref(false)
+const syncBusy = ref(false)
 const importingPayouts = ref(false)
 const error = ref('')
 const toast = useToast()
@@ -123,6 +126,19 @@ const importPreview = ref<ImportPreviewResponse | null>(null)
 const importPreviewOpen = ref(false)
 const importCommitting = ref(false)
 
+interface GeneratedEntrySyncChanges {
+  recurring_inserted: number
+  recurring_updated: number
+  recurring_deleted: number
+  cleaning_salary_inserted: number
+  cleaning_salary_updated: number
+}
+interface GeneratedEntrySyncResponse {
+  ok: boolean
+  generated_entry_sync: FinanceSummary['generated_entry_sync']
+  changes: GeneratedEntrySyncChanges
+}
+
 const categoryForm = ref({
   code: '',
   title: '',
@@ -139,6 +155,36 @@ const recurringForm = ref({
   end_month: '',
   effective_from: new Date().toISOString().slice(0, 16),
 })
+
+const generatedEntrySync = computed(() => summary.value?.generated_entry_sync)
+const generatedEntrySyncLabel = computed(() => {
+  if (syncBusy.value) return 'Syncing...'
+  return generatedEntrySync.value?.status === 'synced' ? 'Synced' : 'Not synced'
+})
+const generatedEntrySyncTone = computed<'warning' | 'success' | 'info'>(() => {
+  if (syncBusy.value) return 'info'
+  return generatedEntrySync.value?.status === 'synced' ? 'success' : 'warning'
+})
+const generatedEntrySyncHelp = computed(() => {
+  if (syncBusy.value) return 'Updating generated recurring and cleaning salary entries.'
+  const sync = generatedEntrySync.value
+  if (sync?.status === 'synced' && sync.last_synced_at) {
+    return `Generated entries last synced ${formatShortDateTime(sync.last_synced_at)}.`
+  }
+  return 'Generated recurring and cleaning salary entries have not been synced for this month.'
+})
+const generatedEntrySyncTitle = computed(() => isoTitle(generatedEntrySync.value?.last_synced_at))
+
+function generatedEntrySyncToast(changes: GeneratedEntrySyncChanges | undefined) {
+  if (!changes) return `Generated entries synced for ${month.value}.`
+  const parts: string[] = []
+  const recurringChanged = changes.recurring_inserted + changes.recurring_updated + changes.recurring_deleted
+  const cleaningChanged = changes.cleaning_salary_inserted + changes.cleaning_salary_updated
+  if (recurringChanged > 0) parts.push(`${recurringChanged} recurring`)
+  if (cleaningChanged > 0) parts.push(`${cleaningChanged} cleaning salary`)
+  if (parts.length === 0) return `Generated entries synced for ${month.value}. No generated rows changed.`
+  return `Generated entries synced for ${month.value}: ${parts.join(', ')} updated.`
+}
 
 async function loadAll() {
   if (!pid.value) return
@@ -456,20 +502,23 @@ async function deleteRecurringRule(rule: RecurringRule) {
   }
 }
 
-async function openMonth() {
+async function syncGeneratedEntries() {
   if (!pid.value) return
-  busy.value = true
+  syncBusy.value = true
   error.value = ''
   try {
-    await api(`/api/properties/${pid.value}/finance/months/${month.value}/open`, { method: 'POST' })
-    toast.success(`Month ${month.value} opened and recurring entries synchronized.`)
+    const res = await api<GeneratedEntrySyncResponse>(
+      `/api/properties/${pid.value}/finance/months/${month.value}/sync-generated`,
+      { method: 'POST' },
+    )
+    toast.success(generatedEntrySyncToast(res.changes))
     await loadAll()
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Failed to open month'
+    const msg = e instanceof Error ? e.message : 'Failed to sync generated entries'
     error.value = msg
     toast.error(msg)
   } finally {
-    busy.value = false
+    syncBusy.value = false
   }
 }
 
@@ -508,12 +557,21 @@ watch(
           <template #iconLeft><ChevronLeft :size="16" aria-hidden="true" /></template>
         </UiButton>
         <UiInput v-model="month" type="month" />
+        <div class="generated-sync-status" :title="generatedEntrySyncTitle">
+          <UiBadge :tone="generatedEntrySyncTone" size="sm" dot>{{ generatedEntrySyncLabel }}</UiBadge>
+          <span class="generated-sync-status__help">{{ generatedEntrySyncHelp }}</span>
+        </div>
         <UiButton variant="ghost" :disabled="loading" aria-label="Next month" @click="nextMonth">
           <template #iconLeft><ChevronRight :size="16" aria-hidden="true" /></template>
         </UiButton>
         <template #trailing>
           <UiButton variant="secondary" :disabled="loading" @click="loadAll">Refresh</UiButton>
-          <UiButton variant="primary" :loading="busy" @click="openMonth">Open month</UiButton>
+          <UiButton
+            variant="primary"
+            :loading="syncBusy"
+            title="Creates or updates this month's recurring expenses and cleaning salary entry. Manual transactions and imported payouts are not changed."
+            @click="syncGeneratedEntries"
+          >Sync generated entries</UiButton>
         </template>
       </UiToolbar>
 
@@ -700,5 +758,24 @@ watch(
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+.generated-sync-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.generated-sync-status__help {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .generated-sync-status {
+    width: 100%;
+  }
+  .generated-sync-status__help {
+    white-space: normal;
+  }
 }
 </style>

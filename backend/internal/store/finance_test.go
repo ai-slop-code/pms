@@ -87,6 +87,84 @@ func TestOpenFinanceMonth_IsIdempotentForRecurringRules(t *testing.T) {
 	}
 }
 
+func TestSyncFinanceGeneratedEntries_TracksMetadataAndProtectsManualRows(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	ctx := context.Background()
+	month := "2026-04"
+	prop, err := st.GetProperty(ctx, pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorID := prop.OwnerUserID
+
+	if _, err := st.CreateFinanceRecurringRule(ctx, &FinanceRecurringRule{
+		PropertyID:    pid,
+		Title:         "Internet",
+		AmountCents:   2500,
+		Direction:     "outgoing",
+		Frequency:     "monthly",
+		StartMonth:    "2026-01",
+		EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Active:        true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manual, err := st.CreateFinanceTransaction(ctx, &FinanceTransaction{
+		PropertyID:      pid,
+		TransactionDate: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		Direction:       "incoming",
+		AmountCents:     12345,
+		Note:            sql.NullString{String: "manual income", Valid: true},
+		SourceType:      "manual",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sync, changes, err := st.SyncFinanceGeneratedEntriesForMonth(ctx, pid, month, &actorID, time.UTC, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sync.Status != "synced" || !sync.LastSyncedAt.Valid || sync.LastSyncedReason.String != "manual" {
+		t.Fatalf("sync metadata = %+v", sync)
+	}
+	if sync.LastSyncedBy.Int64 != actorID {
+		t.Fatalf("last_synced_by = %d, want %d", sync.LastSyncedBy.Int64, actorID)
+	}
+	if changes.RecurringInserted != 1 {
+		t.Fatalf("recurring inserted = %d, want 1", changes.RecurringInserted)
+	}
+
+	if _, _, err := st.SyncFinanceGeneratedEntriesForMonth(ctx, pid, month, &actorID, time.UTC, "recurring_rule_update"); err != nil {
+		t.Fatal(err)
+	}
+	sync, err = st.GetFinanceGeneratedEntrySync(ctx, pid, month)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sync.LastSyncedReason.String != "recurring_rule_update" {
+		t.Fatalf("last_synced_reason = %q, want recurring_rule_update", sync.LastSyncedReason.String)
+	}
+
+	txs, err := st.ListFinanceTransactions(ctx, pid, month, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manualCount := 0
+	for _, tx := range txs {
+		if tx.ID == manual.ID {
+			manualCount++
+			if tx.Note.String != "manual income" || tx.AmountCents != 12345 || tx.SourceType != "manual" {
+				t.Fatalf("manual transaction was mutated: %+v", tx)
+			}
+		}
+	}
+	if manualCount != 1 {
+		t.Fatalf("manual transaction count = %d, want 1", manualCount)
+	}
+}
+
 func TestComputeFinanceSummary_CalculatesCleanerMargin(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := setupFinanceProperty(t, st)

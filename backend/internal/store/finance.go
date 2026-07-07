@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -68,6 +69,23 @@ type FinanceSummary struct {
 	CleanerExpenseCents        int
 	CleanerMargin              float64
 	Breakdown                  []FinanceCategoryBreakdown
+}
+
+type FinanceGeneratedEntrySync struct {
+	Status           string
+	FirstSyncedAt    sql.NullTime
+	FirstSyncedBy    sql.NullInt64
+	LastSyncedAt     sql.NullTime
+	LastSyncedBy     sql.NullInt64
+	LastSyncedReason sql.NullString
+}
+
+type FinanceGeneratedEntrySyncChanges struct {
+	RecurringInserted      int
+	RecurringUpdated       int
+	RecurringDeleted       int
+	CleaningSalaryInserted int
+	CleaningSalaryUpdated  int
 }
 
 type FinanceCategoryBreakdown struct {
@@ -461,10 +479,46 @@ func (s *Store) ListOpenedFinanceMonths(ctx context.Context, propertyID int64) (
 	return out, rows.Err()
 }
 
+func (s *Store) GetFinanceGeneratedEntrySync(ctx context.Context, propertyID int64, month string) (*FinanceGeneratedEntrySync, error) {
+	row := &FinanceGeneratedEntrySync{Status: "not_synced"}
+	var openedAt, lastSyncedAt sql.NullString
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT opened_at, opened_by, last_synced_at, last_synced_by, last_synced_reason
+		FROM finance_month_states
+		WHERE property_id = ? AND month = ?`, propertyID, month).Scan(
+		&openedAt, &row.FirstSyncedBy, &lastSyncedAt, &row.LastSyncedBy, &row.LastSyncedReason)
+	if err == sql.ErrNoRows {
+		return row, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	row.Status = "synced"
+	if openedAt.Valid {
+		if t, err := time.Parse(time.RFC3339, openedAt.String); err == nil {
+			row.FirstSyncedAt = sql.NullTime{Time: t, Valid: true}
+		}
+	}
+	if lastSyncedAt.Valid {
+		if t, err := time.Parse(time.RFC3339, lastSyncedAt.String); err == nil {
+			row.LastSyncedAt = sql.NullTime{Time: t, Valid: true}
+		}
+	}
+	return row, nil
+}
+
 func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month string, openedBy *int64, loc *time.Location) (int, error) {
-	year, m, err := parseMonthYYYYMM(month)
+	_, changes, err := s.SyncFinanceGeneratedEntriesForMonth(ctx, propertyID, month, openedBy, loc, "manual")
 	if err != nil {
 		return 0, err
+	}
+	return changes.RecurringInserted, nil
+}
+
+func (s *Store) SyncFinanceGeneratedEntriesForMonth(ctx context.Context, propertyID int64, month string, syncedBy *int64, loc *time.Location, reason string) (*FinanceGeneratedEntrySync, FinanceGeneratedEntrySyncChanges, error) {
+	year, m, err := parseMonthYYYYMM(month)
+	if err != nil {
+		return nil, FinanceGeneratedEntrySyncChanges{}, err
 	}
 	// Anchor generated monthly transactions at UTC noon to keep the YYYY-MM
 	// stable when filtering by stored timestamp prefix.
@@ -476,21 +530,25 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return nil, FinanceGeneratedEntrySyncChanges{}, err
 	}
 	defer tx.Rollback()
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	var by interface{}
-	if openedBy != nil {
-		by = *openedBy
+	if syncedBy != nil {
+		by = *syncedBy
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "manual"
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO finance_month_states (property_id, month, opened_at, opened_by)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(property_id, month) DO NOTHING`, propertyID, monthRef, now, by); err != nil {
-		return 0, err
+		INSERT INTO finance_month_states (property_id, month, opened_at, opened_by, last_synced_at, last_synced_by, last_synced_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(property_id, month) DO NOTHING`, propertyID, monthRef, now, by, now, by, reason); err != nil {
+		return nil, FinanceGeneratedEntrySyncChanges{}, err
 	}
+	changes := FinanceGeneratedEntrySyncChanges{}
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, title, category_id, amount_cents, direction
@@ -503,17 +561,16 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 		  AND (effective_to IS NULL OR substr(effective_to, 1, 7) >= ?)`,
 		propertyID, monthRef, monthRef, monthRef, monthRef)
 	if err != nil {
-		return 0, err
+		return nil, changes, err
 	}
 	defer rows.Close()
-	inserted := 0
 	for rows.Next() {
 		var ruleID int64
 		var title, direction string
 		var categoryID sql.NullInt64
 		var amount int
 		if err := rows.Scan(&ruleID, &title, &categoryID, &amount, &direction); err != nil {
-			return 0, err
+			return nil, changes, err
 		}
 		ruleRef := fmt.Sprintf("%d:%s", ruleID, monthRef)
 		var existing int64
@@ -525,17 +582,19 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 			  AND source_reference_id = ?
 			LIMIT 1`, propertyID, ruleRef).Scan(&existing)
 		if err != nil && err != sql.ErrNoRows {
-			return 0, err
+			return nil, changes, err
 		}
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `
+			res, err := tx.ExecContext(ctx, `
 				UPDATE finance_transactions
 				SET transaction_date = ?, direction = ?, amount_cents = ?, category_id = ?, note = ?, updated_at = ?
 				WHERE id = ?`,
 				monthStartRFC, direction, amount, nullInt64Value(categoryID), fmt.Sprintf("Recurring: %s (%s)", title, monthRef), now, existing)
 			if err != nil {
-				return 0, err
+				return nil, changes, err
 			}
+			aff, _ := res.RowsAffected()
+			changes.RecurringUpdated += int(aff)
 			continue
 		}
 		// Compatibility path for early format where source_reference_id held only rule ID.
@@ -549,17 +608,19 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 			  AND note LIKE ?
 			LIMIT 1`, propertyID, fmt.Sprintf("%d", ruleID), "%("+monthRef+")%").Scan(&legacyID)
 		if err != nil && err != sql.ErrNoRows {
-			return 0, err
+			return nil, changes, err
 		}
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `
+			res, err := tx.ExecContext(ctx, `
 				UPDATE finance_transactions
 				SET source_reference_id = ?, transaction_date = ?, direction = ?, amount_cents = ?, category_id = ?, note = ?, updated_at = ?
 				WHERE id = ?`,
 				ruleRef, monthStartRFC, direction, amount, nullInt64Value(categoryID), fmt.Sprintf("Recurring: %s (%s)", title, monthRef), now, legacyID)
 			if err != nil {
-				return 0, err
+				return nil, changes, err
 			}
+			aff, _ := res.RowsAffected()
+			changes.RecurringUpdated += int(aff)
 			continue
 		}
 		res, err := tx.ExecContext(ctx, `
@@ -570,13 +631,13 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 			propertyID, monthStartRFC, direction, amount, nullInt64Value(categoryID),
 			fmt.Sprintf("Recurring: %s (%s)", title, monthRef), ruleRef, now, now)
 		if err != nil {
-			return 0, err
+			return nil, changes, err
 		}
 		aff, _ := res.RowsAffected()
-		inserted += int(aff)
+		changes.RecurringInserted += int(aff)
 	}
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return nil, changes, err
 	}
 
 	// Purge orphaned recurring-rule transactions for this month: any auto
@@ -584,7 +645,7 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 	// Match by transaction_date YYYY-MM prefix so legacy source_reference_id
 	// formats (just the rule ID with month embedded in the note) are also
 	// cleaned up.
-	if _, err := tx.ExecContext(ctx, `
+	if res, err := tx.ExecContext(ctx, `
 		DELETE FROM finance_transactions
 		WHERE property_id = ?
 		  AND source_type = 'recurring_rule'
@@ -599,12 +660,15 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 		        AND (effective_to IS NULL OR substr(effective_to, 1, 7) >= ?)
 		  )`,
 		propertyID, monthRef, monthRef, propertyID, monthRef, monthRef, monthRef, monthRef); err != nil {
-		return 0, err
+		return nil, changes, err
+	} else {
+		aff, _ := res.RowsAffected()
+		changes.RecurringDeleted += int(aff)
 	}
 
 	cleaningCategoryID, err := findFinanceCategoryByCodeTx(ctx, tx, propertyID, "cleaning_salary")
 	if err != nil {
-		return 0, err
+		return nil, changes, err
 	}
 	if cleaningSummary != nil && cleaningSummary.FinalSalaryCents > 0 && cleaningCategoryID > 0 {
 		var existingID int64
@@ -616,31 +680,49 @@ func (s *Store) OpenFinanceMonth(ctx context.Context, propertyID int64, month st
 			  AND source_reference_id = ?
 			LIMIT 1`, propertyID, monthRef).Scan(&existingID)
 		if err != nil && err != sql.ErrNoRows {
-			return 0, err
+			return nil, changes, err
 		}
 		if err == sql.ErrNoRows {
-			_, err = tx.ExecContext(ctx, `
+			res, err := tx.ExecContext(ctx, `
 				INSERT INTO finance_transactions (
 					property_id, transaction_date, direction, amount_cents, category_id, note,
 					source_type, source_reference_id, is_auto_generated, created_at, updated_at
 				) VALUES (?, ?, 'outgoing', ?, ?, ?, 'cleaning_salary', ?, 1, ?, ?)`,
 				propertyID, monthStartRFC, cleaningSummary.FinalSalaryCents, cleaningCategoryID,
 				fmt.Sprintf("Cleaner salary for %s", monthRef), monthRef, now, now)
+			if err == nil {
+				aff, _ := res.RowsAffected()
+				changes.CleaningSalaryInserted += int(aff)
+			}
 		} else {
-			_, err = tx.ExecContext(ctx, `
+			res, err := tx.ExecContext(ctx, `
 				UPDATE finance_transactions
 				SET transaction_date = ?, amount_cents = ?, category_id = ?, note = ?, updated_at = ?
 				WHERE id = ?`,
 				monthStartRFC, cleaningSummary.FinalSalaryCents, cleaningCategoryID, fmt.Sprintf("Cleaner salary for %s", monthRef), now, existingID)
+			if err == nil {
+				aff, _ := res.RowsAffected()
+				changes.CleaningSalaryUpdated += int(aff)
+			}
 		}
 		if err != nil {
-			return 0, err
+			return nil, changes, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE finance_month_states
+		SET last_synced_at = ?, last_synced_by = ?, last_synced_reason = ?
+		WHERE property_id = ? AND month = ?`, now, by, reason, propertyID, monthRef); err != nil {
+		return nil, changes, err
 	}
-	return inserted, nil
+	if err := tx.Commit(); err != nil {
+		return nil, changes, err
+	}
+	sync, err := s.GetFinanceGeneratedEntrySync(ctx, propertyID, monthRef)
+	if err != nil {
+		return nil, changes, err
+	}
+	return sync, changes, nil
 }
 
 func (s *Store) ComputeFinanceSummary(ctx context.Context, propertyID int64, month string) (*FinanceSummary, error) {

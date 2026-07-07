@@ -49,6 +49,15 @@ export interface FinanceSummaryBreakdownRow {
   outgoing_cents: number
 }
 
+export interface FinanceGeneratedEntrySync {
+  status: 'not_synced' | 'synced'
+  first_synced_at?: string
+  first_synced_by?: number
+  last_synced_at?: string
+  last_synced_by?: number
+  last_synced_reason?: string
+}
+
 export interface FinanceSummary {
   month: string
   total_incoming_cents: number
@@ -61,4 +70,5 @@ export interface FinanceSummary {
   cleaner_expense_cents: number
   cleaner_margin: number
   breakdown: FinanceSummaryBreakdownRow[]
+  generated_entry_sync: FinanceGeneratedEntrySync
 }

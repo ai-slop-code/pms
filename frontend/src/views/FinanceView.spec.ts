@@ -6,7 +6,9 @@ vi.mock('@/api/http', () => ({ api: vi.fn() }))
 vi.mock('vue-router', () => ({
   RouterLink: { template: '<a><slot /></a>' },
 }))
-vi.mock('@/composables/useToast', () => ({ useToast: () => ({ push: vi.fn() }) }))
+vi.mock('@/composables/useToast', () => ({
+  useToast: () => ({ push: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
+}))
 vi.mock('@/composables/useConfirm', () => ({
   useConfirm: () => ({ confirm: vi.fn().mockResolvedValue(true) }),
 }))
@@ -67,6 +69,9 @@ const emptySummary = {
   cleaner_expense_cents: 0,
   cleaner_margin: 0,
   breakdown: [],
+  generated_entry_sync: {
+    status: 'not_synced' as const,
+  },
 }
 
 function apiRouter(handlers: Record<string, () => unknown>) {
@@ -77,6 +82,24 @@ function apiRouter(handlers: Record<string, () => unknown>) {
     if (url.includes('/finance/transactions')) return Promise.resolve({ transactions: [] })
     if (url.includes('/finance/summary')) return Promise.resolve(emptySummary)
     if (url.includes('/finance/recurring-rules')) return Promise.resolve({ rules: [] })
+    if (url.includes('/finance/months/') && url.includes('/sync-generated')) {
+      return Promise.resolve({
+        ok: true,
+        generated_entry_sync: {
+          status: 'synced',
+          first_synced_at: '2026-04-02T10:20:30Z',
+          last_synced_at: '2026-04-07T09:15:00Z',
+          last_synced_reason: 'manual',
+        },
+        changes: {
+          recurring_inserted: 0,
+          recurring_updated: 1,
+          recurring_deleted: 0,
+          cleaning_salary_inserted: 0,
+          cleaning_salary_updated: 1,
+        },
+      })
+    }
     return Promise.resolve({})
   })
 }
@@ -112,6 +135,49 @@ describe('FinanceView', () => {
     )
     expect(summaryCall).toBeTruthy()
     expect(w.text().toLowerCase()).toContain('finance')
+    expect(w.text()).toContain('Not synced')
+    expect(w.text()).toContain('Sync generated entries')
+  })
+
+  it('renders synced generated-entry status from the summary', async () => {
+    seedProperty()
+    apiRouter({
+      '/finance/summary': () => ({
+        ...emptySummary,
+        generated_entry_sync: {
+          status: 'synced',
+          first_synced_at: '2026-04-02T10:20:30Z',
+          last_synced_at: '2026-04-07T09:15:00Z',
+          last_synced_reason: 'manual',
+        },
+      }),
+    })
+    const w = mount(FinanceView)
+    await flushPromises()
+    expect(w.text()).toContain('Synced')
+    expect(w.text()).toContain('Generated entries last synced')
+  })
+
+  it('calls the generated-entry sync endpoint from the toolbar', async () => {
+    seedProperty()
+    apiRouter({})
+    const w = mount(FinanceView)
+    await flushPromises()
+
+    const syncButton = w.findAll('button').find((button) => button.text() === 'Sync generated entries')
+    expect(syncButton).toBeTruthy()
+    await syncButton!.trigger('click')
+    await flushPromises()
+
+    expect(
+      apiMock.mock.calls.some(
+        ([u, options]) =>
+          typeof u === 'string' &&
+          u.includes('/finance/months/') &&
+          u.includes('/sync-generated') &&
+          options?.method === 'POST',
+      ),
+    ).toBe(true)
   })
 
   it('surfaces an error banner when the initial load rejects', async () => {
