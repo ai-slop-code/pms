@@ -192,6 +192,8 @@ func (s *Server) Routes() chi.Router {
 				r.Patch("/properties/{id}/finance/transactions/{transactionId}", s.patchFinanceTransaction)
 				r.Get("/properties/{id}/finance/transactions/{transactionId}/attachment/download", s.downloadFinanceTransactionAttachment)
 				r.Delete("/properties/{id}/finance/transactions/{transactionId}", s.deleteFinanceTransaction)
+				r.Post("/properties/{id}/finance/reset/preview", s.previewFinanceReset)
+				r.Post("/properties/{id}/finance/reset", s.resetFinanceRecords)
 				r.Post("/properties/{id}/finance/months/{month}/open", s.openFinanceMonth)
 				r.Post("/properties/{id}/finance/months/{month}/sync-generated", s.syncFinanceGeneratedEntries)
 				r.Get("/properties/{id}/finance/summary", s.getFinanceSummary)

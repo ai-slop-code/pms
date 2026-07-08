@@ -72,3 +72,44 @@ export interface FinanceSummary {
   breakdown: FinanceSummaryBreakdownRow[]
   generated_entry_sync: FinanceGeneratedEntrySync
 }
+
+export interface FinanceResetDeleteCounts {
+  finance_transactions: number
+  finance_recurring_rules: number
+  finance_bookings: number
+  finance_imports: number
+  finance_booking_merges: number
+  finance_month_states: number
+  finance_attachment_files: number
+  invoices: number
+  invoice_files: number
+}
+
+export interface FinanceResetPreserveCounts {
+  cleaning_salary_transactions: number
+  cleaning_daily_logs: number
+  cleaning_salary_adjustments: number
+  cleaner_fee_history: number
+  finance_categories: number
+  invoice_sequences: number
+  audit_logs: number
+}
+
+export interface FinanceResetRegeneratedCounts {
+  cleaning_salary_inserted: number
+  cleaning_salary_updated: number
+}
+
+export interface FinanceResetPreview {
+  property_id: number
+  would_delete: FinanceResetDeleteCounts
+  would_preserve: FinanceResetPreserveCounts
+}
+
+export interface FinanceResetResult {
+  ok: boolean
+  deleted: FinanceResetDeleteCounts
+  preserved: FinanceResetPreserveCounts
+  regenerated: FinanceResetRegeneratedCounts
+  reset_run_id: number
+}

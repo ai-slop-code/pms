@@ -42,6 +42,11 @@ Future native Google Calendar integration for checkout-driven cleaning
 events, including same-day turnover event-title logic, idempotent event
 reconciliation, Google credential handling, UI requirements, and tests.
 
+### `PMS_16_Finance_Reset_Preserve_Cleaning_Salary_Spec.md`
+Business and technical specification for a property-scoped finance reset
+that deletes finance records while preserving cleaning lady salary derived
+from flat-entry cleaning logs.
+
 ## Recommended Reading Order
 1. `PMS_00_Implementation_Prompt.md`
 2. `PMS_01_Architecture_and_Global_Spec.md`
@@ -51,8 +56,9 @@ reconciliation, Google credential handling, UI requirements, and tests.
 6. `PMS_13_Coding_Conventions.md`
 7. `PMS_14_Closed_Nights_BA_Spec.md`
 8. `PMS_15_Google_Calendar_Cleaning_Events_Spec.md`
-9. `initial_prompt.md`
-10. `Prompt_answers.md`
+9. `PMS_16_Finance_Reset_Preserve_Cleaning_Salary_Spec.md`
+10. `initial_prompt.md`
+11. `Prompt_answers.md`
 
 ## External API references
 - **Nuki Smart Lock API** (OpenAPI / Swagger UI): https://api.nuki.io/

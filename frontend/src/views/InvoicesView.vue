@@ -288,12 +288,6 @@ async function regenerateSelectedInvoice() {
   }
 }
 
-function downloadInvoice(invoice?: Invoice | null) {
-  if (!invoice) return
-  const base = typeof window !== 'undefined' ? window.location.origin : ''
-  window.location.assign(`${base}${invoice.download_url}`)
-}
-
 watch(
   pid,
   () => {
@@ -362,7 +356,6 @@ watch(
           @submit="saveInvoice"
           @select-stay="onStaySelect"
           @select-payout="onPayoutSelect"
-          @download="downloadInvoice"
           @regenerate="regenerateSelectedInvoice"
         />
       </div>

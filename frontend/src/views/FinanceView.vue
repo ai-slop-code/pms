@@ -27,6 +27,8 @@ import type {
   FinanceCategory,
   FinanceTransaction,
   FinanceRecurringRule as RecurringRule,
+  FinanceResetPreview,
+  FinanceResetResult,
   FinanceSummary,
 } from '@/api/types/finance'
 
@@ -126,6 +128,12 @@ const importPreview = ref<ImportPreviewResponse | null>(null)
 const importPreviewOpen = ref(false)
 const importCommitting = ref(false)
 
+const resetDialogOpen = ref(false)
+const resetPreview = ref<FinanceResetPreview | null>(null)
+const resetPreviewLoading = ref(false)
+const resetSubmitting = ref(false)
+const resetError = ref('')
+
 interface GeneratedEntrySyncChanges {
   recurring_inserted: number
   recurring_updated: number
@@ -186,6 +194,35 @@ function generatedEntrySyncToast(changes: GeneratedEntrySyncChanges | undefined)
   return `Generated entries synced for ${month.value}: ${parts.join(', ')} updated.`
 }
 
+const resetDeleteCountItems = computed(() => {
+  const counts = resetPreview.value?.would_delete
+  if (!counts) return []
+  return [
+    ['Finance transactions', counts.finance_transactions],
+    ['Recurring rules', counts.finance_recurring_rules],
+    ['Finance bookings', counts.finance_bookings],
+    ['Finance imports', counts.finance_imports],
+    ['Booking merge rows', counts.finance_booking_merges],
+    ['Month sync states', counts.finance_month_states],
+    ['Finance attachment files', counts.finance_attachment_files],
+    ['Linked invoices', counts.invoices],
+    ['Invoice files', counts.invoice_files],
+  ] as Array<[string, number]>
+})
+
+const resetPreserveCountItems = computed(() => {
+  const counts = resetPreview.value?.would_preserve
+  if (!counts) return []
+  return [
+    ['Cleaning salary transactions', counts.cleaning_salary_transactions],
+    ['Cleaning daily logs', counts.cleaning_daily_logs],
+    ['Cleaning salary adjustments', counts.cleaning_salary_adjustments],
+    ['Cleaner fee history', counts.cleaner_fee_history],
+    ['Finance categories', counts.finance_categories],
+    ['Invoice sequences', counts.invoice_sequences],
+  ] as Array<[string, number]>
+})
+
 async function loadAll() {
   if (!pid.value) return
   loading.value = true
@@ -209,6 +246,61 @@ async function loadAll() {
     error.value = e instanceof Error ? e.message : 'Failed to load finance data'
   } finally {
     loading.value = false
+  }
+}
+
+async function openResetDialog() {
+  resetDialogOpen.value = true
+  resetPreview.value = null
+  resetError.value = ''
+  if (!pid.value) return
+  resetPreviewLoading.value = true
+  try {
+    resetPreview.value = await api<FinanceResetPreview>(
+      `/api/properties/${pid.value}/finance/reset/preview`,
+      { method: 'POST' },
+    )
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Failed to load reset preview'
+    resetError.value = msg
+    toast.error(msg)
+  } finally {
+    resetPreviewLoading.value = false
+  }
+}
+
+async function submitFinanceReset() {
+  if (!pid.value || !resetPreview.value) return
+  const invoiceCount = resetPreview.value.would_delete.invoices
+  const invoiceCopy = invoiceCount > 0
+    ? ` This will also delete ${invoiceCount} linked invoice${invoiceCount === 1 ? '' : 's'} and their invoice files. Invoice numbers will not be reused.`
+    : ' No linked invoices are currently in the reset preview.'
+  const ok = await confirm({
+    title: 'Reset finance records?',
+    message: `This permanently deletes manual transactions, Booking.com imports, payout/statement rows, recurring rules, generated recurring rows, and finance attachments for this property.${invoiceCopy} Cleaning salary from flat entries will remain.`,
+    confirmLabel: 'Reset finance records',
+    tone: 'danger',
+  })
+  if (!ok) return
+  resetSubmitting.value = true
+  resetError.value = ''
+  try {
+    const result = await api<FinanceResetResult>(`/api/properties/${pid.value}/finance/reset`, {
+      method: 'POST',
+      json: { confirmed: true, preserve_cleaning_salary: true },
+    })
+    toast.success(
+      `Reset complete: deleted ${result.deleted.finance_transactions} transactions and preserved cleaning salary.`,
+    )
+    resetDialogOpen.value = false
+    resetPreview.value = null
+    await loadAll()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Failed to reset finance records'
+    resetError.value = msg
+    toast.error(msg)
+  } finally {
+    resetSubmitting.value = false
   }
 }
 
@@ -565,6 +657,7 @@ watch(
           <template #iconLeft><ChevronRight :size="16" aria-hidden="true" /></template>
         </UiButton>
         <template #trailing>
+          <UiButton variant="danger" :disabled="loading" @click="openResetDialog">Reset finance records</UiButton>
           <UiButton variant="secondary" :disabled="loading" @click="loadAll">Refresh</UiButton>
           <UiButton
             variant="primary"
@@ -626,6 +719,58 @@ watch(
 
       <FinanceBreakdownTab v-if="tab === 'breakdown'" :summary="summary" />
     </template>
+
+    <UiDialog
+      :open="resetDialogOpen"
+      title="Reset finance records?"
+      size="lg"
+      @update:open="resetDialogOpen = $event"
+    >
+      <div class="reset-preview">
+        <p>
+          This destructive reset deletes manual transactions, Booking.com imports,
+          payout/statement rows, recurring rules, generated recurring rows, and finance attachments
+          for this property.
+        </p>
+        <p class="reset-preview__keep">Cleaning salary from flat entries will remain visible in finance.</p>
+        <UiInlineBanner
+          v-if="resetPreview?.would_delete.invoices"
+          tone="danger"
+          :title="`${resetPreview.would_delete.invoices} linked invoice${resetPreview.would_delete.invoices === 1 ? '' : 's'} and ${resetPreview.would_delete.invoice_files} invoice file record${resetPreview.would_delete.invoice_files === 1 ? '' : 's'} will be deleted. Invoice numbers will not be reused.`"
+        />
+        <UiInlineBanner v-if="resetError" tone="danger" :title="resetError" />
+        <p v-if="resetPreviewLoading" class="reset-preview__loading">Loading reset preview...</p>
+        <div v-else-if="resetPreview" class="reset-preview__grid">
+          <section>
+            <h3>Will Delete</h3>
+            <dl>
+              <template v-for="([label, value]) in resetDeleteCountItems" :key="label">
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+              </template>
+            </dl>
+          </section>
+          <section>
+            <h3>Will Preserve</h3>
+            <dl>
+              <template v-for="([label, value]) in resetPreserveCountItems" :key="label">
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+              </template>
+            </dl>
+          </section>
+        </div>
+      </div>
+      <template #footer>
+        <UiButton variant="secondary" :disabled="resetSubmitting" @click="resetDialogOpen = false">Cancel</UiButton>
+        <UiButton
+          variant="danger"
+          :disabled="resetPreviewLoading || !resetPreview"
+          :loading="resetSubmitting"
+          @click="submitFinanceReset"
+        >Reset finance records</UiButton>
+      </template>
+    </UiDialog>
 
     <UiDialog
       :open="editDialogOpen"
@@ -771,12 +916,51 @@ watch(
   font-size: var(--font-size-xs);
   white-space: nowrap;
 }
+.reset-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.reset-preview__keep {
+  color: var(--success-fg);
+  font-weight: 600;
+}
+.reset-preview__loading {
+  color: var(--color-text-muted);
+}
+.reset-preview__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.reset-preview h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.reset-preview dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+}
+.reset-preview dt {
+  color: var(--color-text-muted);
+}
+.reset-preview dd {
+  margin: 0;
+  font-weight: 700;
+}
 @media (max-width: 760px) {
   .generated-sync-status {
     width: 100%;
   }
   .generated-sync-status__help {
     white-space: normal;
+  }
+  .reset-preview__grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

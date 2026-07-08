@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { api } from './http'
+import { api, apiUrl } from './http'
 
 const originalFetch = globalThis.fetch
 
@@ -119,5 +119,25 @@ describe('api()', () => {
       vi.unstubAllEnvs()
       vi.resetModules()
     }
+  })
+
+  it('builds navigation URLs with VITE_API_BASE_URL when set', async () => {
+    vi.resetModules()
+    vi.stubEnv('VITE_API_BASE_URL', 'https://api.pms.airport.sk/')
+    try {
+      const mod = await import('./http')
+      expect(mod.apiUrl('/api/properties/7/invoices/101/download')).toBe(
+        'https://api.pms.airport.sk/api/properties/7/invoices/101/download',
+      )
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
+  })
+
+  it('keeps navigation URLs relative without an API base URL', () => {
+    expect(apiUrl('/api/properties/7/invoices/101/download')).toBe(
+      '/api/properties/7/invoices/101/download',
+    )
   })
 })

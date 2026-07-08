@@ -9,6 +9,7 @@ interface Props {
   variant?: Variant
   size?: Size
   type?: 'button' | 'submit' | 'reset'
+  href?: string
   disabled?: boolean
   loading?: boolean
   block?: boolean
@@ -19,6 +20,7 @@ const props = withDefaults(defineProps<Props>(), {
   variant: 'secondary',
   size: 'md',
   type: 'button',
+  href: undefined,
   disabled: false,
   loading: false,
   block: false,
@@ -34,7 +36,18 @@ const classes = computed(() => [
 </script>
 
 <template>
+  <a
+    v-if="href && !disabled && !loading"
+    :href="href"
+    :class="classes"
+    :aria-label="ariaLabel"
+  >
+    <slot name="iconLeft" />
+    <span v-if="$slots.default" class="ui-btn__label"><slot /></span>
+    <slot name="iconRight" />
+  </a>
   <button
+    v-else
     :type="type"
     :class="classes"
     :disabled="disabled || loading"
@@ -62,6 +75,7 @@ const classes = computed(() => [
   transition: background var(--motion-1) var(--ease-standard),
     color var(--motion-1) var(--ease-standard),
     border-color var(--motion-1) var(--ease-standard);
+  text-decoration: none;
   white-space: nowrap;
   user-select: none;
 }

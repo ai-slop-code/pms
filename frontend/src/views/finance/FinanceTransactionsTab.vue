@@ -10,6 +10,7 @@ import UiSelect from '@/components/ui/UiSelect.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import UiFileInput from '@/components/ui/UiFileInput.vue'
+import { apiUrl } from '@/api/http'
 import { formatShortDate, isoTitle, formatEuros } from '@/utils/format'
 import { displayDirection, displaySource, directionTone, type TxForm } from './helpers'
 import type { FinanceCategory, FinanceTransaction } from '@/api/types/finance'
@@ -41,7 +42,7 @@ const eur = (cents?: number | null) => formatEuros(cents ?? 0)
 
 const attachmentFileName = (path: string) => path.split('/').pop() || path
 const attachmentDownloadUrl = (tx: FinanceTransaction) =>
-  `/api/properties/${props.propertyId}/finance/transactions/${tx.id}/attachment/download`
+  apiUrl(`/api/properties/${props.propertyId}/finance/transactions/${tx.id}/attachment/download`)
 
 const filteredTransactions = computed(() => {
   return props.transactions.filter((t) => {

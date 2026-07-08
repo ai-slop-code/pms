@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"mime/multipart"
 	"net/http"
@@ -161,6 +162,11 @@ type financeGeneratedEntrySyncResponse struct {
 	GeneratedEntrySync      financeGeneratedEntrySyncRow        `json:"generated_entry_sync"`
 	Changes                 financeGeneratedEntrySyncChangesRow `json:"changes"`
 	GeneratedRecurringCount int                                 `json:"generated_recurring_count"`
+}
+
+type financeResetRequest struct {
+	Confirmed              bool  `json:"confirmed"`
+	PreserveCleaningSalary *bool `json:"preserve_cleaning_salary"`
 }
 
 func categoryToRow(c store.FinanceCategory) financeCategoryRow {
@@ -614,6 +620,87 @@ func (s *Server) syncFinanceGeneratedEntriesWithReason(w http.ResponseWriter, r 
 		Changes:                 generatedEntrySyncChangesToRow(changes),
 		GeneratedRecurringCount: changes.RecurringInserted,
 	})
+}
+
+func (s *Server) previewFinanceReset(w http.ResponseWriter, r *http.Request) {
+	actor, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Finance, permissions.LevelAdmin)
+	if !ok {
+		return
+	}
+	preview, err := s.Store.PreviewFinanceReset(r.Context(), pid)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	s.audit(r, actor, "finance_reset_preview", "property", strconv.FormatInt(pid, 10), "success")
+	WriteJSON(w, http.StatusOK, preview)
+}
+
+func (s *Server) resetFinanceRecords(w http.ResponseWriter, r *http.Request) {
+	actor, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Finance, permissions.LevelAdmin)
+	if !ok {
+		return
+	}
+	var body financeResetRequest
+	if err := ReadJSON(r, &body); err != nil {
+		s.audit(r, actor, "finance_reset", "property", strconv.FormatInt(pid, 10), "failure")
+		WriteError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if !body.Confirmed {
+		s.audit(r, actor, "finance_reset", "property", strconv.FormatInt(pid, 10), "failure")
+		WriteError(w, http.StatusBadRequest, "confirmation is required")
+		return
+	}
+	if body.PreserveCleaningSalary != nil && !*body.PreserveCleaningSalary {
+		s.audit(r, actor, "finance_reset", "property", strconv.FormatInt(pid, 10), "failure")
+		WriteError(w, http.StatusBadRequest, "preserve_cleaning_salary must be true")
+		return
+	}
+	prop, err := s.Store.GetProperty(r.Context(), pid)
+	if err != nil {
+		s.audit(r, actor, "finance_reset", "property", strconv.FormatInt(pid, 10), "failure")
+		WriteError(w, http.StatusNotFound, "property not found")
+		return
+	}
+	loc, err := time.LoadLocation(prop.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	var actorID *int64
+	if actor != nil {
+		actorID = &actor.ID
+	}
+	result, filePaths, err := s.Store.ResetFinanceRecords(r.Context(), pid, actorID, loc)
+	if err != nil {
+		s.audit(r, actor, "finance_reset", "property", strconv.FormatInt(pid, 10), "failure")
+		WriteError(w, http.StatusInternalServerError, "finance reset failed")
+		return
+	}
+	deleteErrors := s.deleteFinanceResetFiles(filePaths)
+	if err := s.Store.UpdateFinanceResetRunFileDeleteErrors(context.Background(), result.ResetRunID, deleteErrors); err != nil {
+		log.Printf("finance_reset: failed to update file delete errors for reset_run_id=%d: %v", result.ResetRunID, err)
+	}
+	s.audit(r, actor, "finance_reset", "property", strconv.FormatInt(pid, 10), "success")
+	WriteJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) deleteFinanceResetFiles(relativePaths []string) []string {
+	if len(relativePaths) == 0 {
+		return nil
+	}
+	errs := make([]string, 0)
+	for _, rel := range relativePaths {
+		fullPath, err := s.resolveDataFilePath(rel)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", rel, err))
+			continue
+		}
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Sprintf("%s: %v", rel, err))
+		}
+	}
+	return errs
 }
 
 func (s *Server) getFinanceSummary(w http.ResponseWriter, r *http.Request) {

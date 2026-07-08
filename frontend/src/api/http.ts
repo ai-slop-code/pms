@@ -27,6 +27,10 @@ function resolveBase(): string {
 
 const base = resolveBase()
 
+export function apiUrl(path: string): string {
+  return base + path
+}
+
 /**
  * Normalises any `HeadersInit` — plain record, `Headers`, or an iterable of
  * `[name, value]` tuples — into a plain `Record<string, string>`. The old
@@ -63,7 +67,7 @@ export async function api<T>(
     headers['Content-Type'] = 'application/json'
     body = JSON.stringify(init.json)
   }
-  const res = await fetch(base + path, {
+  const res = await fetch(apiUrl(path), {
     ...init,
     headers,
     body,

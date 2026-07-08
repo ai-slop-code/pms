@@ -5,6 +5,7 @@ import UiSection from '@/components/ui/UiSection.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 import UiSelect from '@/components/ui/UiSelect.vue'
 import UiButton from '@/components/ui/UiButton.vue'
+import { apiUrl } from '@/api/http'
 import { occupancyOptionLabel, payoutOptionLabel } from './format'
 import type {
   Invoice,
@@ -50,7 +51,6 @@ const emit = defineEmits<{
   submit: []
   selectStay: [value: string]
   selectPayout: [value: string]
-  download: [invoice: Invoice | null]
   regenerate: []
 }>()
 </script>
@@ -64,8 +64,8 @@ const emit = defineEmits<{
           v-if="selectedInvoice"
           variant="secondary"
           size="sm"
+          :href="apiUrl(selectedInvoice.download_url)"
           :disabled="regenerating"
-          @click="emit('download', selectedInvoice)"
         >
           <template #iconLeft><Download :size="14" aria-hidden="true" /></template>
           Download PDF
