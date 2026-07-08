@@ -450,6 +450,48 @@ func TestComputeFinanceSummary_CalculatesCleanerMargin(t *testing.T) {
 	}
 }
 
+func TestUpsertBookingFinanceTransaction_UsesCanonicalDirections(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	ctx := context.Background()
+	pid := setupFinanceProperty(t, st)
+	catID := categoryIDByCode(t, st, pid, "booking_income")
+	payoutDate := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+
+	payout := &FinanceBookingPayout{
+		PropertyID:      pid,
+		ReferenceNumber: "REF-CANONICAL-DIR",
+		NetCents:        12345,
+		PayoutDate:      payoutDate,
+	}
+	if err := st.CreateBookingPayout(ctx, payout); err != nil {
+		t.Fatal(err)
+	}
+	created, err := st.GetBookingPayoutByReference(ctx, pid, payout.ReferenceNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.UpsertBookingFinanceTransaction(ctx, pid, created.ID, created.ReferenceNumber, created.NetCents, payoutDate, catID, "PAYOUT-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var direction string
+	if err := st.DB.QueryRowContext(ctx, `SELECT direction FROM finance_transactions WHERE property_id = ? AND source_type = 'booking_payout' AND source_reference_id = ?`, pid, created.ReferenceNumber).Scan(&direction); err != nil {
+		t.Fatal(err)
+	}
+	if direction != "incoming" {
+		t.Fatalf("direction = %q, want incoming", direction)
+	}
+
+	summary, err := st.ComputeFinanceSummary(ctx, pid, "2026-04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.MonthlyIncomingCents != 12345 || summary.MonthlyPropertyIncomeCents != 12345 {
+		t.Fatalf("summary incoming=%d property_income=%d, want 12345", summary.MonthlyIncomingCents, summary.MonthlyPropertyIncomeCents)
+	}
+}
+
 func TestOpenFinanceMonth_PositiveTimezoneKeepsTargetMonth(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := setupFinanceProperty(t, st)

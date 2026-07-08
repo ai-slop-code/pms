@@ -313,10 +313,10 @@ func (s *Store) UpsertBookingFinanceTransaction(ctx context.Context, propertyID,
 		return nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	dir := "in"
+	dir := "incoming"
 	amount := netCents
 	if amount < 0 {
-		dir = "out"
+		dir = "outgoing"
 		amount = -amount
 	}
 	note := "Booking.com payout"
