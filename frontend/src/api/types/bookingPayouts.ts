@@ -21,6 +21,8 @@ export interface BookingPayoutRow {
   occupancy_start_at?: string
   occupancy_end_at?: string
   occupancy_summary?: string
+  outcome_override?: 'cancelled_non_refundable' | 'no_show' | null
+  outcome_override_marked_at?: string | null
   linked_invoice_id?: number | null
   has_payout_data: boolean
   has_statement_data: boolean

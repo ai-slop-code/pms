@@ -199,6 +199,7 @@ func (s *Store) ListCleaningCalendarCheckoutCandidates(ctx context.Context, prop
 		WHERE property_id = ?
 		  AND status IN ('active', 'updated')
 		  AND (closure_state IS NULL OR closure_state <> 'closed')
+		  AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
 		  AND end_at >= ?
 		  AND end_at < ?
 		ORDER BY end_at ASC`
@@ -212,6 +213,7 @@ func (s *Store) FindCleaningCalendarSameDayArrival(ctx context.Context, property
 		  AND id <> ?
 		  AND status IN ('active', 'updated')
 		  AND (closure_state IS NULL OR closure_state <> 'closed')
+		  AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
 		  AND start_at >= ?
 		  AND start_at < ?
 		ORDER BY start_at ASC, id ASC

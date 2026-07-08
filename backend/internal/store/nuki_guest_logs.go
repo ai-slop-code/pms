@@ -61,6 +61,7 @@ func (s *Store) ListNukiGuestDailyEntriesInRange(ctx context.Context, propertyID
 		  AND g.day_date >= ? AND g.day_date <= ?
 		  AND o.status NOT IN ('cancelled', 'deleted_from_source')
 		  AND (o.closure_state IS NULL OR o.closure_state <> 'closed')
+		  AND (o.stay_outcome IS NULL OR o.stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
 		ORDER BY g.first_entry_at ASC, g.id ASC`,
 		propertyID, fromDate, toDate)
 	if err != nil {

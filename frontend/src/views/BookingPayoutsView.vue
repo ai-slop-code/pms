@@ -12,6 +12,7 @@ import UiButton from '@/components/ui/UiButton.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import UiInlineBanner from '@/components/ui/UiInlineBanner.vue'
 import UiEmptyState from '@/components/ui/UiEmptyState.vue'
+import { stayOutcomeLabel, stayOutcomeTone } from '@/views/occupancy/closure'
 import { formatEuros, formatShortDate, isoTitle } from '@/utils/format'
 import { monthKey, shiftMonth } from '@/utils/month'
 import type {
@@ -228,6 +229,7 @@ watch([pid, month], () => {
             <th class="num">Breakdown</th>
             <th>Mapping</th>
             <th>Sources</th>
+            <th>Outcome</th>
             <th>Invoice</th>
             <th>Map action</th>
           </tr>
@@ -269,6 +271,12 @@ watch([pid, month], () => {
               >Statement</UiBadge>
               <span v-if="!p.has_payout_data && !p.has_statement_data" class="muted">—</span>
             </div>
+          </td>
+          <td>
+            <UiBadge v-if="p.outcome_override" :tone="stayOutcomeTone(p.outcome_override)">
+              {{ stayOutcomeLabel(p.outcome_override) }}
+            </UiBadge>
+            <span v-else class="muted">—</span>
           </td>
           <td>
             <span v-if="p.linked_invoice_id" class="invoice-link">#{{ p.linked_invoice_id }}</span>

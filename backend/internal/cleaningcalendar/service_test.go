@@ -148,6 +148,91 @@ func TestReconcilePropertyIncludesExternalSale(t *testing.T) {
 	}
 }
 
+func TestReconcilePropertyRemovesStayOutcomeCleaningEvent(t *testing.T) {
+	ctx := context.Background()
+	st, propertyID := setupCleaningCalendarProperty(t, ctx)
+	runID, err := st.StartOccupancySyncRun(ctx, propertyID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkout := occupancy(propertyID, "no-show", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
+		t.Fatal(err)
+	}
+	row, err := st.GetOccupancyBySourceEventUID(ctx, propertyID, "no-show")
+	if err != nil || row == nil {
+		t.Fatalf("get occupancy: %v", err)
+	}
+	client := &fakeCalendarClient{configured: true}
+	svc := &Service{Store: st, Client: client, Now: func() time.Time { return time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC) }}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetCleaningCalendarEventByOccupancy(ctx, propertyID, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkOccupancyStayOutcome(ctx, propertyID, row.ID, 1, store.StayOutcomeNoShow, "guest did not arrive"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.GetCleaningCalendarEventByOccupancy(ctx, propertyID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != store.CleaningCalendarStatusRemoved {
+		t.Fatalf("status=%q want removed", after.Status)
+	}
+	if after.ErrorMessage.String != "stay outcome: no_show" {
+		t.Fatalf("error_message=%q", after.ErrorMessage.String)
+	}
+	if len(client.deletes) != 1 {
+		t.Fatalf("deletes=%d want 1", len(client.deletes))
+	}
+}
+
+func TestReconcilePropertySameDayArrivalIgnoresStayOutcome(t *testing.T) {
+	ctx := context.Background()
+	st, propertyID := setupCleaningCalendarProperty(t, ctx)
+	runID, err := st.StartOccupancySyncRun(ctx, propertyID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkout := occupancy(propertyID, "checkout", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	arrival := occupancy(propertyID, "arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), "active")
+	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertOccupancy(ctx, arrival, runID); err != nil {
+		t.Fatal(err)
+	}
+	arrivalRow, err := st.GetOccupancyBySourceEventUID(ctx, propertyID, "arrival")
+	if err != nil || arrivalRow == nil {
+		t.Fatalf("get arrival: %v", err)
+	}
+	if err := st.MarkOccupancyStayOutcome(ctx, propertyID, arrivalRow.ID, 1, store.StayOutcomeCancelledNonRefundable, "cancelled"); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeCalendarClient{configured: true}
+	svc := &Service{Store: st, Client: client, Now: func() time.Time { return time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC) }}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	events, err := st.ListCleaningCalendarEventsForMonth(ctx, propertyID, "2026-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.OccupancyID == arrivalRow.ID && ev.Status != store.CleaningCalendarStatusRemoved {
+			t.Fatalf("outcome arrival created active event: %+v", ev)
+		}
+		if ev.OccupancyID != arrivalRow.ID && ev.Title != "Upratovanie: Bez Hosta" {
+			t.Fatalf("checkout title=%q want no-guest", ev.Title)
+		}
+	}
+}
+
 func setupCleaningCalendarProperty(t *testing.T, ctx context.Context) (*store.Store, int64) {
 	t.Helper()
 	st := &store.Store{DB: testutil.OpenTestDB(t)}

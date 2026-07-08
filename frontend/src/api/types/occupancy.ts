@@ -22,6 +22,10 @@ export interface Occupancy {
   external_net_amount_cents?: number | null
   external_currency?: string | null
   external_channel?: string | null
+  stay_outcome?: 'cancelled_non_refundable' | 'no_show' | null
+  stay_outcome_reason?: string | null
+  stay_outcome_marked_at?: string | null
+  stay_outcome_marked_by_user_id?: number | null
 }
 
 /** Lightweight occupancy shape used by MessagesView's generate picker. */

@@ -194,3 +194,124 @@ func TestOccupancyClosure_UpsertPreservesLabel(t *testing.T) {
 		t.Fatalf("closure_category lost after resync: %v", row.ClosureCategory)
 	}
 }
+
+func TestOccupancyStayOutcomeLifecycle(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "outcome@test.local", "hash", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProperty(ctx, u.ID, "P", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := st.StartOccupancySyncRun(ctx, p.ID, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occ := &Occupancy{
+		PropertyID:     p.ID,
+		SourceType:     "booking_ics",
+		SourceEventUID: "uid-outcome",
+		StartAt:        time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		EndAt:          time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC),
+		Status:         "active",
+		ContentHash:    "h1",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	row, err := st.GetOccupancyBySourceEventUID(ctx, p.ID, "uid-outcome")
+	if err != nil || row == nil {
+		t.Fatalf("get: %v", err)
+	}
+	bookingID := insertStatementBooking(t, st, p.ID, "OUT1", "2026-07-01", "2026-08-01", "2026-08-03", "CANCELLED", 2, 2, 20000, 3000)
+	if _, err := st.DB.ExecContext(ctx, `UPDATE finance_bookings SET occupancy_id = ? WHERE id = ?`, row.ID, bookingID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `UPDATE occupancies SET finance_booking_id = ? WHERE id = ?`, bookingID, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkOccupancyStayOutcome(ctx, p.ID, row.ID, u.ID, StayOutcomeCancelledNonRefundable, "non-refundable"); err != nil {
+		t.Fatalf("mark outcome: %v", err)
+	}
+	var financeOutcome sql.NullString
+	if err := st.DB.QueryRowContext(ctx, `SELECT outcome_override FROM finance_bookings WHERE id = ?`, bookingID).Scan(&financeOutcome); err != nil {
+		t.Fatal(err)
+	}
+	if financeOutcome.String != StayOutcomeCancelledNonRefundable {
+		t.Fatalf("finance outcome=%v", financeOutcome)
+	}
+	row, err = st.GetOccupancyByID(ctx, p.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "active" {
+		t.Fatalf("status=%q want active", row.Status)
+	}
+	if got := row.StayOutcome.String; got != StayOutcomeCancelledNonRefundable {
+		t.Fatalf("stay_outcome=%q", got)
+	}
+	if !row.StayOutcomeMarkedByUserID.Valid || row.StayOutcomeMarkedByUserID.Int64 != u.ID {
+		t.Fatalf("marked_by=%v", row.StayOutcomeMarkedByUserID)
+	}
+	if !row.StayOutcomeMarkedAt.Valid {
+		t.Fatal("marked_at not set")
+	}
+	occ.ContentHash = "h2"
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	row, err = st.GetOccupancyByID(ctx, p.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := row.StayOutcome.String; got != StayOutcomeCancelledNonRefundable {
+		t.Fatalf("stay_outcome lost after resync: %q", got)
+	}
+	if err := st.ClearOccupancyStayOutcome(ctx, p.ID, row.ID); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if err := st.DB.QueryRowContext(ctx, `SELECT outcome_override FROM finance_bookings WHERE id = ?`, bookingID).Scan(&financeOutcome); err != nil {
+		t.Fatal(err)
+	}
+	if financeOutcome.Valid {
+		t.Fatalf("finance outcome still set: %v", financeOutcome)
+	}
+	row, err = st.GetOccupancyByID(ctx, p.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.StayOutcome.Valid {
+		t.Fatalf("stay_outcome still set: %v", row.StayOutcome)
+	}
+}
+
+func TestOccupancyStayOutcomeRejectsClosureRows(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, _ := st.CreateUser(ctx, "closed-outcome@test.local", "hash", "owner")
+	p, _ := st.CreateProperty(ctx, u.ID, "P", "UTC", "en")
+	runID, _ := st.StartOccupancySyncRun(ctx, p.ID, "manual")
+	occ := &Occupancy{
+		PropertyID:     p.ID,
+		SourceType:     "booking_ics",
+		SourceEventUID: "uid-closed-outcome",
+		StartAt:        time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC),
+		EndAt:          time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC),
+		Status:         "active",
+		ContentHash:    "h",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := st.GetOccupancyBySourceEventUID(ctx, p.ID, "uid-closed-outcome")
+	if err := st.CloseOccupancy(ctx, p.ID, row.ID, u.ID, "closed", "other"); err != nil {
+		t.Fatal(err)
+	}
+	err := st.MarkOccupancyStayOutcome(ctx, p.ID, row.ID, u.ID, StayOutcomeNoShow, "no-show")
+	if !errors.Is(err, ErrOccupancyOutcomeIneligible) {
+		t.Fatalf("err=%v want ErrOccupancyOutcomeIneligible", err)
+	}
+}

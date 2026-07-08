@@ -6,6 +6,7 @@ import type { Occupancy } from '@/api/types/occupancy'
 import type { OccupancyBadgeTone } from './status'
 
 export type ClosureState = 'closed' | 'external_sale'
+export type StayOutcome = 'cancelled_non_refundable' | 'no_show'
 
 export function closureLabel(state?: ClosureState | null | string): string {
   switch (state) {
@@ -31,6 +32,41 @@ export function closureTone(state?: ClosureState | null | string): OccupancyBadg
 
 export function isLabelled(o: Pick<Occupancy, 'closure_state'>): boolean {
   return o.closure_state === 'closed' || o.closure_state === 'external_sale'
+}
+
+export function stayOutcomeLabel(outcome?: StayOutcome | null | string): string {
+  switch (outcome) {
+    case 'cancelled_non_refundable':
+      return 'Cancelled: non-refundable'
+    case 'no_show':
+      return 'No-show'
+    default:
+      return ''
+  }
+}
+
+export function stayOutcomeTone(outcome?: StayOutcome | null | string): OccupancyBadgeTone {
+  switch (outcome) {
+    case 'cancelled_non_refundable':
+      return 'warning'
+    case 'no_show':
+      return 'info'
+    default:
+      return 'neutral'
+  }
+}
+
+export function hasStayOutcome(o: Pick<Occupancy, 'stay_outcome'>): boolean {
+  return o.stay_outcome === 'cancelled_non_refundable' || o.stay_outcome === 'no_show'
+}
+
+export function canMarkStayOutcome(o: Pick<Occupancy, 'source_type' | 'status' | 'closure_state' | 'stay_outcome'>): boolean {
+  return (
+    o.source_type === 'booking_ics' &&
+    (o.status === 'active' || o.status === 'updated') &&
+    !isLabelled(o) &&
+    !hasStayOutcome(o)
+  )
 }
 
 export function formatExternalAmount(o: Occupancy): string {

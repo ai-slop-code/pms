@@ -17,7 +17,17 @@ import UiDialog from '@/components/ui/UiDialog.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import UiInput from '@/components/ui/UiInput.vue'
-import { closureLabel, closureTone, isLabelled, formatExternalAmount } from '@/views/occupancy/closure'
+import {
+  canMarkStayOutcome,
+  closureLabel,
+  closureTone,
+  formatExternalAmount,
+  hasStayOutcome,
+  isLabelled,
+  stayOutcomeLabel,
+  stayOutcomeTone,
+  type StayOutcome,
+} from '@/views/occupancy/closure'
 import { monthKey, parseMonthKey } from '@/utils/month'
 import type {
   Occupancy as Occ,
@@ -58,6 +68,12 @@ const splitDialogError = ref('')
 const splitDialogTarget = ref<Occ | null>(null)
 const splitStartNight = ref('')
 const splitEndNight = ref('')
+const outcomeDialogOpen = ref(false)
+const outcomeDialogBusy = ref(false)
+const outcomeDialogError = ref('')
+const outcomeDialogTarget = ref<Occ | null>(null)
+const outcomeDialogOutcome = ref<StayOutcome>('cancelled_non_refundable')
+const outcomeReason = ref('')
 const dialogStayLabel = computed(() => {
   const o = dialogTarget.value
   if (!o) return ''
@@ -66,6 +82,21 @@ const dialogStayLabel = computed(() => {
 })
 const splitDialogStayLabel = computed(() => {
   const o = splitDialogTarget.value
+  if (!o) return ''
+  return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
+})
+const outcomeDialogTitle = computed(() =>
+  outcomeDialogOutcome.value === 'cancelled_non_refundable'
+    ? 'Mark non-refundable cancellation'
+    : 'Mark no-show',
+)
+const outcomeDialogCopy = computed(() =>
+  outcomeDialogOutcome.value === 'cancelled_non_refundable'
+    ? 'This keeps the nights counted as occupied and removes the checkout cleaning event. It will not count as a normal cancellation.'
+    : 'This removes the checkout cleaning event and marks Booking.com commission handling as no-show. Revenue still comes from imported Booking.com files.',
+)
+const outcomeDialogStayLabel = computed(() => {
+  const o = outcomeDialogTarget.value
   if (!o) return ''
   return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
 })
@@ -93,7 +124,7 @@ function stayNights(o: Occ) {
 }
 
 function canSplitNights(o: Occ) {
-  return !isLabelled(o) && stayNights(o) > 1
+  return !isLabelled(o) && !hasStayOutcome(o) && stayNights(o) > 1
 }
 
 function openCloseFromDay(o: Occ) {
@@ -108,9 +139,79 @@ async function reopenFromDay(o: Occ) {
   dayDialogOpen.value = false
   await reopenStay(o)
 }
+function markOutcomeFromDay(o: Occ, outcome: StayOutcome) {
+  dayDialogOpen.value = false
+  openOutcomeDialog(o, outcome)
+}
+async function clearOutcomeFromDay(o: Occ) {
+  dayDialogOpen.value = false
+  await clearOutcome(o)
+}
 function splitNightsFromDay(o: Occ) {
   dayDialogOpen.value = false
   openSplitDialog(o, dayDialogDate.value)
+}
+
+function openOutcomeDialog(o: Occ, outcome: StayOutcome) {
+  outcomeDialogTarget.value = o
+  outcomeDialogOutcome.value = outcome
+  outcomeReason.value = ''
+  outcomeDialogError.value = ''
+  outcomeDialogOpen.value = true
+}
+
+async function submitOutcomeDialog() {
+  if (!pid.value || !outcomeDialogTarget.value) return
+  const reason = outcomeReason.value.trim()
+  if (reason.length > 500) {
+    outcomeDialogError.value = 'Reason is too long.'
+    return
+  }
+  const occID = outcomeDialogTarget.value.id
+  const slug =
+    outcomeDialogOutcome.value === 'cancelled_non_refundable'
+      ? 'cancelled-non-refundable'
+      : 'no-show'
+  outcomeDialogBusy.value = true
+  outcomeDialogError.value = ''
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/occupancies/${occID}/outcome/${slug}`, {
+      method: 'POST',
+      json: { reason },
+    })
+    if (!r.ok) throw new Error(r.error || 'Failed to mark outcome')
+    outcomeDialogOpen.value = false
+    success.value = `${stayOutcomeLabel(outcomeDialogOutcome.value)} marked.`
+    if (tab.value === 'list') await loadList()
+    else if (tab.value === 'calendar') await loadCalendar()
+  } catch (e) {
+    outcomeDialogError.value = e instanceof Error ? e.message : 'Failed to mark outcome'
+  } finally {
+    outcomeDialogBusy.value = false
+  }
+}
+
+async function clearOutcome(o: Occ) {
+  if (!pid.value) return
+  const ok = await confirm({
+    title: 'Clear outcome',
+    message: 'Clear the stay outcome override and let normal occupancy, cleaning, and finance rules apply again?',
+    confirmLabel: 'Clear outcome',
+  })
+  if (!ok) return
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/occupancies/${o.id}/outcome/clear`, { method: 'POST' })
+    if (!r.ok) throw new Error(r.error || 'Failed to clear outcome')
+    success.value = 'Stay outcome cleared.'
+    if (tab.value === 'list') await loadList()
+    else if (tab.value === 'calendar') await loadCalendar()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to clear outcome'
+  }
 }
 function openCloseDialog(o: Occ, night = '') {
   dialogTarget.value = o
@@ -442,6 +543,8 @@ watch(
             @close="openCloseDialog"
             @external-sale="openExternalSaleDialog"
             @reopen="reopenStay"
+            @mark-outcome="openOutcomeDialog"
+            @clear-outcome="clearOutcome"
           />
           <OccupancySyncPanel
             v-else
@@ -503,6 +606,29 @@ watch(
         </template>
       </UiDialog>
 
+      <UiDialog v-model:open="outcomeDialogOpen" :title="outcomeDialogTitle" size="sm">
+        <form class="outcome-dialog" @submit.prevent="submitOutcomeDialog">
+          <p class="outcome-dialog__copy">{{ outcomeDialogCopy }}</p>
+          <p class="outcome-dialog__stay">{{ outcomeDialogStayLabel }}</p>
+          <UiInput
+            v-model="outcomeReason"
+            label="Reason (optional)"
+            maxlength="500"
+            :disabled="outcomeDialogBusy"
+            placeholder="Add an operator note"
+          />
+          <p v-if="outcomeDialogError" class="outcome-dialog__error">{{ outcomeDialogError }}</p>
+        </form>
+        <template #footer>
+          <UiButton variant="ghost" :disabled="outcomeDialogBusy" @click="outcomeDialogOpen = false">
+            Cancel
+          </UiButton>
+          <UiButton variant="primary" :loading="outcomeDialogBusy" @click="submitOutcomeDialog">
+            {{ outcomeDialogTitle }}
+          </UiButton>
+        </template>
+      </UiDialog>
+
       <UiDialog
         v-model:open="dayDialogOpen"
         :title="dayDialogDate ? `Stays on ${dayDialogDate}` : 'Stays'"
@@ -518,13 +644,16 @@ watch(
                   <UiBadge v-if="isLabelled(o)" :tone="closureTone(o.closure_state)">
                     {{ closureLabel(o.closure_state) }}
                   </UiBadge>
+                  <UiBadge v-if="hasStayOutcome(o)" :tone="stayOutcomeTone(o.stay_outcome)">
+                    {{ stayOutcomeLabel(o.stay_outcome) }}
+                  </UiBadge>
                   <span v-if="o.closure_state === 'external_sale'" class="day-dialog__amount">
                     {{ formatExternalAmount(o) }}
                   </span>
                 </div>
               </div>
               <div class="day-dialog__actions">
-                <template v-if="!isLabelled(o)">
+                <template v-if="!isLabelled(o) && !hasStayOutcome(o)">
                   <UiButton
                     size="sm"
                     variant="ghost"
@@ -550,15 +679,42 @@ watch(
                   >
                     Split nights
                   </UiButton>
+                  <UiButton
+                    v-if="canMarkStayOutcome(o)"
+                    size="sm"
+                    variant="ghost"
+                    :disabled="dialogBusy || splitDialogBusy || outcomeDialogBusy"
+                    @click="markOutcomeFromDay(o, 'cancelled_non_refundable')"
+                  >
+                    Non-refundable cancellation
+                  </UiButton>
+                  <UiButton
+                    v-if="canMarkStayOutcome(o)"
+                    size="sm"
+                    variant="ghost"
+                    :disabled="dialogBusy || splitDialogBusy || outcomeDialogBusy"
+                    @click="markOutcomeFromDay(o, 'no_show')"
+                  >
+                    No-show
+                  </UiButton>
                 </template>
                 <UiButton
-                  v-else
+                  v-else-if="isLabelled(o)"
                   size="sm"
                   variant="ghost"
                   :disabled="dialogBusy || splitDialogBusy"
                   @click="reopenFromDay(o)"
                 >
                   Reopen
+                </UiButton>
+                <UiButton
+                  v-else
+                  size="sm"
+                  variant="ghost"
+                  :disabled="dialogBusy || splitDialogBusy || outcomeDialogBusy"
+                  @click="clearOutcomeFromDay(o)"
+                >
+                  Clear outcome
                 </UiButton>
               </div>
             </div>
@@ -578,9 +734,23 @@ watch(
   flex-direction: column;
   gap: var(--space-3);
 }
+.outcome-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
 .split-dialog__copy {
   margin: 0;
   color: var(--color-text-muted);
+}
+.outcome-dialog__copy,
+.outcome-dialog__stay {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+.outcome-dialog__stay {
+  font-weight: 500;
+  color: var(--color-text);
 }
 .split-dialog__grid {
   display: grid;
@@ -588,6 +758,11 @@ watch(
   gap: var(--space-3);
 }
 .split-dialog__error {
+  margin: 0;
+  color: var(--danger-fg);
+  font-size: var(--font-size-sm);
+}
+.outcome-dialog__error {
   margin: 0;
   color: var(--danger-fg);
   font-size: var(--font-size-sm);

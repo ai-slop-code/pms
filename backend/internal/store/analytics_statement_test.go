@@ -48,6 +48,17 @@ func insertStatementBooking(t *testing.T, st *Store, pid int64, ref, bookedOn, c
 	return id
 }
 
+func setStatementOutcomeOverride(t *testing.T, st *Store, bookingID int64, outcome string) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := st.DB.ExecContext(context.Background(), `
+		UPDATE finance_bookings
+		SET outcome_override = ?, outcome_override_marked_at = ?, updated_at = ?
+		WHERE id = ?`, outcome, now, now, bookingID); err != nil {
+		t.Fatalf("set outcome override: %v", err)
+	}
+}
+
 func defaultStatementWindow() (time.Time, time.Time) {
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -118,6 +129,28 @@ func TestListCancellationByArrivalCohort_GroupsByCheckInMonth(t *testing.T) {
 	}
 	if rows[1].Month != "2026-05" || rows[1].Active != 1 || rows[1].Cancelled != 0 {
 		t.Fatalf("may arrival cohort: %+v", rows[1])
+	}
+}
+
+func TestListCancellationByBookingCohort_OutcomeOverrideExcludesCancelledFromRate(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := seedAnalyticsProperty(t, st)
+	ctx := context.Background()
+
+	insertStatementBooking(t, st, pid, "O1", "2026-04-01", "2026-04-10", "2026-04-12", "OK", 2, 2, 20000, 3000)
+	bookingID := insertStatementBooking(t, st, pid, "O2", "2026-04-02", "2026-04-20", "2026-04-22", "CANCELLED", 2, 2, 20000, 3000)
+	setStatementOutcomeOverride(t, st, bookingID, StayOutcomeCancelledNonRefundable)
+
+	from, to := defaultStatementWindow()
+	rows, err := st.ListCancellationByBookingCohort(ctx, pid, from, to, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 cohort, got %d (%+v)", len(rows), rows)
+	}
+	if rows[0].Active != 1 || rows[0].Cancelled != 0 || rows[0].Other != 1 || rows[0].Rate != 0 {
+		t.Fatalf("cohort: %+v", rows[0])
 	}
 }
 
@@ -218,6 +251,27 @@ func TestListCommissionRateTrend_WeightsByGross(t *testing.T) {
 	}
 	if rows[1].Month != "2026-05" || rows[1].Rate != 0.15 {
 		t.Fatalf("may trend row: %+v", rows[1])
+	}
+}
+
+func TestListCommissionRateTrend_OutcomeOverrideTrustsImportedNoShowCommission(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := seedAnalyticsProperty(t, st)
+	ctx := context.Background()
+
+	bookingID := insertStatementBooking(t, st, pid, "NS1", "2026-04-01", "2026-04-10", "2026-04-12", "NO_SHOW", 2, 2, 10000, 1200)
+	setStatementOutcomeOverride(t, st, bookingID, StayOutcomeNoShow)
+
+	from, to := defaultStatementWindow()
+	rows, err := st.ListCommissionRateTrend(ctx, pid, from, to, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 month, got %d (%+v)", len(rows), rows)
+	}
+	if rows[0].GrossCents != 10000 || rows[0].CommissionCents != 1200 || rows[0].Stays != 1 {
+		t.Fatalf("trend row: %+v", rows[0])
 	}
 }
 

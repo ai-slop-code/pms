@@ -21,6 +21,7 @@ import (
 //   - closure_state IS NULL OR != 'closed' — closed rows drop out of
 //     all active-aggregates entirely. Externally-sold rows stay in
 //     because the night is still occupied (just not by a Booking guest).
+//     Stay outcomes stay active: the Booking.com calendar remained blocked.
 const analyticsActiveStatus = `status IN ('active', 'updated') AND (closure_state IS NULL OR closure_state != 'closed')`
 const analyticsCancelledStatus = `status IN ('cancelled', 'deleted_from_source')`
 

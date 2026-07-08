@@ -531,6 +531,9 @@ func (s *Store) BuildCleaningPlaceholderValues(ctx context.Context, propertyID i
 		if occ.Status == "deleted_from_source" || occ.Status == "cancelled" {
 			continue
 		}
+		if occ.StayOutcome.String == StayOutcomeCancelledNonRefundable || occ.StayOutcome.String == StayOutcomeNoShow {
+			continue
+		}
 		endLocal := occ.EndAt.In(loc)
 		// Compare on the local calendar date so stays that check out today are
 		// included even if end_at is stored at UTC midnight.

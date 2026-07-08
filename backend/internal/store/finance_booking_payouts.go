@@ -11,27 +11,29 @@ import (
 )
 
 type FinanceBookingPayout struct {
-	ID                     int64
-	PropertyID             int64
-	ReferenceNumber        string
-	PayoutID               sql.NullString
-	RowType                sql.NullString
-	CheckInDate            sql.NullString
-	CheckOutDate           sql.NullString
-	GuestName              sql.NullString
-	ReservationStatus      sql.NullString
-	Currency               sql.NullString
-	PaymentStatus          sql.NullString
-	AmountCents            sql.NullInt64
-	CommissionCents        sql.NullInt64
-	PaymentServiceFeeCents sql.NullInt64
-	NetCents               int
-	PayoutDate             time.Time
-	TransactionID          sql.NullInt64
-	OccupancyID            sql.NullInt64
-	RawRowJSON             sql.NullString
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	ID                      int64
+	PropertyID              int64
+	ReferenceNumber         string
+	PayoutID                sql.NullString
+	RowType                 sql.NullString
+	CheckInDate             sql.NullString
+	CheckOutDate            sql.NullString
+	GuestName               sql.NullString
+	ReservationStatus       sql.NullString
+	Currency                sql.NullString
+	PaymentStatus           sql.NullString
+	AmountCents             sql.NullInt64
+	CommissionCents         sql.NullInt64
+	PaymentServiceFeeCents  sql.NullInt64
+	NetCents                int
+	PayoutDate              time.Time
+	TransactionID           sql.NullInt64
+	OccupancyID             sql.NullInt64
+	OutcomeOverride         sql.NullString
+	OutcomeOverrideMarkedAt sql.NullTime
+	RawRowJSON              sql.NullString
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 type FinanceBookingPayoutListRow struct {
@@ -48,19 +50,26 @@ type FinanceBookingPayoutListRow struct {
 func (s *Store) GetBookingPayoutByID(ctx context.Context, propertyID, payoutID int64) (*FinanceBookingPayout, error) {
 	var r FinanceBookingPayout
 	var payoutDate, created, updated string
+	var outcomeMarkedAt sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT id, property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name,
 			reservation_status, currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents,
-			net_cents, payout_date, transaction_id, occupancy_id, raw_payout_row_json, created_at, updated_at
+			net_cents, payout_date, transaction_id, occupancy_id, outcome_override, outcome_override_marked_at,
+			raw_payout_row_json, created_at, updated_at
 		FROM finance_bookings
 		WHERE property_id = ? AND id = ?`, propertyID, payoutID).
 		Scan(&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate, &r.GuestName,
 			&r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents, &r.PaymentServiceFeeCents,
-			&r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.RawRowJSON, &created, &updated)
+			&r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.OutcomeOverride, &outcomeMarkedAt,
+			&r.RawRowJSON, &created, &updated)
 	if err != nil {
 		return nil, err
 	}
 	r.PayoutDate, _ = time.Parse(time.RFC3339, payoutDate)
+	if outcomeMarkedAt.Valid && outcomeMarkedAt.String != "" {
+		t, _ := time.Parse(time.RFC3339, outcomeMarkedAt.String)
+		r.OutcomeOverrideMarkedAt = sql.NullTime{Time: t, Valid: true}
+	}
 	r.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	r.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
 	return &r, nil
@@ -69,19 +78,26 @@ func (s *Store) GetBookingPayoutByID(ctx context.Context, propertyID, payoutID i
 func (s *Store) GetBookingPayoutByReference(ctx context.Context, propertyID int64, referenceNumber string) (*FinanceBookingPayout, error) {
 	var r FinanceBookingPayout
 	var payoutDate, created, updated string
+	var outcomeMarkedAt sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT id, property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name,
 			reservation_status, currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents,
-			net_cents, payout_date, transaction_id, occupancy_id, raw_payout_row_json, created_at, updated_at
+			net_cents, payout_date, transaction_id, occupancy_id, outcome_override, outcome_override_marked_at,
+			raw_payout_row_json, created_at, updated_at
 		FROM finance_bookings
 		WHERE property_id = ? AND reference_number = ?`, propertyID, referenceNumber).
 		Scan(&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate, &r.GuestName,
 			&r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents, &r.PaymentServiceFeeCents,
-			&r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.RawRowJSON, &created, &updated)
+			&r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.OutcomeOverride, &outcomeMarkedAt,
+			&r.RawRowJSON, &created, &updated)
 	if err != nil {
 		return nil, err
 	}
 	r.PayoutDate, _ = time.Parse(time.RFC3339, payoutDate)
+	if outcomeMarkedAt.Valid && outcomeMarkedAt.String != "" {
+		t, _ := time.Parse(time.RFC3339, outcomeMarkedAt.String)
+		r.OutcomeOverrideMarkedAt = sql.NullTime{Time: t, Valid: true}
+	}
 	r.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	r.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
 	return &r, nil
@@ -525,7 +541,7 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 			fbp.id, fbp.property_id, fbp.reference_number, fbp.payout_id, fbp.row_type, fbp.check_in_date, fbp.check_out_date,
 			fbp.guest_name, fbp.reservation_status, fbp.currency, fbp.payment_status, fbp.amount_cents, fbp.commission_cents,
 			fbp.payment_service_fee_cents, fbp.net_cents, fbp.payout_date, fbp.transaction_id, fbp.occupancy_id, fbp.raw_payout_row_json,
-			fbp.created_at, fbp.updated_at,
+			fbp.outcome_override, fbp.outcome_override_marked_at, fbp.created_at, fbp.updated_at,
 			(
 				SELECT i.id FROM invoices i
 				WHERE i.property_id = fbp.property_id AND i.finance_booking_payout_id = fbp.id
@@ -560,13 +576,14 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 	for rows.Next() {
 		var r FinanceBookingPayoutListRow
 		var payoutDate, created, updated string
+		var outcomeMarkedAt sql.NullString
 		var occStart, occEnd sql.NullString
 		var hasPayout, hasStatement int
 		if err := rows.Scan(
 			&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate,
 			&r.GuestName, &r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents,
 			&r.PaymentServiceFeeCents, &r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.RawRowJSON,
-			&created, &updated, &r.LinkedInvoiceID, &r.OccupancySourceEventUID, &occStart, &occEnd, &r.OccupancySummary,
+			&r.OutcomeOverride, &outcomeMarkedAt, &created, &updated, &r.LinkedInvoiceID, &r.OccupancySourceEventUID, &occStart, &occEnd, &r.OccupancySummary,
 			&hasPayout, &hasStatement,
 		); err != nil {
 			return nil, err
@@ -574,6 +591,10 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 		r.HasPayoutData = hasPayout != 0
 		r.HasStatementData = hasStatement != 0
 		r.PayoutDate, _ = time.Parse(time.RFC3339, payoutDate)
+		if outcomeMarkedAt.Valid && outcomeMarkedAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, outcomeMarkedAt.String)
+			r.OutcomeOverrideMarkedAt = sql.NullTime{Time: t, Valid: true}
+		}
 		r.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		r.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
 		if occStart.Valid && occStart.String != "" {

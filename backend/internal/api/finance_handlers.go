@@ -64,31 +64,33 @@ type financeTransactionsResponse struct {
 }
 
 type financeBookingPayoutRow struct {
-	ID                     int64   `json:"id"`
-	ReferenceNumber        string  `json:"reference_number"`
-	PayoutID               *string `json:"payout_id"`
-	RowType                *string `json:"row_type"`
-	CheckInDate            *string `json:"check_in_date"`
-	CheckOutDate           *string `json:"check_out_date"`
-	GuestName              *string `json:"guest_name"`
-	HostName               *string `json:"host_name"`
-	PayoutSummary          *string `json:"payout_summary"`
-	ReservationStatus      *string `json:"reservation_status"`
-	Currency               *string `json:"currency"`
-	PaymentStatus          *string `json:"payment_status"`
-	AmountCents            *int64  `json:"amount_cents"`
-	CommissionCents        *int64  `json:"commission_cents"`
-	PaymentServiceFeeCents *int64  `json:"payment_service_fee_cents"`
-	NetCents               int     `json:"net_cents"`
-	PayoutDate             string  `json:"payout_date"`
-	TransactionID          *int64  `json:"transaction_id"`
-	OccupancyID            *int64  `json:"occupancy_id"`
-	OccupancyStartAt       *string `json:"occupancy_start_at"`
-	OccupancyEndAt         *string `json:"occupancy_end_at"`
-	OccupancySummary       *string `json:"occupancy_summary"`
-	LinkedInvoiceID        *int64  `json:"linked_invoice_id"`
-	HasPayoutData          bool    `json:"has_payout_data"`
-	HasStatementData       bool    `json:"has_statement_data"`
+	ID                      int64   `json:"id"`
+	ReferenceNumber         string  `json:"reference_number"`
+	PayoutID                *string `json:"payout_id"`
+	RowType                 *string `json:"row_type"`
+	CheckInDate             *string `json:"check_in_date"`
+	CheckOutDate            *string `json:"check_out_date"`
+	GuestName               *string `json:"guest_name"`
+	HostName                *string `json:"host_name"`
+	PayoutSummary           *string `json:"payout_summary"`
+	ReservationStatus       *string `json:"reservation_status"`
+	Currency                *string `json:"currency"`
+	PaymentStatus           *string `json:"payment_status"`
+	AmountCents             *int64  `json:"amount_cents"`
+	CommissionCents         *int64  `json:"commission_cents"`
+	PaymentServiceFeeCents  *int64  `json:"payment_service_fee_cents"`
+	NetCents                int     `json:"net_cents"`
+	PayoutDate              string  `json:"payout_date"`
+	TransactionID           *int64  `json:"transaction_id"`
+	OccupancyID             *int64  `json:"occupancy_id"`
+	OccupancyStartAt        *string `json:"occupancy_start_at"`
+	OccupancyEndAt          *string `json:"occupancy_end_at"`
+	OccupancySummary        *string `json:"occupancy_summary"`
+	OutcomeOverride         *string `json:"outcome_override"`
+	OutcomeOverrideMarkedAt *string `json:"outcome_override_marked_at"`
+	LinkedInvoiceID         *int64  `json:"linked_invoice_id"`
+	HasPayoutData           bool    `json:"has_payout_data"`
+	HasStatementData        bool    `json:"has_statement_data"`
 }
 
 type financeBookingPayoutsResponse struct {
@@ -362,31 +364,33 @@ func (s *Server) listFinanceBookingPayouts(w http.ResponseWriter, r *http.Reques
 	out := make([]financeBookingPayoutRow, 0, len(rows))
 	for _, rr := range rows {
 		out = append(out, financeBookingPayoutRow{
-			ID:                     rr.ID,
-			ReferenceNumber:        rr.ReferenceNumber,
-			PayoutID:               nullStringPtr(rr.PayoutID),
-			RowType:                nullStringPtr(rr.RowType),
-			CheckInDate:            nullStringPtr(rr.CheckInDate),
-			CheckOutDate:           nullStringPtr(rr.CheckOutDate),
-			GuestName:              fixCSVMojibakePtr(nullStringPtr(rr.GuestName)),
-			HostName:               bookingPayoutHostName(rr.RawRowJSON),
-			PayoutSummary:          financeBookingPayoutSummary(rr.RawRowJSON, rr.GuestName, rr.OccupancySummary, propName),
-			ReservationStatus:      nullStringPtr(rr.ReservationStatus),
-			Currency:               nullStringPtr(rr.Currency),
-			PaymentStatus:          nullStringPtr(rr.PaymentStatus),
-			AmountCents:            nullInt64Ptr(rr.AmountCents),
-			CommissionCents:        nullInt64Ptr(rr.CommissionCents),
-			PaymentServiceFeeCents: nullInt64Ptr(rr.PaymentServiceFeeCents),
-			NetCents:               rr.NetCents,
-			PayoutDate:             rr.PayoutDate.UTC().Format(time.RFC3339),
-			TransactionID:          nullInt64Ptr(rr.TransactionID),
-			OccupancyID:            nullInt64Ptr(rr.OccupancyID),
-			OccupancyStartAt:       nullTimePtr(rr.OccupancyStartAt),
-			OccupancyEndAt:         nullTimePtr(rr.OccupancyEndAt),
-			OccupancySummary:       fixCSVMojibakePtr(nullStringPtr(rr.OccupancySummary)),
-			LinkedInvoiceID:        nullInt64Ptr(rr.LinkedInvoiceID),
-			HasPayoutData:          rr.HasPayoutData,
-			HasStatementData:       rr.HasStatementData,
+			ID:                      rr.ID,
+			ReferenceNumber:         rr.ReferenceNumber,
+			PayoutID:                nullStringPtr(rr.PayoutID),
+			RowType:                 nullStringPtr(rr.RowType),
+			CheckInDate:             nullStringPtr(rr.CheckInDate),
+			CheckOutDate:            nullStringPtr(rr.CheckOutDate),
+			GuestName:               fixCSVMojibakePtr(nullStringPtr(rr.GuestName)),
+			HostName:                bookingPayoutHostName(rr.RawRowJSON),
+			PayoutSummary:           financeBookingPayoutSummary(rr.RawRowJSON, rr.GuestName, rr.OccupancySummary, propName),
+			ReservationStatus:       nullStringPtr(rr.ReservationStatus),
+			Currency:                nullStringPtr(rr.Currency),
+			PaymentStatus:           nullStringPtr(rr.PaymentStatus),
+			AmountCents:             nullInt64Ptr(rr.AmountCents),
+			CommissionCents:         nullInt64Ptr(rr.CommissionCents),
+			PaymentServiceFeeCents:  nullInt64Ptr(rr.PaymentServiceFeeCents),
+			NetCents:                rr.NetCents,
+			PayoutDate:              rr.PayoutDate.UTC().Format(time.RFC3339),
+			TransactionID:           nullInt64Ptr(rr.TransactionID),
+			OccupancyID:             nullInt64Ptr(rr.OccupancyID),
+			OccupancyStartAt:        nullTimePtr(rr.OccupancyStartAt),
+			OccupancyEndAt:          nullTimePtr(rr.OccupancyEndAt),
+			OccupancySummary:        fixCSVMojibakePtr(nullStringPtr(rr.OccupancySummary)),
+			OutcomeOverride:         nullStringPtr(rr.OutcomeOverride),
+			OutcomeOverrideMarkedAt: nullTimePtr(rr.OutcomeOverrideMarkedAt),
+			LinkedInvoiceID:         nullInt64Ptr(rr.LinkedInvoiceID),
+			HasPayoutData:           rr.HasPayoutData,
+			HasStatementData:        rr.HasStatementData,
 		})
 	}
 	WriteJSON(w, http.StatusOK, financeBookingPayoutsResponse{Month: month, MappedOnly: mappedOnlyRaw, Payouts: out})

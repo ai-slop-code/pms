@@ -9,6 +9,7 @@ import UiKpiCard from '@/components/ui/UiKpiCard.vue'
 import UiSection from '@/components/ui/UiSection.vue'
 import UiTable from '@/components/ui/UiTable.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
+import { stayOutcomeLabel, stayOutcomeTone } from './closure'
 import { parseMonthKey } from '@/utils/month'
 import { nightsBetween, nightsCount } from './status'
 import type { Occupancy as Occ } from '@/api/types/occupancy'
@@ -121,6 +122,7 @@ const staysInMonth = computed(() =>
       status: o.status,
       uid: o.source_event_uid,
       hasPayoutData: !!o.has_payout_data,
+      outcome: o.stay_outcome,
     }))
     .sort((a, b) => a.start.localeCompare(b.start)),
 )
@@ -270,6 +272,7 @@ const monthNightSummary = computed(() => {
             <th>Check-out</th>
             <th class="num">Nights</th>
             <th>Summary</th>
+            <th>Outcome</th>
             <th>Payout</th>
           </tr>
         </template>
@@ -278,6 +281,12 @@ const monthNightSummary = computed(() => {
           <td>{{ s.end }}</td>
           <td class="num"><strong>{{ s.nights }}</strong></td>
           <td>{{ s.summary }}</td>
+          <td>
+            <UiBadge v-if="s.outcome" :tone="stayOutcomeTone(s.outcome)">
+              {{ stayOutcomeLabel(s.outcome) }}
+            </UiBadge>
+            <span v-else class="calendar__muted">—</span>
+          </td>
           <td>
             <UiBadge :tone="s.hasPayoutData ? 'success' : 'neutral'" dot>
               {{ s.hasPayoutData ? 'Linked' : 'Pending' }}
@@ -388,6 +397,9 @@ const monthNightSummary = computed(() => {
 .calendar__note {
   margin: var(--space-3) 0 0;
   font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+.calendar__muted {
   color: var(--color-text-muted);
 }
 </style>

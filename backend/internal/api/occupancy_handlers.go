@@ -59,14 +59,18 @@ type occupancyRow struct {
 	ContentHash    string `json:"content_hash"`
 	HasPayoutData  bool   `json:"has_payout_data"`
 	// Closure / external-sale labelling (PMS_14). NULL JSON omitted.
-	ClosureState           *string `json:"closure_state,omitempty"`
-	ClosureReason          *string `json:"closure_reason,omitempty"`
-	ClosureCategory        *string `json:"closure_category,omitempty"`
-	ClosedAt               *string `json:"closed_at,omitempty"`
-	ClosedByUserID         *int64  `json:"closed_by_user_id,omitempty"`
-	ExternalNetAmountCents *int64  `json:"external_net_amount_cents,omitempty"`
-	ExternalCurrency       *string `json:"external_currency,omitempty"`
-	ExternalChannel        *string `json:"external_channel,omitempty"`
+	ClosureState              *string `json:"closure_state,omitempty"`
+	ClosureReason             *string `json:"closure_reason,omitempty"`
+	ClosureCategory           *string `json:"closure_category,omitempty"`
+	ClosedAt                  *string `json:"closed_at,omitempty"`
+	ClosedByUserID            *int64  `json:"closed_by_user_id,omitempty"`
+	ExternalNetAmountCents    *int64  `json:"external_net_amount_cents,omitempty"`
+	ExternalCurrency          *string `json:"external_currency,omitempty"`
+	ExternalChannel           *string `json:"external_channel,omitempty"`
+	StayOutcome               *string `json:"stay_outcome,omitempty"`
+	StayOutcomeReason         *string `json:"stay_outcome_reason,omitempty"`
+	StayOutcomeMarkedAt       *string `json:"stay_outcome_marked_at,omitempty"`
+	StayOutcomeMarkedByUserID *int64  `json:"stay_outcome_marked_by_user_id,omitempty"`
 }
 
 type occupancyListResponse struct {
@@ -277,6 +281,20 @@ func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool) []occupancy
 		}
 		if o.ExternalChannel.Valid {
 			row.ExternalChannel = optString(o.ExternalChannel.String)
+		}
+		if o.StayOutcome.Valid {
+			row.StayOutcome = optString(o.StayOutcome.String)
+		}
+		if o.StayOutcomeReason.Valid {
+			row.StayOutcomeReason = optString(o.StayOutcomeReason.String)
+		}
+		if o.StayOutcomeMarkedAt.Valid {
+			s := o.StayOutcomeMarkedAt.Time.UTC().Format(time.RFC3339)
+			row.StayOutcomeMarkedAt = &s
+		}
+		if o.StayOutcomeMarkedByUserID.Valid {
+			v := o.StayOutcomeMarkedByUserID.Int64
+			row.StayOutcomeMarkedByUserID = &v
 		}
 		out = append(out, row)
 	}

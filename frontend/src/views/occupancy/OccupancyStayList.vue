@@ -7,7 +7,16 @@ import UiButton from '@/components/ui/UiButton.vue'
 import UiTable from '@/components/ui/UiTable.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import { displayStatus, statusTone } from './status'
-import { closureLabel, closureTone, formatExternalAmount, isLabelled } from './closure'
+import {
+  canMarkStayOutcome,
+  closureLabel,
+  closureTone,
+  formatExternalAmount,
+  hasStayOutcome,
+  isLabelled,
+  stayOutcomeLabel,
+  stayOutcomeTone,
+} from './closure'
 import type { Occupancy as Occ } from '@/api/types/occupancy'
 
 defineProps<{
@@ -26,6 +35,8 @@ const emit = defineEmits<{
   close: [occ: Occ]
   externalSale: [occ: Occ]
   reopen: [occ: Occ]
+  markOutcome: [occ: Occ, outcome: 'cancelled_non_refundable' | 'no_show']
+  clearOutcome: [occ: Occ]
 }>()
 </script>
 
@@ -70,6 +81,7 @@ const emit = defineEmits<{
           <th>End</th>
           <th>Status</th>
           <th>Label</th>
+          <th>Outcome</th>
           <th>Summary</th>
           <th>Payout</th>
           <th>UID</th>
@@ -93,20 +105,47 @@ const emit = defineEmits<{
           </template>
           <span v-else class="muted">—</span>
         </td>
+        <td>
+          <UiBadge v-if="hasStayOutcome(o)" :tone="stayOutcomeTone(o.stay_outcome)">
+            {{ stayOutcomeLabel(o.stay_outcome) }}
+          </UiBadge>
+          <span v-else class="muted">—</span>
+        </td>
         <td>{{ o.raw_summary || '—' }}</td>
         <td>{{ o.has_payout_data ? 'Yes' : '—' }}</td>
         <td class="uid-cell">{{ o.source_event_uid }}</td>
         <td class="actions-col">
-          <template v-if="!isLabelled(o)">
+          <template v-if="!isLabelled(o) && !hasStayOutcome(o)">
             <UiButton size="sm" variant="ghost" :disabled="busy" @click="emit('close', o)">
               Close
             </UiButton>
             <UiButton size="sm" variant="ghost" :disabled="busy" @click="emit('externalSale', o)">
               Externally sold
             </UiButton>
+            <UiButton
+              v-if="canMarkStayOutcome(o)"
+              size="sm"
+              variant="ghost"
+              :disabled="busy"
+              @click="emit('markOutcome', o, 'cancelled_non_refundable')"
+            >
+              Mark non-refundable cancellation
+            </UiButton>
+            <UiButton
+              v-if="canMarkStayOutcome(o)"
+              size="sm"
+              variant="ghost"
+              :disabled="busy"
+              @click="emit('markOutcome', o, 'no_show')"
+            >
+              Mark no-show
+            </UiButton>
           </template>
-          <UiButton v-else size="sm" variant="ghost" :disabled="busy" @click="emit('reopen', o)">
+          <UiButton v-else-if="isLabelled(o)" size="sm" variant="ghost" :disabled="busy" @click="emit('reopen', o)">
             Reopen
+          </UiButton>
+          <UiButton v-else size="sm" variant="ghost" :disabled="busy" @click="emit('clearOutcome', o)">
+            Clear outcome
           </UiButton>
         </td>
       </tr>

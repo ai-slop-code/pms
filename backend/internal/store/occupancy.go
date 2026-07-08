@@ -52,22 +52,29 @@ type Occupancy struct {
 	//   - 'closed'        → night drops out of nights_sold and available_nights
 	//   - 'external_sale' → night counts as sold + available, with the
 	//                       operator-entered net amount feeding gross_revenue.
-	ClosureState           sql.NullString
-	ClosureReason          sql.NullString
-	ClosureCategory        sql.NullString
-	ClosedByUserID         sql.NullInt64
-	ClosedAt               sql.NullTime
-	ExternalNetAmountCents sql.NullInt64
-	ExternalCurrency       sql.NullString
-	ExternalChannel        sql.NullString
+	ClosureState              sql.NullString
+	ClosureReason             sql.NullString
+	ClosureCategory           sql.NullString
+	ClosedByUserID            sql.NullInt64
+	ClosedAt                  sql.NullTime
+	ExternalNetAmountCents    sql.NullInt64
+	ExternalCurrency          sql.NullString
+	ExternalChannel           sql.NullString
+	FinanceBookingID          sql.NullInt64
+	StayOutcome               sql.NullString
+	StayOutcomeReason         sql.NullString
+	StayOutcomeMarkedByUserID sql.NullInt64
+	StayOutcomeMarkedAt       sql.NullTime
 }
 
 // Closure state constants (occupancies.closure_state values).
 const (
-	ClosureStateClosed       = "closed"
-	ClosureStateExternalSale = "external_sale"
-	manualSplitSourceType    = "manual"
-	manualSplitUIDPrefix     = "manual_split:"
+	ClosureStateClosed                = "closed"
+	ClosureStateExternalSale          = "external_sale"
+	StayOutcomeCancelledNonRefundable = "cancelled_non_refundable"
+	StayOutcomeNoShow                 = "no_show"
+	manualSplitSourceType             = "manual"
+	manualSplitUIDPrefix              = "manual_split:"
 )
 
 type UpcomingOccupancy struct {
@@ -344,7 +351,8 @@ const occupancySelectColumns = `
 	SELECT id, property_id, source_type, source_event_uid, start_at, end_at, status,
 	       raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id,
 	       closure_state, closure_reason, closure_category, closed_by_user_id, closed_at,
-	       external_net_amount_cents, external_currency, external_channel`
+	       external_net_amount_cents, external_currency, external_channel, finance_booking_id,
+	       stay_outcome, stay_outcome_reason, stay_outcome_marked_by_user_id, stay_outcome_marked_at`
 
 func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface{}) ([]Occupancy, error) {
 	rows, err := s.DB.QueryContext(ctx, q, args...)
@@ -358,11 +366,13 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 		var start, end, imp, last string
 		var runID sql.NullInt64
 		var closedAt sql.NullString
+		var outcomeMarkedAt sql.NullString
 		if err := rows.Scan(
 			&o.ID, &o.PropertyID, &o.SourceType, &o.SourceEventUID, &start, &end, &o.Status,
 			&o.RawSummary, &o.GuestDisplayName, &o.ContentHash, &imp, &last, &runID,
 			&o.ClosureState, &o.ClosureReason, &o.ClosureCategory, &o.ClosedByUserID, &closedAt,
-			&o.ExternalNetAmountCents, &o.ExternalCurrency, &o.ExternalChannel,
+			&o.ExternalNetAmountCents, &o.ExternalCurrency, &o.ExternalChannel, &o.FinanceBookingID,
+			&o.StayOutcome, &o.StayOutcomeReason, &o.StayOutcomeMarkedByUserID, &outcomeMarkedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -374,6 +384,10 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 		if closedAt.Valid && closedAt.String != "" {
 			t, _ := time.Parse(time.RFC3339, closedAt.String)
 			o.ClosedAt = sql.NullTime{Time: t, Valid: true}
+		}
+		if outcomeMarkedAt.Valid && outcomeMarkedAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, outcomeMarkedAt.String)
+			o.StayOutcomeMarkedAt = sql.NullTime{Time: t, Valid: true}
 		}
 		out = append(out, o)
 	}
@@ -544,11 +558,17 @@ func (s *Store) ListPropertyIDsWithICSURL(ctx context.Context) ([]int64, error) 
 // ErrOccupancyAlreadyLabelled indicates that the row already has a closure /
 // external-sale label and the caller must explicitly Reopen first. Operators
 // should never silently overwrite a label.
-var ErrOccupancyAlreadyLabelled = errors.New("occupancy already has a closure label; reopen first")
+var ErrOccupancyAlreadyLabelled = errors.New("occupancy already has a manual label; clear it first")
 
 // ErrInvalidOccupancySplit indicates that a requested split range does not map
 // cleanly to whole nights inside the occupancy stay window.
 var ErrInvalidOccupancySplit = errors.New("invalid occupancy split range")
+
+var ErrInvalidStayOutcome = errors.New("invalid stay outcome")
+
+var ErrOccupancyOutcomeConflict = errors.New("occupancy already has a stay outcome; clear it first")
+
+var ErrOccupancyOutcomeIneligible = errors.New("occupancy is not eligible for a stay outcome")
 
 // CloseOccupancy marks the row as off-the-market closed. Sets closed_by_user_id
 // + closed_at audit columns and clears any external-sale fields. Refuses to
@@ -566,7 +586,7 @@ func (s *Store) CloseOccupancy(ctx context.Context, propertyID, occupancyID, use
 		    external_currency = NULL,
 		    external_channel = NULL,
 		    last_synced_at = ?
-		WHERE property_id = ? AND id = ? AND closure_state IS NULL`,
+		WHERE property_id = ? AND id = ? AND closure_state IS NULL AND stay_outcome IS NULL`,
 		nullableString(reason), nullableString(category), userID, now, now, propertyID, occupancyID)
 	if err != nil {
 		return fmt.Errorf("close occupancy: %w", err)
@@ -583,7 +603,7 @@ func (s *Store) CloseOccupancyNight(ctx context.Context, propertyID, occupancyID
 	if err != nil {
 		return err
 	}
-	if row.ClosureState.Valid {
+	if row.ClosureState.Valid || row.StayOutcome.Valid {
 		return ErrOccupancyAlreadyLabelled
 	}
 	night, err := time.Parse("2006-01-02", strings.TrimSpace(nightDate))
@@ -638,7 +658,7 @@ func (s *Store) SplitOccupancyIntoNightRange(ctx context.Context, propertyID, oc
 	if err != nil {
 		return err
 	}
-	if row.ClosureState.Valid {
+	if row.ClosureState.Valid || row.StayOutcome.Valid {
 		return ErrOccupancyAlreadyLabelled
 	}
 	start := toUTCMidnight(row.StartAt)
@@ -803,7 +823,7 @@ func (s *Store) MarkOccupancyExternalSale(ctx context.Context, propertyID, occup
 		    external_currency = ?,
 		    external_channel = ?,
 		    last_synced_at = ?
-		WHERE property_id = ? AND id = ? AND closure_state IS NULL`,
+		WHERE property_id = ? AND id = ? AND closure_state IS NULL AND stay_outcome IS NULL`,
 		nullableString(reason), userID, now, netAmountCents, nullableString(currency), nullableString(channel), now, propertyID, occupancyID)
 	if err != nil {
 		return fmt.Errorf("mark external sale: %w", err)
@@ -857,12 +877,113 @@ func (s *Store) checkOccupancyLabelled(ctx context.Context, propertyID, occupanc
 	if err != nil {
 		return err
 	}
-	if row.ClosureState.Valid {
+	if row.ClosureState.Valid || row.StayOutcome.Valid {
 		return ErrOccupancyAlreadyLabelled
 	}
 	// Should not happen unless a concurrent writer changed the row between
 	// the UPDATE and this SELECT; treat as a transient failure.
 	return errors.New("occupancy not updated")
+}
+
+func validStayOutcome(outcome string) bool {
+	switch outcome {
+	case StayOutcomeCancelledNonRefundable, StayOutcomeNoShow:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Store) MarkOccupancyStayOutcome(ctx context.Context, propertyID, occupancyID, userID int64, outcome, reason string) error {
+	if !validStayOutcome(outcome) {
+		return ErrInvalidStayOutcome
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE occupancies
+		SET stay_outcome = ?,
+		    stay_outcome_reason = ?,
+		    stay_outcome_marked_by_user_id = ?,
+		    stay_outcome_marked_at = ?,
+		    last_synced_at = ?
+		WHERE property_id = ?
+		  AND id = ?
+		  AND source_type = 'booking_ics'
+		  AND status IN ('active', 'updated')
+		  AND closure_state IS NULL
+		  AND (stay_outcome IS NULL OR stay_outcome = ?)`,
+		outcome, nullableString(reason), userID, now, now, propertyID, occupancyID, outcome)
+	if err != nil {
+		return fmt.Errorf("mark stay outcome: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		row, getErr := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+		if getErr != nil {
+			return getErr
+		}
+		if row.StayOutcome.Valid && row.StayOutcome.String != outcome {
+			return ErrOccupancyOutcomeConflict
+		}
+		return ErrOccupancyOutcomeIneligible
+	}
+	if err := syncFinanceOutcomeOverrideTx(ctx, tx, propertyID, occupancyID, outcome, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ClearOccupancyStayOutcome(ctx context.Context, propertyID, occupancyID int64) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE occupancies
+		SET stay_outcome = NULL,
+		    stay_outcome_reason = NULL,
+		    stay_outcome_marked_by_user_id = NULL,
+		    stay_outcome_marked_at = NULL,
+		    last_synced_at = ?
+		WHERE property_id = ? AND id = ? AND stay_outcome IS NOT NULL`, now, propertyID, occupancyID)
+	if err != nil {
+		return fmt.Errorf("clear stay outcome: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		_, getErr := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+		if getErr != nil {
+			return getErr
+		}
+		return sql.ErrNoRows
+	}
+	if err := syncFinanceOutcomeOverrideTx(ctx, tx, propertyID, occupancyID, "", now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func syncFinanceOutcomeOverrideTx(ctx context.Context, tx *sql.Tx, propertyID, occupancyID int64, outcome, markedAt string) error {
+	var outcomeValue interface{}
+	var markedAtValue interface{}
+	if outcome != "" {
+		outcomeValue = outcome
+		markedAtValue = markedAt
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE finance_bookings
+		SET outcome_override = ?, outcome_override_marked_at = ?, updated_at = ?
+		WHERE property_id = ?
+		  AND (occupancy_id = ? OR id = (SELECT finance_booking_id FROM occupancies WHERE property_id = ? AND id = ?))`,
+		outcomeValue, markedAtValue, markedAt, propertyID, occupancyID, propertyID, occupancyID)
+	return err
 }
 
 func nullableString(v string) interface{} {

@@ -130,7 +130,8 @@ func (s *Service) ReconcileProperty(ctx context.Context, propertyID int64, trigg
 		if _, ok := eligible[ev.OccupancyID]; ok {
 			continue
 		}
-		if err := s.syncDelete(ctx, &ev, runID); err != nil {
+		removalReason := s.removalReason(ctx, propertyID, ev.OccupancyID)
+		if err := s.syncDelete(ctx, &ev, runID, removalReason); err != nil {
 			msg := err.Error()
 			runErr = &msg
 			continue
@@ -160,7 +161,7 @@ func (s *Service) RetryEvent(ctx context.Context, propertyID, eventID int64) err
 		return err
 	}
 	if event.Status == store.CleaningCalendarStatusRemoved {
-		return s.syncDelete(ctx, event, 0)
+		return s.syncDelete(ctx, event, 0, nil)
 	}
 	prop, err := s.Store.GetProperty(ctx, propertyID)
 	if err != nil {
@@ -240,7 +241,7 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 	return nil
 }
 
-func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarEvent, runID int64) error {
+func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarEvent, runID int64, removalReason *string) error {
 	if event.GoogleEventID.Valid && strings.TrimSpace(event.GoogleEventID.String) != "" && (s.Client == nil || !s.Client.Configured()) {
 		msg := "google calendar client not configured"
 		_ = s.Store.UpdateCleaningCalendarEventGoogleResult(ctx, event.PropertyID, event.ID, "", store.CleaningCalendarStatusError, &msg)
@@ -255,11 +256,29 @@ func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarE
 			return err
 		}
 	}
-	if err := s.Store.MarkCleaningCalendarEventRemoved(ctx, event.PropertyID, event.ID, nil); err != nil {
+	if err := s.Store.MarkCleaningCalendarEventRemoved(ctx, event.PropertyID, event.ID, removalReason); err != nil {
 		return err
 	}
-	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, "delete", "removed")
+	message := "removed"
+	if removalReason != nil && strings.TrimSpace(*removalReason) != "" {
+		message = strings.TrimSpace(*removalReason)
+	}
+	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, "delete", message)
 	return nil
+}
+
+func (s *Service) removalReason(ctx context.Context, propertyID, occupancyID int64) *string {
+	occ, err := s.Store.GetOccupancyByID(ctx, propertyID, occupancyID)
+	if err != nil || !occ.StayOutcome.Valid {
+		return nil
+	}
+	switch occ.StayOutcome.String {
+	case store.StayOutcomeCancelledNonRefundable, store.StayOutcomeNoShow:
+		msg := "stay outcome: " + occ.StayOutcome.String
+		return &msg
+	default:
+		return nil
+	}
 }
 
 func renderTitle(settings *store.GoogleCleaningSettings, sameDay bool) string {

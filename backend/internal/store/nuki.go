@@ -327,14 +327,15 @@ func (s *Store) ListOccupanciesForNukiSync(ctx context.Context, propertyID int64
 	// no guest, externally-sold nights have a guest who arrives outside the
 	// Booking.com flow (PMS_14 §3.4).
 	q := occupancySelectColumns + ` FROM occupancies
-		WHERE property_id = ? AND status IN ('active', 'updated') AND closure_state IS NULL AND end_at >= ?
+		WHERE property_id = ? AND status IN ('active', 'updated') AND closure_state IS NULL
+		AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show')) AND end_at >= ?
 		ORDER BY start_at ASC`
 	return s.scanOccupancies(ctx, q, propertyID, time.Now().UTC().Format(time.RFC3339))
 }
 
 func (s *Store) ListOccupanciesForNukiRevocation(ctx context.Context, propertyID int64) ([]Occupancy, error) {
 	q := occupancySelectColumns + ` FROM occupancies
-		WHERE property_id = ? AND status IN ('cancelled', 'deleted_from_source')
+		WHERE property_id = ? AND (status IN ('cancelled', 'deleted_from_source') OR stay_outcome IN ('cancelled_non_refundable', 'no_show'))
 		ORDER BY start_at ASC`
 	return s.scanOccupancies(ctx, q, propertyID)
 }
@@ -747,6 +748,7 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		)
 		WHERE o.property_id = ?
 		  AND o.closure_state IS NULL
+		  AND (o.stay_outcome IS NULL OR o.stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
 		  AND (
 		      (o.status IN ('active', 'updated') AND o.end_at >= ? AND NOT (
 		          LOWER(COALESCE(o.raw_summary, '')) LIKE '%closed%'

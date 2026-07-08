@@ -15,6 +15,8 @@ import (
 // statement-aware rows are returned as the empty slice — the API layer
 // then renders the "no statement data" empty state.
 
+const statementFinanciallyMaterializedStatus = `(UPPER(COALESCE(status, '')) IN ('OK', '') OR outcome_override IN ('cancelled_non_refundable', 'no_show'))`
+
 // ---------- Cancellation rate ----------
 
 // CancellationCohortRow is one (cohort_month, rate) data point. The
@@ -22,11 +24,11 @@ import (
 // MODIFIED / NO_SHOW / REFUSED_BY_HOTEL fall into the `other` bucket
 // and are excluded from both numerator and denominator (PMS_12 N7).
 type CancellationCohortRow struct {
-	Month         string  // "2026-04"
-	Cancelled     int
-	Active        int
-	Other         int
-	Rate          float64
+	Month     string // "2026-04"
+	Cancelled int
+	Active    int
+	Other     int
+	Rate      float64
 }
 
 // ListCancellationByBookingCohort groups cancellations by the month
@@ -47,19 +49,24 @@ func (s *Store) cancellationCohort(ctx context.Context, propertyID int64, fromUT
 		loc = time.UTC
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT `+dateCol+` AS d, UPPER(COALESCE(status, '')) AS st
-		  FROM finance_bookings
-		 WHERE property_id = ?
-		   AND has_statement_data = 1
-		   AND `+dateCol+` IS NOT NULL`, propertyID)
+		SELECT fb.`+dateCol+` AS d,
+		       UPPER(COALESCE(fb.status, '')) AS st,
+		       COALESCE(fb.outcome_override, occ.stay_outcome, '') AS outcome
+		  FROM finance_bookings fb
+		  LEFT JOIN occupancies occ
+		    ON occ.property_id = fb.property_id
+		   AND (occ.id = fb.occupancy_id OR occ.finance_booking_id = fb.id)
+		 WHERE fb.property_id = ?
+		   AND fb.has_statement_data = 1
+		   AND fb.`+dateCol+` IS NOT NULL`, propertyID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	bucket := map[string]*CancellationCohortRow{}
 	for rows.Next() {
-		var d, status string
-		if err := rows.Scan(&d, &status); err != nil {
+		var d, status, outcome string
+		if err := rows.Scan(&d, &status, &outcome); err != nil {
 			return nil, err
 		}
 		t, parseErr := parseFlexibleDate(d, loc)
@@ -74,6 +81,11 @@ func (s *Store) cancellationCohort(ctx context.Context, propertyID int64, fromUT
 		if row == nil {
 			row = &CancellationCohortRow{Month: key}
 			bucket[key] = row
+		}
+		switch outcome {
+		case StayOutcomeCancelledNonRefundable, StayOutcomeNoShow:
+			row.Other++
+			continue
 		}
 		switch status {
 		case "CANCELLED":
@@ -128,7 +140,7 @@ func (s *Store) ListLeadTimeStatementBuckets(ctx context.Context, propertyID int
 		  FROM finance_bookings
 		 WHERE property_id = ?
 		   AND has_statement_data = 1
-		   AND UPPER(COALESCE(status, '')) IN ('OK', '')
+		   AND `+statementFinanciallyMaterializedStatus+`
 		   AND booked_on IS NOT NULL
 		   AND check_in_date IS NOT NULL`, propertyID)
 	if err != nil {
@@ -184,11 +196,11 @@ func (s *Store) ListLeadTimeStatementBuckets(ctx context.Context, propertyID int
 // the weighted ADR for that bucket. Rows with NULL or 0 `persons` are
 // excluded (not enough information).
 type PersonsBucket struct {
-	Persons       int
-	Stays         int
-	GrossCents    int64
-	RoomNights    int
-	ADRCents      int64
+	Persons    int
+	Stays      int
+	GrossCents int64
+	RoomNights int
+	ADRCents   int64
 }
 
 func (s *Store) ListPersonsDistribution(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time, loc *time.Location) ([]PersonsBucket, error) {
@@ -203,7 +215,7 @@ func (s *Store) ListPersonsDistribution(ctx context.Context, propertyID int64, f
 		  FROM finance_bookings
 		 WHERE property_id = ?
 		   AND has_statement_data = 1
-		   AND UPPER(COALESCE(status, '')) IN ('OK', '')
+		   AND `+statementFinanciallyMaterializedStatus+`
 		   AND check_in_date IS NOT NULL
 		   AND COALESCE(persons, 0) > 0`, propertyID)
 	if err != nil {
@@ -254,11 +266,11 @@ func (s *Store) ListPersonsDistribution(ctx context.Context, propertyID int64, f
 // CommissionTrendRow reports the weighted commission rate per booked-on
 // month: Σ commission / Σ amount over active stays.
 type CommissionTrendRow struct {
-	Month            string
-	CommissionCents  int64
-	GrossCents       int64
-	Rate             float64
-	Stays            int
+	Month           string
+	CommissionCents int64
+	GrossCents      int64
+	Rate            float64
+	Stays           int
 }
 
 func (s *Store) ListCommissionRateTrend(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time, loc *time.Location) ([]CommissionTrendRow, error) {
@@ -272,7 +284,7 @@ func (s *Store) ListCommissionRateTrend(ctx context.Context, propertyID int64, f
 		  FROM finance_bookings
 		 WHERE property_id = ?
 		   AND has_statement_data = 1
-		   AND UPPER(COALESCE(status, '')) IN ('OK', '')
+		   AND `+statementFinanciallyMaterializedStatus+`
 		   AND booked_on IS NOT NULL`, propertyID)
 	if err != nil {
 		return nil, err
@@ -343,7 +355,7 @@ func (s *Store) ListCommissionPerStay(ctx context.Context, propertyID int64, fro
 		  FROM finance_bookings
 		 WHERE property_id = ?
 		   AND has_statement_data = 1
-		   AND UPPER(COALESCE(status, '')) IN ('OK', '')
+		   AND `+statementFinanciallyMaterializedStatus+`
 		   AND check_in_date IS NOT NULL
 		 ORDER BY check_in_date DESC, id DESC`, propertyID)
 	if err != nil {
