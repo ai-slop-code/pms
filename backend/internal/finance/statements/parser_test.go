@@ -1,12 +1,19 @@
 package statements
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+const payoutCSV = `"Reference number","Type","Guest name","Check-in","Checkout","Amount","Commission","Payments service fee","Net","Currency","Payout date","Payout ID","Payment status","Reservation status"
+"1234567890","reservation","Test Guest","1 Sept 2026","3 Sept 2026","250.00","-37.50","-3.50","209.00","EUR","5 Sept 2026","PO-123","paid","OK"`
+
+const payoutBookingNumberCSV = `"Booking number","Type","Guest name","Check-in","Checkout","Amount","Commission","Payments service fee","Net","Currency","Payout date","Payout ID","Payment status","Reservation status"
+"6756848168","reservation","Synthetic Guest","10 May 2026","12 May 2026","180.00","-27.00","-2.00","151.00","EUR","15 May 2026","PO-456","paid","OK"`
+
+const statementCSV = `"Reservation number","Invoice number","Booked on","Arrival","Departure","Booker name","Guest name","Rooms","Persons","Room nights","Commission %","Original amount","Final amount","Commission amount","Payment fee","Status","Guest request","Currency","Hotel id","Property name","City","Country"
+"1234567890","INV-1","2026-08-20T14:30:00","2026-09-01","2026-09-03","Booker","Test Guest","1","2","2","15.00","250.00","250.00","37.50","3.50","OK","Late arrival","EUR","HOTEL-1","Synthetic Property","Bratislava","SK"`
 
 // loc returns a deterministic property timezone for tests.
 func testLoc(t *testing.T) *time.Location {
@@ -18,24 +25,8 @@ func testLoc(t *testing.T) *time.Location {
 	return loc
 }
 
-func loadFixture(t *testing.T, name string) string {
-	t.Helper()
-	// repo layout: backend/internal/finance/statements/<file_test.go>
-	// fixtures live at <repo>/spec/statement_processing/<name>
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := filepath.Clean(filepath.Join(wd, "..", "..", "..", ".."))
-	b, err := os.ReadFile(filepath.Join(root, "spec", "statement_processing", name))
-	if err != nil {
-		t.Fatalf("fixture %s: %v", name, err)
-	}
-	return string(b)
-}
-
 func TestParsePayout_HappyPath(t *testing.T) {
-	body := loadFixture(t, "September_PayoutInfo.csv")
+	body := payoutCSV
 	res, err := DetectAndParse(strings.NewReader(body), testLoc(t))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -66,7 +57,7 @@ func TestParsePayout_HappyPath(t *testing.T) {
 
 func TestParsePayout_BookingNumberColumn(t *testing.T) {
 	// Booking.com renamed "Reference number" → "Booking number" in 2026 exports.
-	body := loadFixture(t, "May_2026_PayoutInfo.csv")
+	body := payoutBookingNumberCSV
 	res, err := DetectAndParse(strings.NewReader(body), testLoc(t))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -83,7 +74,7 @@ func TestParsePayout_BookingNumberColumn(t *testing.T) {
 }
 
 func TestParseStatement_HappyPath(t *testing.T) {
-	body := loadFixture(t, "September_Statement.csv")
+	body := statementCSV
 	res, err := DetectAndParse(strings.NewReader(body), testLoc(t))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
