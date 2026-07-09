@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"pms/backend/internal/auth"
 )
 
 func TestGetAdminBackup_SuperAdminGetsTarGzWithDB(t *testing.T) {
@@ -21,10 +19,7 @@ func TestGetAdminBackup_SuperAdminGetsTarGzWithDB(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed a super_admin so we can hit the gated endpoint.
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	root, err := st.CreateUser(ctx, "root@example.com", hash, "super_admin")
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +97,7 @@ func TestGetAdminBackup_SuperAdminGetsTarGzWithDB(t *testing.T) {
 func TestGetAdminBackup_NonAdminForbidden(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, _ := auth.HashPassword("secret123")
+	hash := testPasswordHash(t, "secret123")
 	if _, err := st.CreateUser(ctx, "owner@example.com", hash, "owner"); err != nil {
 		t.Fatal(err)
 	}

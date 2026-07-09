@@ -11,14 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/store"
 )
 
 func TestMessages_ListTemplatesCreatesDefaults(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, _ := auth.HashPassword("secret123")
+	hash := testPasswordHash(t, "secret123")
 	owner, _ := st.CreateUser(ctx, "msg-owner@example.com", hash, "owner")
 	prop, _ := st.CreateProperty(ctx, owner.ID, "Msg Test", "UTC", "en")
 
@@ -30,9 +29,9 @@ func TestMessages_ListTemplatesCreatesDefaults(t *testing.T) {
 	client := &http.Client{}
 
 	var res struct {
-		Templates            []messageTemplateDTO `json:"templates"`
-		SupportedLanguages   []string             `json:"supported_languages"`
-		SupportedPlaceholders []string            `json:"supported_placeholders"`
+		Templates             []messageTemplateDTO `json:"templates"`
+		SupportedLanguages    []string             `json:"supported_languages"`
+		SupportedPlaceholders []string             `json:"supported_placeholders"`
 	}
 	status := doAuthedJSONRequest(t, client, http.MethodGet,
 		ts.URL+"/api/properties/"+strconv.FormatInt(prop.ID, 10)+"/message-templates",
@@ -82,7 +81,7 @@ func TestMessages_ListTemplatesCreatesDefaults(t *testing.T) {
 func TestMessages_PatchTemplate(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, _ := auth.HashPassword("secret123")
+	hash := testPasswordHash(t, "secret123")
 	owner, _ := st.CreateUser(ctx, "msg-patch@example.com", hash, "owner")
 	prop, _ := st.CreateProperty(ctx, owner.ID, "Msg Patch", "UTC", "en")
 
@@ -124,7 +123,7 @@ func TestMessages_PatchTemplate(t *testing.T) {
 func TestMessages_PatchRejectsInvalidPlaceholder(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, _ := auth.HashPassword("secret123")
+	hash := testPasswordHash(t, "secret123")
 	owner, _ := st.CreateUser(ctx, "msg-invalid@example.com", hash, "owner")
 	prop, _ := st.CreateProperty(ctx, owner.ID, "Msg Invalid", "UTC", "en")
 
@@ -158,15 +157,15 @@ func TestMessages_PatchRejectsInvalidPlaceholder(t *testing.T) {
 func TestMessages_GenerateForOccupancy(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, _ := auth.HashPassword("secret123")
+	hash := testPasswordHash(t, "secret123")
 	owner, _ := st.CreateUser(ctx, "msg-gen@example.com", hash, "owner")
 	prop, _ := st.CreateProperty(ctx, owner.ID, "Msg Gen", "UTC", "en")
 
 	if err := st.UpdatePropertyProfile(ctx, prop.ID, map[string]interface{}{
-		"wifi_ssid":             "TestWiFi",
-		"wifi_password":         "wifipass",
-		"parking_instructions":  "Lot B",
-		"contact_phone":         "+421111222333",
+		"wifi_ssid":            "TestWiFi",
+		"wifi_password":        "wifipass",
+		"parking_instructions": "Lot B",
+		"contact_phone":        "+421111222333",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -205,8 +204,8 @@ func TestMessages_GenerateForOccupancy(t *testing.T) {
 	client := &http.Client{}
 
 	var genRes struct {
-		OccupancyID   int64 `json:"occupancy_id"`
-		Messages      []struct {
+		OccupancyID int64 `json:"occupancy_id"`
+		Messages    []struct {
 			LanguageCode  string `json:"language_code"`
 			Title         string `json:"title"`
 			Body          string `json:"body"`

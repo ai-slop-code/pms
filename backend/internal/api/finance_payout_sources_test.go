@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/store"
 )
 
@@ -22,10 +21,7 @@ import (
 func TestListBookingPayouts_ExposesSourceFlags(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "owner-sources@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)

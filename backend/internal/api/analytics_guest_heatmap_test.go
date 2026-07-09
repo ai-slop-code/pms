@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/store"
 )
 
@@ -21,10 +20,7 @@ func seedGuestHeatmapFixtures(t *testing.T) (string, []*http.Cookie, int64) {
 	t.Helper()
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "guest-heatmap-owner@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -59,10 +55,10 @@ func seedGuestHeatmapFixtures(t *testing.T) (string, []*http.Cookie, int64) {
 	insert := func(day string, ts time.Time) {
 		t.Helper()
 		if err := st.UpsertNukiGuestDailyEntry(ctx, &store.NukiGuestDailyEntry{
-			PropertyID:   prop.ID,
-			OccupancyID:  row.ID,
-			DayDate:      day,
-			FirstEntryAt: ts,
+			PropertyID:         prop.ID,
+			OccupancyID:        row.ID,
+			DayDate:            day,
+			FirstEntryAt:       ts,
 			NukiEventReference: sql.NullString{String: "evt-" + day, Valid: true},
 		}); err != nil {
 			t.Fatal(err)

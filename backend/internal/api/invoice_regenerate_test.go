@@ -11,17 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/store"
 )
 
 func TestRegenerateInvoice_RefreshesAmountFromLinkedPayout(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "invoice-regen-amount@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)

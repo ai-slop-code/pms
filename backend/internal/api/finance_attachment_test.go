@@ -12,17 +12,12 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"pms/backend/internal/auth"
 )
 
 func TestFinanceTransactionAttachmentDownload(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "finance-attachment@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)

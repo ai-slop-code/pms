@@ -13,7 +13,6 @@ import (
 
 	pquernaotp "github.com/pquerna/otp/totp"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/store"
 )
 
@@ -26,10 +25,7 @@ var (
 func newTOTPTestServer(t *testing.T) (*Server, *httptest.Server, int64) {
 	t.Helper()
 	st := testDB(t)
-	hash, err := auth.HashPassword("correct-horse-battery")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "correct-horse-battery")
 	u, err := st.CreateUser(context.Background(), "mfa@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +269,7 @@ func TestTOTP_DisableClearsEnrolment(t *testing.T) {
 
 func TestTOTP_DevBypassSkipsChallenge(t *testing.T) {
 	st := testDB(t)
-	hash, _ := auth.HashPassword("correct-horse-battery")
+	hash := testPasswordHash(t, "correct-horse-battery")
 	u, _ := st.CreateUser(context.Background(), "bypass@example.com", hash, "owner")
 	// Pre-enrol the user directly in the DB.
 	if err := st.SetUserTOTP(context.Background(), u.ID, "JBSWY3DPEHPK3PXP"); err != nil {

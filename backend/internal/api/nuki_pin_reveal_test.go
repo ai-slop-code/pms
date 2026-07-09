@@ -24,10 +24,7 @@ func setupNukiPinFixture(t *testing.T) (*store.Store, *httptest.Server, int64, i
 	t.Helper()
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "nuki-pin-owner@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -169,10 +166,7 @@ func TestRevealNukiCodePIN_WritesAuditEntry(t *testing.T) {
 func TestRevealNukiCodePIN_ReadOnlyUserForbidden(t *testing.T) {
 	st, ts, pid, codeID, _, _ := setupNukiPinFixture(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	ro, err := st.CreateUser(ctx, "pin-reader@example.com", hash, "read_only")
 	if err != nil {
 		t.Fatal(err)
@@ -193,10 +187,7 @@ func setupOccupancyExportFixture(t *testing.T) (*httptest.Server, int64, string)
 	t.Helper()
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "export-owner@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)

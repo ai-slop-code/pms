@@ -17,7 +17,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/nuki"
 	"pms/backend/internal/permissions"
 	"pms/backend/internal/store"
@@ -81,10 +80,7 @@ func doAuthedJSONRequest(t *testing.T, client *http.Client, method, url string, 
 func TestLoginLogoutAndMe(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	if _, err := st.CreateUser(ctx, "a@example.com", hash, "owner"); err != nil {
 		t.Fatal(err)
 	}
@@ -155,10 +151,7 @@ func TestProtectedRouteWithoutAuth(t *testing.T) {
 func TestDashboardSummary_IncludesOnlyAuthorizedWidgets(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "dashboard-owner@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -302,10 +295,7 @@ func TestDashboardSummary_IncludesOnlyAuthorizedWidgets(t *testing.T) {
 func TestDashboardSummary_OmitsUnauthorizedWidgets(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "dashboard-owner-2@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -362,10 +352,7 @@ func TestDashboardSummary_OmitsUnauthorizedWidgets(t *testing.T) {
 func TestInvoices_CreateAndRegenerateVersionedPDF(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "invoice-owner@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -514,10 +501,7 @@ func TestInvoices_CreateAndRegenerateVersionedPDF(t *testing.T) {
 func TestInvoices_DuplicateOccupancyRejected(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "invoice-owner-dup@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -604,10 +588,7 @@ func TestInvoices_DuplicateOccupancyRejected(t *testing.T) {
 func TestInvoices_InvoiceCodePrefixFormatsNumber(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "invoice-code@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -668,10 +649,7 @@ func TestInvoices_InvoiceCodePrefixFormatsNumber(t *testing.T) {
 func TestInvoices_DuplicateBookingPayoutRejected(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	owner, err := st.CreateUser(ctx, "invoice-payout-dup@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -770,10 +748,7 @@ func strPtr(v string) *string {
 func TestGenerateNukiCode_RequiresPinName(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "owner-nuki@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -831,10 +806,7 @@ func TestGenerateNukiCode_RequiresPinName(t *testing.T) {
 func TestSaveNukiStayName_PersistsAndReflectsInOccupancyList(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "owner-stayname@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -943,10 +915,7 @@ func TestSaveNukiStayName_PersistsAndReflectsInOccupancyList(t *testing.T) {
 func TestCreateFinanceBookingPayoutStay_CreatesAndMapsOccupancy(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "owner-payout-create@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)

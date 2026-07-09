@@ -8,14 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/testutil"
 )
 
 func setupFinanceProperty(t *testing.T, st *Store) int64 {
 	t.Helper()
 	ctx := context.Background()
-	hash, _ := auth.HashPassword("secret123")
+	hash := testutil.FastPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "owner@finance.test", hash, "owner")
 	if err != nil {
 		t.Fatal(err)

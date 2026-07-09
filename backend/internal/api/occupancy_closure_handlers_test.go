@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/cleaningcalendar"
 	"pms/backend/internal/store"
 )
@@ -36,10 +35,7 @@ func seedClosureFixtures(t *testing.T) (string, []*http.Cookie, int64, int64) {
 	t.Helper()
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "closure-owner@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -179,10 +175,7 @@ func TestPostOccupancyClose_RequiresAuth(t *testing.T) {
 func TestPostOccupancyCleaningCalendarExclude_PartialFailure(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
-	hash, err := auth.HashPassword("secret123")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "cleaning-owner@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)

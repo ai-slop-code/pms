@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/store"
 	"pms/backend/internal/testutil"
 )
@@ -24,7 +23,7 @@ func newTestStore(t *testing.T) *store.Store {
 func createPropertyWithICS(t *testing.T, st *store.Store, url string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	hash, _ := auth.HashPassword("secret123")
+	hash := testutil.FastPasswordHash(t, "secret123")
 	u, err := st.CreateUser(ctx, "owner@sync.test", hash, "owner")
 	if err != nil {
 		t.Fatal(err)

@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"testing"
 	"time"
-
-	"pms/backend/internal/auth"
 )
 
 // TestProvisioningGate_BlocksUnrotatedBootstrap verifies that a user with
@@ -20,10 +18,7 @@ func TestProvisioningGate_BlocksUnrotatedBootstrap(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
 
-	hash, err := auth.HashPassword("temp-pass-1234")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "temp-pass-1234")
 	u, err := st.CreateUser(ctx, "newop@example.com", hash, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -105,10 +100,7 @@ func TestProvisioningGate_BlocksSuperAdminWithout2FA(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
 
-	hash, err := auth.HashPassword("super-pass-1234")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "super-pass-1234")
 	if _, err := st.CreateUser(ctx, "root@example.com", hash, "super_admin"); err != nil {
 		t.Fatal(err)
 	}
@@ -143,10 +135,7 @@ func TestProvisioningGate_DevBypassWaivesEnrolment(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
 
-	hash, err := auth.HashPassword("super-pass-1234")
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testPasswordHash(t, "super-pass-1234")
 	if _, err := st.CreateUser(ctx, "root@example.com", hash, "super_admin"); err != nil {
 		t.Fatal(err)
 	}
