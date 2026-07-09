@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -13,8 +14,21 @@ import (
 	"time"
 
 	"pms/backend/internal/auth"
+	"pms/backend/internal/cleaningcalendar"
 	"pms/backend/internal/store"
 )
+
+type failingCleaningCalendarClient struct{}
+
+func (f failingCleaningCalendarClient) Configured() bool { return true }
+
+func (f failingCleaningCalendarClient) UpsertEvent(ctx context.Context, event cleaningcalendar.CalendarEventPayload, googleEventID string) (string, error) {
+	return "", errors.New("unexpected upsert")
+}
+
+func (f failingCleaningCalendarClient) DeleteEvent(ctx context.Context, calendarID, googleEventID string) error {
+	return errors.New("google delete failed")
+}
 
 // seedClosureFixtures creates a property + one upserted occupancy and returns
 // (server URL, login cookies, propertyID, occupancyID).
@@ -159,5 +173,90 @@ func TestPostOccupancyClose_RequiresAuth(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status=%d want 401", res.StatusCode)
+	}
+}
+
+func TestPostOccupancyCleaningCalendarExclude_PartialFailure(t *testing.T) {
+	st := testDB(t)
+	ctx := context.Background()
+	hash, err := auth.HashPassword("secret123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := st.CreateUser(ctx, "cleaning-owner@example.com", hash, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prop, err := st.CreateProperty(ctx, u.ID, "Cleaning Prop", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	calendarID := "cleaning@example.com"
+	if _, err := st.UpdateGoogleCleaningSettings(ctx, prop.ID, store.CleaningCalendarSettingsPatch{Enabled: &enabled, CalendarID: &calendarID}); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := st.StartOccupancySyncRun(ctx, prop.ID, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occ := &store.Occupancy{
+		PropertyID:     prop.ID,
+		SourceType:     "booking_ics",
+		SourceEventUID: "uid-cleaning-handler",
+		StartAt:        time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC),
+		EndAt:          time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC),
+		Status:         "active",
+		RawSummary:     sql.NullString{String: "X", Valid: true},
+		ContentHash:    "h",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	row, err := st.GetOccupancyBySourceEventUID(ctx, prop.ID, "uid-cleaning-handler")
+	if err != nil || row == nil {
+		t.Fatalf("get occupancy: %v", err)
+	}
+	if _, err := st.UpsertCleaningCalendarEvent(ctx, &store.CleaningCalendarEvent{
+		PropertyID:       prop.ID,
+		OccupancyID:      row.ID,
+		GoogleCalendarID: calendarID,
+		GoogleEventID:    sql.NullString{String: "google-event", Valid: true},
+		CleaningDate:     "2026-06-12",
+		StartsAt:         time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC),
+		EndsAt:           time.Date(2026, 6, 12, 13, 0, 0, 0, time.UTC),
+		Title:            "Upratovanie: Bez Hosta",
+		Status:           store.CleaningCalendarStatusSynced,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{
+		Store:      st,
+		SessionTTL: time.Hour,
+		CleaningCalendar: &cleaningcalendar.Service{
+			Store:  st,
+			Client: failingCleaningCalendarClient{},
+			Now:    func() time.Time { return time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC) },
+		},
+	}
+	ts := httptest.NewServer(srv.Routes())
+	t.Cleanup(ts.Close)
+	cookies := loginCookies(t, ts.URL, "cleaning-owner@example.com", "secret123")
+	var res actionResponse
+	status := doAuthedJSONRequest(t, &http.Client{}, http.MethodPost,
+		closureURL(ts.URL, prop.ID, row.ID, "cleaning-calendar/exclude"), cookies,
+		strings.NewReader(`{"reason":"owner will clean"}`), &res)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200", status)
+	}
+	if res.OK || !strings.Contains(res.Error, "cleaning calendar exclusion saved, cleaning calendar failed: google delete failed") {
+		t.Fatalf("response=%+v", res)
+	}
+	row, err = st.GetOccupancyByID(ctx, prop.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !row.CleaningCalendarExcluded {
+		t.Fatal("exclusion was not saved before reconciliation failure")
 	}
 }

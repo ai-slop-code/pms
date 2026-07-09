@@ -192,6 +192,102 @@ func TestReconcilePropertyRemovesStayOutcomeCleaningEvent(t *testing.T) {
 	}
 }
 
+func TestReconcilePropertyRemovesAndRecreatesManualCleaningExclusion(t *testing.T) {
+	ctx := context.Background()
+	st, propertyID := setupCleaningCalendarProperty(t, ctx)
+	runID, err := st.StartOccupancySyncRun(ctx, propertyID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkout := occupancy(propertyID, "manual-exclusion", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
+		t.Fatal(err)
+	}
+	row, err := st.GetOccupancyBySourceEventUID(ctx, propertyID, "manual-exclusion")
+	if err != nil || row == nil {
+		t.Fatalf("get occupancy: %v", err)
+	}
+	client := &fakeCalendarClient{configured: true}
+	svc := &Service{Store: st, Client: client, Now: func() time.Time { return time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC) }}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkOccupancyCleaningCalendarExcluded(ctx, propertyID, row.ID, 1, "owner will clean"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.GetCleaningCalendarEventByOccupancy(ctx, propertyID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != store.CleaningCalendarStatusRemoved {
+		t.Fatalf("status=%q want removed", after.Status)
+	}
+	if after.ErrorMessage.String != "manual cleaning calendar exclusion" {
+		t.Fatalf("error_message=%q", after.ErrorMessage.String)
+	}
+	if len(client.deletes) != 1 {
+		t.Fatalf("deletes=%d want 1", len(client.deletes))
+	}
+	if err := st.ClearOccupancyCleaningCalendarExcluded(ctx, propertyID, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	recreated, err := st.GetCleaningCalendarEventByOccupancy(ctx, propertyID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recreated.Status != store.CleaningCalendarStatusSynced {
+		t.Fatalf("status=%q want synced", recreated.Status)
+	}
+}
+
+func TestReconcilePropertyManualExcludedArrivalStillCountsAsSameDay(t *testing.T) {
+	ctx := context.Background()
+	st, propertyID := setupCleaningCalendarProperty(t, ctx)
+	runID, err := st.StartOccupancySyncRun(ctx, propertyID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkout := occupancy(propertyID, "checkout-before-excluded", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	arrival := occupancy(propertyID, "excluded-arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), "active")
+	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertOccupancy(ctx, arrival, runID); err != nil {
+		t.Fatal(err)
+	}
+	arrivalRow, err := st.GetOccupancyBySourceEventUID(ctx, propertyID, "excluded-arrival")
+	if err != nil || arrivalRow == nil {
+		t.Fatalf("get arrival: %v", err)
+	}
+	if err := st.MarkOccupancyCleaningCalendarExcluded(ctx, propertyID, arrivalRow.ID, 1, "owner will clean"); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeCalendarClient{configured: true}
+	svc := &Service{Store: st, Client: client, Now: func() time.Time { return time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC) }}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	events, err := st.ListCleaningCalendarEventsForMonth(ctx, propertyID, "2026-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events=%d want 1", len(events))
+	}
+	if events[0].OccupancyID == arrivalRow.ID {
+		t.Fatal("created cleaning event for manually excluded arrival")
+	}
+	if events[0].Title != "Upratovanie: Pride Host" {
+		t.Fatalf("title=%q want same-day title", events[0].Title)
+	}
+}
+
 func TestReconcilePropertySameDayArrivalIgnoresStayOutcome(t *testing.T) {
 	ctx := context.Background()
 	st, propertyID := setupCleaningCalendarProperty(t, ctx)

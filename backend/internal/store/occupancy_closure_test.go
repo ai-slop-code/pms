@@ -315,3 +315,127 @@ func TestOccupancyStayOutcomeRejectsClosureRows(t *testing.T) {
 		t.Fatalf("err=%v want ErrOccupancyOutcomeIneligible", err)
 	}
 }
+
+func TestOccupancyCleaningCalendarExclusionLifecycle(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "cleaning-exclusion@test.local", "hash", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProperty(ctx, u.ID, "P", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := st.StartOccupancySyncRun(ctx, p.ID, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occ := &Occupancy{
+		PropertyID:     p.ID,
+		SourceType:     "booking_ics",
+		SourceEventUID: "uid-cleaning-exclusion",
+		StartAt:        time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC),
+		EndAt:          time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC),
+		Status:         "active",
+		ContentHash:    "h1",
+	}
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	row, err := st.GetOccupancyBySourceEventUID(ctx, p.ID, "uid-cleaning-exclusion")
+	if err != nil || row == nil {
+		t.Fatalf("get: %v", err)
+	}
+	if row.CleaningCalendarExcluded {
+		t.Fatal("new occupancy defaulted to cleaning calendar excluded")
+	}
+	if err := st.MarkOccupancyCleaningCalendarExcluded(ctx, p.ID, row.ID, u.ID, "cleaner unavailable"); err != nil {
+		t.Fatalf("mark excluded: %v", err)
+	}
+	row, err = st.GetOccupancyByID(ctx, p.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !row.CleaningCalendarExcluded {
+		t.Fatal("exclusion not set")
+	}
+	if got := row.CleaningCalendarExclusionReason.String; got != "cleaner unavailable" {
+		t.Fatalf("reason=%q", got)
+	}
+	if !row.CleaningCalendarExcludedByUserID.Valid || row.CleaningCalendarExcludedByUserID.Int64 != u.ID {
+		t.Fatalf("excluded_by=%v", row.CleaningCalendarExcludedByUserID)
+	}
+	if !row.CleaningCalendarExcludedAt.Valid {
+		t.Fatal("excluded_at not set")
+	}
+
+	occ.ContentHash = "h2"
+	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+		t.Fatal(err)
+	}
+	row, err = st.GetOccupancyByID(ctx, p.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !row.CleaningCalendarExcluded || row.CleaningCalendarExclusionReason.String != "cleaner unavailable" {
+		t.Fatalf("exclusion lost after resync: %+v", row)
+	}
+	if err := st.MarkOccupancyCleaningCalendarExcluded(ctx, p.ID, row.ID, u.ID, "owner will clean"); err != nil {
+		t.Fatalf("update excluded reason: %v", err)
+	}
+	row, _ = st.GetOccupancyByID(ctx, p.ID, row.ID)
+	if got := row.CleaningCalendarExclusionReason.String; got != "owner will clean" {
+		t.Fatalf("updated reason=%q", got)
+	}
+	if err := st.ClearOccupancyCleaningCalendarExcluded(ctx, p.ID, row.ID); err != nil {
+		t.Fatalf("clear excluded: %v", err)
+	}
+	row, _ = st.GetOccupancyByID(ctx, p.ID, row.ID)
+	if row.CleaningCalendarExcluded || row.CleaningCalendarExclusionReason.Valid || row.CleaningCalendarExcludedByUserID.Valid || row.CleaningCalendarExcludedAt.Valid {
+		t.Fatalf("exclusion metadata not cleared: %+v", row)
+	}
+	if err := st.ClearOccupancyCleaningCalendarExcluded(ctx, p.ID, row.ID); err != nil {
+		t.Fatalf("second clear should be no-op success: %v", err)
+	}
+}
+
+func TestOccupancyCleaningCalendarExclusionValidation(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, _ := st.CreateUser(ctx, "cleaning-validation@test.local", "hash", "owner")
+	p, _ := st.CreateProperty(ctx, u.ID, "P", "UTC", "en")
+	runID, _ := st.StartOccupancySyncRun(ctx, p.ID, "manual")
+	closed := &Occupancy{PropertyID: p.ID, SourceType: "booking_ics", SourceEventUID: "closed-cleaning", StartAt: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), EndAt: time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC), Status: "active", ContentHash: "h"}
+	external := &Occupancy{PropertyID: p.ID, SourceType: "booking_ics", SourceEventUID: "external-cleaning", StartAt: time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), EndAt: time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC), Status: "active", ContentHash: "h"}
+	outcome := &Occupancy{PropertyID: p.ID, SourceType: "booking_ics", SourceEventUID: "outcome-cleaning", StartAt: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), EndAt: time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC), Status: "active", ContentHash: "h"}
+	for _, occ := range []*Occupancy{closed, external, outcome} {
+		if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closedRow, _ := st.GetOccupancyBySourceEventUID(ctx, p.ID, "closed-cleaning")
+	externalRow, _ := st.GetOccupancyBySourceEventUID(ctx, p.ID, "external-cleaning")
+	outcomeRow, _ := st.GetOccupancyBySourceEventUID(ctx, p.ID, "outcome-cleaning")
+	if err := st.CloseOccupancy(ctx, p.ID, closedRow.ID, u.ID, "maintenance", "maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkOccupancyExternalSale(ctx, p.ID, externalRow.ID, u.ID, 10000, "EUR", "direct", "direct"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkOccupancyStayOutcome(ctx, p.ID, outcomeRow.ID, u.ID, StayOutcomeNoShow, "no-show"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkOccupancyCleaningCalendarExcluded(ctx, p.ID, closedRow.ID, u.ID, ""); !errors.Is(err, ErrOccupancyCleaningCalendarExclusionIneligible) {
+		t.Fatalf("closed err=%v", err)
+	}
+	if err := st.MarkOccupancyCleaningCalendarExcluded(ctx, p.ID, externalRow.ID, u.ID, ""); err != nil {
+		t.Fatalf("external sale should be eligible: %v", err)
+	}
+	if err := st.MarkOccupancyCleaningCalendarExcluded(ctx, p.ID, outcomeRow.ID, u.ID, ""); !errors.Is(err, ErrOccupancyCleaningCalendarExclusionIneligible) {
+		t.Fatalf("outcome err=%v", err)
+	}
+	if err := st.ClearOccupancyCleaningCalendarExcluded(ctx, p.ID, externalRow.ID); err != nil {
+		t.Fatalf("clear external exclusion: %v", err)
+	}
+}

@@ -151,6 +151,8 @@ func (s *Server) Routes() chi.Router {
 				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/cancelled-non-refundable", s.postOccupancyOutcomeCancelledNonRefundable)
 				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/no-show", s.postOccupancyOutcomeNoShow)
 				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/clear", s.postOccupancyOutcomeClear)
+				r.Post("/properties/{id}/occupancies/{occupancyId}/cleaning-calendar/exclude", s.postOccupancyCleaningCalendarExclude)
+				r.Post("/properties/{id}/occupancies/{occupancyId}/cleaning-calendar/include", s.postOccupancyCleaningCalendarInclude)
 				r.Get("/properties/{id}/occupancy-source", s.getOccupancySource)
 				r.Patch("/properties/{id}/occupancy-source", s.patchOccupancySource)
 				r.Post("/properties/{id}/occupancy-api-tokens", s.postOccupancyAPIToken)

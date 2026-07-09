@@ -26,6 +26,10 @@ export interface Occupancy {
   stay_outcome_reason?: string | null
   stay_outcome_marked_at?: string | null
   stay_outcome_marked_by_user_id?: number | null
+  cleaning_calendar_excluded: boolean
+  cleaning_calendar_exclusion_reason?: string | null
+  cleaning_calendar_excluded_at?: string | null
+  cleaning_calendar_excluded_by_user_id?: number | null
 }
 
 /** Lightweight occupancy shape used by MessagesView's generate picker. */

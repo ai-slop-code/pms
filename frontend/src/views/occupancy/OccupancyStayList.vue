@@ -8,10 +8,13 @@ import UiTable from '@/components/ui/UiTable.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import { displayStatus, statusTone } from './status'
 import {
+  canExcludeCleaningCalendar,
   canMarkStayOutcome,
+  cleaningCalendarStatusLabel,
   closureLabel,
   closureTone,
   formatExternalAmount,
+  hasCleaningCalendarExclusion,
   hasStayOutcome,
   isLabelled,
   stayOutcomeLabel,
@@ -37,6 +40,8 @@ const emit = defineEmits<{
   reopen: [occ: Occ]
   markOutcome: [occ: Occ, outcome: 'cancelled_non_refundable' | 'no_show']
   clearOutcome: [occ: Occ]
+  excludeCleaningCalendar: [occ: Occ]
+  includeCleaningCalendar: [occ: Occ]
 }>()
 </script>
 
@@ -82,6 +87,7 @@ const emit = defineEmits<{
           <th>Status</th>
           <th>Label</th>
           <th>Outcome</th>
+          <th>Cleaning</th>
           <th>Summary</th>
           <th>Payout</th>
           <th>UID</th>
@@ -110,6 +116,14 @@ const emit = defineEmits<{
             {{ stayOutcomeLabel(o.stay_outcome) }}
           </UiBadge>
           <span v-else class="muted">—</span>
+        </td>
+        <td>
+          <UiBadge :tone="hasCleaningCalendarExclusion(o) ? 'warning' : 'success'">
+            {{ cleaningCalendarStatusLabel(o) }}
+          </UiBadge>
+          <div v-if="o.cleaning_calendar_exclusion_reason" class="cleaning-reason">
+            {{ o.cleaning_calendar_exclusion_reason }}
+          </div>
         </td>
         <td>{{ o.raw_summary || '—' }}</td>
         <td>{{ o.has_payout_data ? 'Yes' : '—' }}</td>
@@ -147,6 +161,24 @@ const emit = defineEmits<{
           <UiButton v-else size="sm" variant="ghost" :disabled="busy" @click="emit('clearOutcome', o)">
             Clear outcome
           </UiButton>
+          <UiButton
+            v-if="canExcludeCleaningCalendar(o)"
+            size="sm"
+            variant="ghost"
+            :disabled="busy"
+            @click="emit('excludeCleaningCalendar', o)"
+          >
+            Do not send cleaning event
+          </UiButton>
+          <UiButton
+            v-else-if="hasCleaningCalendarExclusion(o)"
+            size="sm"
+            variant="ghost"
+            :disabled="busy"
+            @click="emit('includeCleaningCalendar', o)"
+          >
+            Mark as cleaned by cleaning lady
+          </UiButton>
         </td>
       </tr>
     </UiTable>
@@ -173,5 +205,12 @@ const emit = defineEmits<{
 }
 .muted {
   color: var(--color-text-muted);
+}
+.cleaning-reason {
+  margin-top: var(--space-1);
+  max-width: 18rem;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: normal;
 }
 </style>

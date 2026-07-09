@@ -52,19 +52,23 @@ type Occupancy struct {
 	//   - 'closed'        → night drops out of nights_sold and available_nights
 	//   - 'external_sale' → night counts as sold + available, with the
 	//                       operator-entered net amount feeding gross_revenue.
-	ClosureState              sql.NullString
-	ClosureReason             sql.NullString
-	ClosureCategory           sql.NullString
-	ClosedByUserID            sql.NullInt64
-	ClosedAt                  sql.NullTime
-	ExternalNetAmountCents    sql.NullInt64
-	ExternalCurrency          sql.NullString
-	ExternalChannel           sql.NullString
-	FinanceBookingID          sql.NullInt64
-	StayOutcome               sql.NullString
-	StayOutcomeReason         sql.NullString
-	StayOutcomeMarkedByUserID sql.NullInt64
-	StayOutcomeMarkedAt       sql.NullTime
+	ClosureState                     sql.NullString
+	ClosureReason                    sql.NullString
+	ClosureCategory                  sql.NullString
+	ClosedByUserID                   sql.NullInt64
+	ClosedAt                         sql.NullTime
+	ExternalNetAmountCents           sql.NullInt64
+	ExternalCurrency                 sql.NullString
+	ExternalChannel                  sql.NullString
+	FinanceBookingID                 sql.NullInt64
+	StayOutcome                      sql.NullString
+	StayOutcomeReason                sql.NullString
+	StayOutcomeMarkedByUserID        sql.NullInt64
+	StayOutcomeMarkedAt              sql.NullTime
+	CleaningCalendarExcluded         bool
+	CleaningCalendarExclusionReason  sql.NullString
+	CleaningCalendarExcludedByUserID sql.NullInt64
+	CleaningCalendarExcludedAt       sql.NullTime
 }
 
 // Closure state constants (occupancies.closure_state values).
@@ -352,7 +356,9 @@ const occupancySelectColumns = `
 	       raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id,
 	       closure_state, closure_reason, closure_category, closed_by_user_id, closed_at,
 	       external_net_amount_cents, external_currency, external_channel, finance_booking_id,
-	       stay_outcome, stay_outcome_reason, stay_outcome_marked_by_user_id, stay_outcome_marked_at`
+	       stay_outcome, stay_outcome_reason, stay_outcome_marked_by_user_id, stay_outcome_marked_at,
+	       cleaning_calendar_excluded, cleaning_calendar_exclusion_reason,
+	       cleaning_calendar_excluded_by_user_id, cleaning_calendar_excluded_at`
 
 func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface{}) ([]Occupancy, error) {
 	rows, err := s.DB.QueryContext(ctx, q, args...)
@@ -367,12 +373,15 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 		var runID sql.NullInt64
 		var closedAt sql.NullString
 		var outcomeMarkedAt sql.NullString
+		var cleaningExcluded int
+		var cleaningExcludedAt sql.NullString
 		if err := rows.Scan(
 			&o.ID, &o.PropertyID, &o.SourceType, &o.SourceEventUID, &start, &end, &o.Status,
 			&o.RawSummary, &o.GuestDisplayName, &o.ContentHash, &imp, &last, &runID,
 			&o.ClosureState, &o.ClosureReason, &o.ClosureCategory, &o.ClosedByUserID, &closedAt,
 			&o.ExternalNetAmountCents, &o.ExternalCurrency, &o.ExternalChannel, &o.FinanceBookingID,
 			&o.StayOutcome, &o.StayOutcomeReason, &o.StayOutcomeMarkedByUserID, &outcomeMarkedAt,
+			&cleaningExcluded, &o.CleaningCalendarExclusionReason, &o.CleaningCalendarExcludedByUserID, &cleaningExcludedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -388,6 +397,11 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 		if outcomeMarkedAt.Valid && outcomeMarkedAt.String != "" {
 			t, _ := time.Parse(time.RFC3339, outcomeMarkedAt.String)
 			o.StayOutcomeMarkedAt = sql.NullTime{Time: t, Valid: true}
+		}
+		o.CleaningCalendarExcluded = cleaningExcluded == 1
+		if cleaningExcludedAt.Valid && cleaningExcludedAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, cleaningExcludedAt.String)
+			o.CleaningCalendarExcludedAt = sql.NullTime{Time: t, Valid: true}
 		}
 		out = append(out, o)
 	}
@@ -569,6 +583,8 @@ var ErrInvalidStayOutcome = errors.New("invalid stay outcome")
 var ErrOccupancyOutcomeConflict = errors.New("occupancy already has a stay outcome; clear it first")
 
 var ErrOccupancyOutcomeIneligible = errors.New("occupancy is not eligible for a stay outcome")
+
+var ErrOccupancyCleaningCalendarExclusionIneligible = errors.New("occupancy is not eligible for cleaning calendar exclusion")
 
 // CloseOccupancy marks the row as off-the-market closed. Sets closed_by_user_id
 // + closed_at audit columns and clears any external-sale fields. Refuses to
@@ -968,6 +984,55 @@ func (s *Store) ClearOccupancyStayOutcome(ctx context.Context, propertyID, occup
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) MarkOccupancyCleaningCalendarExcluded(ctx context.Context, propertyID, occupancyID, userID int64, reason string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE occupancies
+		SET cleaning_calendar_excluded = 1,
+		    cleaning_calendar_exclusion_reason = ?,
+		    cleaning_calendar_excluded_by_user_id = ?,
+		    cleaning_calendar_excluded_at = ?,
+		    last_synced_at = ?
+		WHERE property_id = ?
+		  AND id = ?
+		  AND status IN ('active', 'updated')
+		  AND (closure_state IS NULL OR closure_state <> 'closed')
+		  AND stay_outcome IS NULL`, nullableString(reason), userID, now, now, propertyID, occupancyID)
+	if err != nil {
+		return fmt.Errorf("mark cleaning calendar excluded: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		_, getErr := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+		if getErr != nil {
+			return getErr
+		}
+		return ErrOccupancyCleaningCalendarExclusionIneligible
+	}
+	return nil
+}
+
+func (s *Store) ClearOccupancyCleaningCalendarExcluded(ctx context.Context, propertyID, occupancyID int64) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE occupancies
+		SET cleaning_calendar_excluded = 0,
+		    cleaning_calendar_exclusion_reason = NULL,
+		    cleaning_calendar_excluded_by_user_id = NULL,
+		    cleaning_calendar_excluded_at = NULL,
+		    last_synced_at = ?
+		WHERE property_id = ? AND id = ? AND cleaning_calendar_excluded = 1`, now, propertyID, occupancyID)
+	if err != nil {
+		return fmt.Errorf("clear cleaning calendar excluded: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		_, getErr := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+		return getErr
+	}
+	return nil
 }
 
 func syncFinanceOutcomeOverrideTx(ctx context.Context, tx *sql.Tx, propertyID, occupancyID int64, outcome, markedAt string) error {

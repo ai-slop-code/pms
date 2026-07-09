@@ -9,7 +9,7 @@ import UiKpiCard from '@/components/ui/UiKpiCard.vue'
 import UiSection from '@/components/ui/UiSection.vue'
 import UiTable from '@/components/ui/UiTable.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
-import { stayOutcomeLabel, stayOutcomeTone } from './closure'
+import { hasCleaningCalendarExclusion, stayOutcomeLabel, stayOutcomeTone } from './closure'
 import { parseMonthKey } from '@/utils/month'
 import { nightsBetween, nightsCount } from './status'
 import type { Occupancy as Occ } from '@/api/types/occupancy'
@@ -34,6 +34,7 @@ type CalendarCell = {
   checkIns: number
   closedCount: number
   externalSaleCount: number
+  cleaningExcludedCount: number
   stayCount: number
 }
 
@@ -44,19 +45,21 @@ const calendarCells = computed<CalendarCell[]>(() => {
   const startPad = (first.getDay() + 6) % 7
   const days: CalendarCell[] = []
   for (let i = 0; i < startPad; i++)
-    days.push({ label: '', key: null, count: 0, checkIns: 0, closedCount: 0, externalSaleCount: 0, stayCount: 0 })
+    days.push({ label: '', key: null, count: 0, checkIns: 0, closedCount: 0, externalSaleCount: 0, cleaningExcludedCount: 0, stayCount: 0 })
   for (let d = 1; d <= last.getDate(); d++) {
     const key = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     let count = 0
     let checkIns = 0
     let closedCount = 0
     let externalSaleCount = 0
+    let cleaningExcludedCount = 0
     let stayCount = 0
     for (const o of props.occupancies) {
       if (o.status === 'deleted_from_source') continue
       const inNight = nightsBetween(o.start_at, o.end_at).has(key)
       if (inNight) {
         stayCount++
+        if (hasCleaningCalendarExclusion(o)) cleaningExcludedCount++
         if (o.closure_state === 'closed') closedCount++
         else if (o.closure_state === 'external_sale') {
           externalSaleCount++
@@ -65,10 +68,10 @@ const calendarCells = computed<CalendarCell[]>(() => {
       }
       if (o.start_at?.slice(0, 10) === key && o.closure_state !== 'closed') checkIns++
     }
-    days.push({ label: d, key, count, checkIns, closedCount, externalSaleCount, stayCount })
+    days.push({ label: d, key, count, checkIns, closedCount, externalSaleCount, cleaningExcludedCount, stayCount })
   }
   while (days.length % 7 !== 0)
-    days.push({ label: '', key: null, count: 0, checkIns: 0, closedCount: 0, externalSaleCount: 0, stayCount: 0 })
+    days.push({ label: '', key: null, count: 0, checkIns: 0, closedCount: 0, externalSaleCount: 0, cleaningExcludedCount: 0, stayCount: 0 })
   return days
 })
 
@@ -106,6 +109,7 @@ function cellAriaLabel(c: CalendarCell): string {
   else parts.push('no occupancy')
   if (c.closedCount) parts.push(`${c.closedCount} closed`)
   if (c.externalSaleCount) parts.push(`${c.externalSaleCount} externally sold`)
+  if (c.cleaningExcludedCount) parts.push(`${c.cleaningExcludedCount} with no cleaning event`)
   if (c.checkIns) parts.push(`${c.checkIns} check-in${c.checkIns > 1 ? 's' : ''}`)
   return parts.join(', ')
 }
@@ -123,6 +127,7 @@ const staysInMonth = computed(() =>
       uid: o.source_event_uid,
       hasPayoutData: !!o.has_payout_data,
       outcome: o.stay_outcome,
+      cleaningExcluded: hasCleaningCalendarExclusion(o),
     }))
     .sort((a, b) => a.start.localeCompare(b.start)),
 )
@@ -254,6 +259,12 @@ const monthNightSummary = computed(() => {
                 aria-hidden="true"
                 :title="`${c.externalSaleCount} externally-sold night${c.externalSaleCount > 1 ? 's' : ''}`"
               >ext. sale</div>
+              <div
+                v-if="c.cleaningExcludedCount"
+                class="calendar__chip calendar__chip--cleaning-excluded"
+                aria-hidden="true"
+                :title="`${c.cleaningExcludedCount} stay${c.cleaningExcludedCount > 1 ? 's' : ''} with no cleaning event`"
+              >No cleaning event</div>
               <div v-if="c.checkIns" class="calendar__chip calendar__chip--checkin" aria-hidden="true">
                 {{ c.checkIns }} check-in{{ c.checkIns > 1 ? 's' : '' }}
               </div>
@@ -273,6 +284,7 @@ const monthNightSummary = computed(() => {
             <th class="num">Nights</th>
             <th>Summary</th>
             <th>Outcome</th>
+            <th>Cleaning</th>
             <th>Payout</th>
           </tr>
         </template>
@@ -286,6 +298,10 @@ const monthNightSummary = computed(() => {
               {{ stayOutcomeLabel(s.outcome) }}
             </UiBadge>
             <span v-else class="calendar__muted">—</span>
+          </td>
+          <td>
+            <UiBadge v-if="s.cleaningExcluded" tone="warning">No cleaning event</UiBadge>
+            <span v-else class="calendar__muted">Cleaning lady: Yes</span>
           </td>
           <td>
             <UiBadge :tone="s.hasPayoutData ? 'success' : 'neutral'" dot>
@@ -390,6 +406,12 @@ const monthNightSummary = computed(() => {
 }
 .calendar__chip--external {
   color: var(--warning-fg, #b58400);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.calendar__chip--cleaning-excluded {
+  color: var(--danger-fg, #b42318);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-weight: 600;

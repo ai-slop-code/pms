@@ -59,18 +59,22 @@ type occupancyRow struct {
 	ContentHash    string `json:"content_hash"`
 	HasPayoutData  bool   `json:"has_payout_data"`
 	// Closure / external-sale labelling (PMS_14). NULL JSON omitted.
-	ClosureState              *string `json:"closure_state,omitempty"`
-	ClosureReason             *string `json:"closure_reason,omitempty"`
-	ClosureCategory           *string `json:"closure_category,omitempty"`
-	ClosedAt                  *string `json:"closed_at,omitempty"`
-	ClosedByUserID            *int64  `json:"closed_by_user_id,omitempty"`
-	ExternalNetAmountCents    *int64  `json:"external_net_amount_cents,omitempty"`
-	ExternalCurrency          *string `json:"external_currency,omitempty"`
-	ExternalChannel           *string `json:"external_channel,omitempty"`
-	StayOutcome               *string `json:"stay_outcome,omitempty"`
-	StayOutcomeReason         *string `json:"stay_outcome_reason,omitempty"`
-	StayOutcomeMarkedAt       *string `json:"stay_outcome_marked_at,omitempty"`
-	StayOutcomeMarkedByUserID *int64  `json:"stay_outcome_marked_by_user_id,omitempty"`
+	ClosureState                     *string `json:"closure_state,omitempty"`
+	ClosureReason                    *string `json:"closure_reason,omitempty"`
+	ClosureCategory                  *string `json:"closure_category,omitempty"`
+	ClosedAt                         *string `json:"closed_at,omitempty"`
+	ClosedByUserID                   *int64  `json:"closed_by_user_id,omitempty"`
+	ExternalNetAmountCents           *int64  `json:"external_net_amount_cents,omitempty"`
+	ExternalCurrency                 *string `json:"external_currency,omitempty"`
+	ExternalChannel                  *string `json:"external_channel,omitempty"`
+	StayOutcome                      *string `json:"stay_outcome,omitempty"`
+	StayOutcomeReason                *string `json:"stay_outcome_reason,omitempty"`
+	StayOutcomeMarkedAt              *string `json:"stay_outcome_marked_at,omitempty"`
+	StayOutcomeMarkedByUserID        *int64  `json:"stay_outcome_marked_by_user_id,omitempty"`
+	CleaningCalendarExcluded         bool    `json:"cleaning_calendar_excluded"`
+	CleaningCalendarExclusionReason  *string `json:"cleaning_calendar_exclusion_reason,omitempty"`
+	CleaningCalendarExcludedAt       *string `json:"cleaning_calendar_excluded_at,omitempty"`
+	CleaningCalendarExcludedByUserID *int64  `json:"cleaning_calendar_excluded_by_user_id,omitempty"`
 }
 
 type occupancyListResponse struct {
@@ -243,17 +247,18 @@ func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool) []occupancy
 	for _, o := range list {
 		rs := occupancySummary(o)
 		row := occupancyRow{
-			ID:             o.ID,
-			PropertyID:     o.PropertyID,
-			SourceType:     o.SourceType,
-			SourceEventUID: o.SourceEventUID,
-			StartAt:        o.StartAt.UTC().Format(time.RFC3339),
-			EndAt:          o.EndAt.UTC().Format(time.RFC3339),
-			Status:         o.Status,
-			RawSummary:     rs,
-			LastSyncedAt:   o.LastSyncedAt.UTC().Format(time.RFC3339),
-			ContentHash:    o.ContentHash,
-			HasPayoutData:  payoutMap[o.ID],
+			ID:                       o.ID,
+			PropertyID:               o.PropertyID,
+			SourceType:               o.SourceType,
+			SourceEventUID:           o.SourceEventUID,
+			StartAt:                  o.StartAt.UTC().Format(time.RFC3339),
+			EndAt:                    o.EndAt.UTC().Format(time.RFC3339),
+			Status:                   o.Status,
+			RawSummary:               rs,
+			LastSyncedAt:             o.LastSyncedAt.UTC().Format(time.RFC3339),
+			ContentHash:              o.ContentHash,
+			HasPayoutData:            payoutMap[o.ID],
+			CleaningCalendarExcluded: o.CleaningCalendarExcluded,
 		}
 		if o.ClosureState.Valid {
 			row.ClosureState = optString(o.ClosureState.String)
@@ -295,6 +300,17 @@ func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool) []occupancy
 		if o.StayOutcomeMarkedByUserID.Valid {
 			v := o.StayOutcomeMarkedByUserID.Int64
 			row.StayOutcomeMarkedByUserID = &v
+		}
+		if o.CleaningCalendarExclusionReason.Valid {
+			row.CleaningCalendarExclusionReason = optString(o.CleaningCalendarExclusionReason.String)
+		}
+		if o.CleaningCalendarExcludedAt.Valid {
+			s := o.CleaningCalendarExcludedAt.Time.UTC().Format(time.RFC3339)
+			row.CleaningCalendarExcludedAt = &s
+		}
+		if o.CleaningCalendarExcludedByUserID.Valid {
+			v := o.CleaningCalendarExcludedByUserID.Int64
+			row.CleaningCalendarExcludedByUserID = &v
 		}
 		out = append(out, row)
 	}

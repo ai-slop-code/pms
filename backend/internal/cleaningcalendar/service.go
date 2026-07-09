@@ -72,6 +72,7 @@ func (s *Service) ReconcileProperty(ctx context.Context, propertyID int64, trigg
 			runErr = &msg
 		} else if runErr != nil {
 			status = "partial"
+			err = errors.New(*runErr)
 		}
 		_ = s.Store.FinishCleaningCalendarSyncRun(ctx, runID, status, runErr, stats.EventsSeen, stats.EventsUpserted, stats.EventsRemoved)
 		return stats, err
@@ -269,16 +270,18 @@ func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarE
 
 func (s *Service) removalReason(ctx context.Context, propertyID, occupancyID int64) *string {
 	occ, err := s.Store.GetOccupancyByID(ctx, propertyID, occupancyID)
-	if err != nil || !occ.StayOutcome.Valid {
+	if err != nil {
 		return nil
 	}
-	switch occ.StayOutcome.String {
-	case store.StayOutcomeCancelledNonRefundable, store.StayOutcomeNoShow:
+	if occ.StayOutcome.Valid {
 		msg := "stay outcome: " + occ.StayOutcome.String
 		return &msg
-	default:
-		return nil
 	}
+	if occ.CleaningCalendarExcluded {
+		msg := "manual cleaning calendar exclusion"
+		return &msg
+	}
+	return nil
 }
 
 func renderTitle(settings *store.GoogleCleaningSettings, sameDay bool) string {

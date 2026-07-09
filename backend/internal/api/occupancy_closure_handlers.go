@@ -60,6 +60,10 @@ type stayOutcomeBody struct {
 	Reason string `json:"reason"`
 }
 
+type cleaningCalendarExclusionBody struct {
+	Reason string `json:"reason"`
+}
+
 func parsePropertyAndOccupancyIDs(r *http.Request) (int64, int64, error) {
 	propID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -288,6 +292,70 @@ func (s *Server) postOccupancyOutcomeClear(w http.ResponseWriter, r *http.Reques
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
 }
 
+func (s *Server) postOccupancyCleaningCalendarExclude(w http.ResponseWriter, r *http.Request) {
+	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
+	if !ok {
+		return
+	}
+	_, occID, err := parsePropertyAndOccupancyIDs(r)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var body cleaningCalendarExclusionBody
+	if r.ContentLength != 0 {
+		if err := ReadJSON(r, &body); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+	}
+	body.Reason = strings.TrimSpace(body.Reason)
+	if len(body.Reason) > closureReasonMaxLen {
+		WriteError(w, http.StatusBadRequest, "reason too long")
+		return
+	}
+	idStr := strconv.FormatInt(occID, 10)
+	s.audit(r, actor, "occupancy_cleaning_calendar_exclude", "occupancy", idStr, "attempt")
+	if err := s.Store.MarkOccupancyCleaningCalendarExcluded(r.Context(), propID, occID, actor.ID, body.Reason); err != nil {
+		writeOccupancyLabelError(w, err)
+		return
+	}
+	if s.CleaningCalendar != nil {
+		if _, err := s.CleaningCalendar.ReconcileProperty(r.Context(), propID, "cleaning_calendar_exclusion"); err != nil {
+			WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: "cleaning calendar exclusion saved, cleaning calendar failed: " + err.Error()})
+			return
+		}
+	}
+	s.audit(r, actor, "occupancy_cleaning_calendar_exclude", "occupancy", idStr, "success")
+	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
+}
+
+func (s *Server) postOccupancyCleaningCalendarInclude(w http.ResponseWriter, r *http.Request) {
+	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
+	if !ok {
+		return
+	}
+	_, occID, err := parsePropertyAndOccupancyIDs(r)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	idStr := strconv.FormatInt(occID, 10)
+	s.audit(r, actor, "occupancy_cleaning_calendar_include", "occupancy", idStr, "attempt")
+	if err := s.Store.ClearOccupancyCleaningCalendarExcluded(r.Context(), propID, occID); err != nil {
+		writeOccupancyLabelError(w, err)
+		return
+	}
+	if s.CleaningCalendar != nil {
+		if _, err := s.CleaningCalendar.ReconcileProperty(r.Context(), propID, "cleaning_calendar_inclusion"); err != nil {
+			WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: "cleaning calendar inclusion saved, cleaning calendar failed: " + err.Error()})
+			return
+		}
+	}
+	s.audit(r, actor, "occupancy_cleaning_calendar_include", "occupancy", idStr, "success")
+	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
+}
+
 func writeOccupancyLabelError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrOccupancyAlreadyLabelled):
@@ -296,6 +364,8 @@ func writeOccupancyLabelError(w http.ResponseWriter, err error) {
 		WriteError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrInvalidStayOutcome):
 		WriteError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, store.ErrOccupancyCleaningCalendarExclusionIneligible):
+		WriteError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrInvalidOccupancySplit):
 		WriteError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, sql.ErrNoRows):

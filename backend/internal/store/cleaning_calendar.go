@@ -200,6 +200,7 @@ func (s *Store) ListCleaningCalendarCheckoutCandidates(ctx context.Context, prop
 		  AND status IN ('active', 'updated')
 		  AND (closure_state IS NULL OR closure_state <> 'closed')
 		  AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
+		  AND cleaning_calendar_excluded = 0
 		  AND end_at >= ?
 		  AND end_at < ?
 		ORDER BY end_at ASC`

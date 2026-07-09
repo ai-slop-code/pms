@@ -18,10 +18,13 @@ import UiButton from '@/components/ui/UiButton.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import UiInput from '@/components/ui/UiInput.vue'
 import {
+  canExcludeCleaningCalendar,
   canMarkStayOutcome,
+  cleaningCalendarStatusLabel,
   closureLabel,
   closureTone,
   formatExternalAmount,
+  hasCleaningCalendarExclusion,
   hasStayOutcome,
   isLabelled,
   stayOutcomeLabel,
@@ -74,6 +77,11 @@ const outcomeDialogError = ref('')
 const outcomeDialogTarget = ref<Occ | null>(null)
 const outcomeDialogOutcome = ref<StayOutcome>('cancelled_non_refundable')
 const outcomeReason = ref('')
+const cleaningDialogOpen = ref(false)
+const cleaningDialogBusy = ref(false)
+const cleaningDialogError = ref('')
+const cleaningDialogTarget = ref<Occ | null>(null)
+const cleaningReason = ref('')
 const dialogStayLabel = computed(() => {
   const o = dialogTarget.value
   if (!o) return ''
@@ -97,6 +105,11 @@ const outcomeDialogCopy = computed(() =>
 )
 const outcomeDialogStayLabel = computed(() => {
   const o = outcomeDialogTarget.value
+  if (!o) return ''
+  return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
+})
+const cleaningDialogStayLabel = computed(() => {
+  const o = cleaningDialogTarget.value
   if (!o) return ''
   return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • ${o.raw_summary || o.source_event_uid}`
 })
@@ -150,6 +163,14 @@ async function clearOutcomeFromDay(o: Occ) {
 function splitNightsFromDay(o: Occ) {
   dayDialogOpen.value = false
   openSplitDialog(o, dayDialogDate.value)
+}
+function excludeCleaningCalendarFromDay(o: Occ) {
+  dayDialogOpen.value = false
+  openCleaningExcludeDialog(o)
+}
+async function includeCleaningCalendarFromDay(o: Occ) {
+  dayDialogOpen.value = false
+  await includeCleaningCalendar(o)
 }
 
 function openOutcomeDialog(o: Occ, outcome: StayOutcome) {
@@ -213,6 +234,75 @@ async function clearOutcome(o: Occ) {
     error.value = e instanceof Error ? e.message : 'Failed to clear outcome'
   }
 }
+
+function openCleaningExcludeDialog(o: Occ) {
+  cleaningDialogTarget.value = o
+  cleaningReason.value = ''
+  cleaningDialogError.value = ''
+  cleaningDialogOpen.value = true
+}
+
+async function submitCleaningExcludeDialog() {
+  if (!pid.value || !cleaningDialogTarget.value) return
+  const reason = cleaningReason.value.trim()
+  if (reason.length > 500) {
+    cleaningDialogError.value = 'Reason is too long.'
+    return
+  }
+  cleaningDialogBusy.value = true
+  cleaningDialogError.value = ''
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok: boolean; error?: string }>(
+      `/api/properties/${pid.value}/occupancies/${cleaningDialogTarget.value.id}/cleaning-calendar/exclude`,
+      { method: 'POST', json: { reason } },
+    )
+    cleaningDialogOpen.value = false
+    await reloadCurrentOccupancyView()
+    if (!r.ok) {
+      error.value = r.error || 'Cleaning calendar exclusion saved, but calendar reconciliation failed.'
+      return
+    }
+    success.value = 'Cleaning calendar event excluded.'
+  } catch (e) {
+    cleaningDialogError.value = e instanceof Error ? e.message : 'Failed to exclude cleaning calendar event'
+  } finally {
+    cleaningDialogBusy.value = false
+  }
+}
+
+async function includeCleaningCalendar(o: Occ) {
+  if (!pid.value) return
+  const ok = await confirm({
+    title: 'Mark as cleaned by cleaning lady',
+    message: 'This restores the default behavior. PMS will create the cleaning calendar event again if the stay is still eligible.',
+    confirmLabel: 'Send cleaning event',
+  })
+  if (!ok) return
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok: boolean; error?: string }>(
+      `/api/properties/${pid.value}/occupancies/${o.id}/cleaning-calendar/include`,
+      { method: 'POST' },
+    )
+    await reloadCurrentOccupancyView()
+    if (!r.ok) {
+      error.value = r.error || 'Cleaning calendar inclusion saved, but calendar reconciliation failed.'
+      return
+    }
+    success.value = 'Cleaning calendar event restored.'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to restore cleaning calendar event'
+  }
+}
+
+async function reloadCurrentOccupancyView() {
+  if (tab.value === 'list') await loadList()
+  else if (tab.value === 'calendar') await loadCalendar()
+}
+
 function openCloseDialog(o: Occ, night = '') {
   dialogTarget.value = o
   dialogTargetNight.value = night
@@ -534,7 +624,7 @@ watch(
             :month="month"
             :status-filter="statusFilter"
             :occupancies="occupancies"
-            :busy="dialogBusy"
+            :busy="dialogBusy || splitDialogBusy || outcomeDialogBusy || cleaningDialogBusy"
             @update:month="month = $event"
             @update:status-filter="statusFilter = $event"
             @prev="prevMonth"
@@ -545,6 +635,8 @@ watch(
             @reopen="reopenStay"
             @mark-outcome="openOutcomeDialog"
             @clear-outcome="clearOutcome"
+            @exclude-cleaning-calendar="openCleaningExcludeDialog"
+            @include-cleaning-calendar="includeCleaningCalendar"
           />
           <OccupancySyncPanel
             v-else
@@ -629,6 +721,31 @@ watch(
         </template>
       </UiDialog>
 
+      <UiDialog v-model:open="cleaningDialogOpen" title="Do not send cleaning event" size="sm">
+        <form class="cleaning-dialog" @submit.prevent="submitCleaningExcludeDialog">
+          <p class="cleaning-dialog__copy">
+            This removes the PMS-created Google Calendar cleaning event for this checkout. The stay will remain a normal occupied guest stay, so occupancy, finance, Nuki access codes, and guest messaging are not changed.
+          </p>
+          <p class="cleaning-dialog__stay">{{ cleaningDialogStayLabel }}</p>
+          <UiInput
+            v-model="cleaningReason"
+            label="Reason (optional)"
+            maxlength="500"
+            :disabled="cleaningDialogBusy"
+            placeholder="Cleaner unavailable; owner will clean"
+          />
+          <p v-if="cleaningDialogError" class="cleaning-dialog__error">{{ cleaningDialogError }}</p>
+        </form>
+        <template #footer>
+          <UiButton variant="ghost" :disabled="cleaningDialogBusy" @click="cleaningDialogOpen = false">
+            Cancel
+          </UiButton>
+          <UiButton variant="primary" :loading="cleaningDialogBusy" @click="submitCleaningExcludeDialog">
+            Do not send cleaning event
+          </UiButton>
+        </template>
+      </UiDialog>
+
       <UiDialog
         v-model:open="dayDialogOpen"
         :title="dayDialogDate ? `Stays on ${dayDialogDate}` : 'Stays'"
@@ -647,8 +764,14 @@ watch(
                   <UiBadge v-if="hasStayOutcome(o)" :tone="stayOutcomeTone(o.stay_outcome)">
                     {{ stayOutcomeLabel(o.stay_outcome) }}
                   </UiBadge>
+                  <UiBadge :tone="hasCleaningCalendarExclusion(o) ? 'warning' : 'success'">
+                    {{ cleaningCalendarStatusLabel(o) }}
+                  </UiBadge>
                   <span v-if="o.closure_state === 'external_sale'" class="day-dialog__amount">
                     {{ formatExternalAmount(o) }}
+                  </span>
+                  <span v-if="o.cleaning_calendar_exclusion_reason" class="day-dialog__amount">
+                    {{ o.cleaning_calendar_exclusion_reason }}
                   </span>
                 </div>
               </div>
@@ -716,6 +839,24 @@ watch(
                 >
                   Clear outcome
                 </UiButton>
+                <UiButton
+                  v-if="canExcludeCleaningCalendar(o)"
+                  size="sm"
+                  variant="ghost"
+                  :disabled="dialogBusy || splitDialogBusy || outcomeDialogBusy || cleaningDialogBusy"
+                  @click="excludeCleaningCalendarFromDay(o)"
+                >
+                  Do not send cleaning event
+                </UiButton>
+                <UiButton
+                  v-else-if="hasCleaningCalendarExclusion(o)"
+                  size="sm"
+                  variant="ghost"
+                  :disabled="dialogBusy || splitDialogBusy || outcomeDialogBusy || cleaningDialogBusy"
+                  @click="includeCleaningCalendarFromDay(o)"
+                >
+                  Mark as cleaned by cleaning lady
+                </UiButton>
               </div>
             </div>
           </li>
@@ -739,16 +880,24 @@ watch(
   flex-direction: column;
   gap: var(--space-3);
 }
+.cleaning-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
 .split-dialog__copy {
   margin: 0;
   color: var(--color-text-muted);
 }
 .outcome-dialog__copy,
-.outcome-dialog__stay {
+.outcome-dialog__stay,
+.cleaning-dialog__copy,
+.cleaning-dialog__stay {
   margin: 0;
   color: var(--color-text-muted);
 }
-.outcome-dialog__stay {
+.outcome-dialog__stay,
+.cleaning-dialog__stay {
   font-weight: 500;
   color: var(--color-text);
 }
@@ -763,6 +912,11 @@ watch(
   font-size: var(--font-size-sm);
 }
 .outcome-dialog__error {
+  margin: 0;
+  color: var(--danger-fg);
+  font-size: var(--font-size-sm);
+}
+.cleaning-dialog__error {
   margin: 0;
   color: var(--danger-fg);
   font-size: var(--font-size-sm);

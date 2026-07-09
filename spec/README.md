@@ -47,6 +47,17 @@ Business and technical specification for a property-scoped finance reset
 that deletes finance records while preserving cleaning lady salary derived
 from flat-entry cleaning logs.
 
+### `PMS_17_Stay_Outcome_Overrides_Spec.md`
+Manual occupancy-level outcome labels for Booking.com stays such as no-show
+and non-refundable cancellation, including cleaning suppression, analytics,
+finance, Nuki, and guest messaging behavior.
+
+### `PMS_18_Cleaning_Event_Exclusion_Spec.md`
+Manual occupancy-level control for selected real guest stays where cleaning
+is handled outside the cleaning lady's Google Calendar. Stays remain normal
+occupied/financial stays, but PMS suppresses or removes the managed cleaning
+event until the owner restores default behavior.
+
 ## Recommended Reading Order
 1. `PMS_00_Implementation_Prompt.md`
 2. `PMS_01_Architecture_and_Global_Spec.md`
@@ -57,8 +68,10 @@ from flat-entry cleaning logs.
 7. `PMS_14_Closed_Nights_BA_Spec.md`
 8. `PMS_15_Google_Calendar_Cleaning_Events_Spec.md`
 9. `PMS_16_Finance_Reset_Preserve_Cleaning_Salary_Spec.md`
-10. `initial_prompt.md`
-11. `Prompt_answers.md`
+10. `PMS_17_Stay_Outcome_Overrides_Spec.md`
+11. `PMS_18_Cleaning_Event_Exclusion_Spec.md`
+12. `initial_prompt.md`
+13. `Prompt_answers.md`
 
 ## External API references
 - **Nuki Smart Lock API** (OpenAPI / Swagger UI): https://api.nuki.io/

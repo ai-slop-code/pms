@@ -69,6 +69,25 @@ export function canMarkStayOutcome(o: Pick<Occupancy, 'source_type' | 'status' |
   )
 }
 
+export function hasCleaningCalendarExclusion(o: Pick<Occupancy, 'cleaning_calendar_excluded'>): boolean {
+  return o.cleaning_calendar_excluded === true
+}
+
+export function canExcludeCleaningCalendar(
+  o: Pick<Occupancy, 'status' | 'closure_state' | 'stay_outcome' | 'cleaning_calendar_excluded'>,
+): boolean {
+  return (
+    (o.status === 'active' || o.status === 'updated') &&
+    o.closure_state !== 'closed' &&
+    !hasStayOutcome(o) &&
+    !hasCleaningCalendarExclusion(o)
+  )
+}
+
+export function cleaningCalendarStatusLabel(o: Pick<Occupancy, 'cleaning_calendar_excluded'>): string {
+  return hasCleaningCalendarExclusion(o) ? 'Cleaning lady: No' : 'Cleaning lady: Yes'
+}
+
 export function formatExternalAmount(o: Occupancy): string {
   if (o.closure_state !== 'external_sale' || o.external_net_amount_cents == null) return ''
   const amount = (o.external_net_amount_cents / 100).toFixed(2)

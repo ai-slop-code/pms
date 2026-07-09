@@ -1,0 +1,5 @@
+DROP INDEX IF EXISTS idx_occupancies_property_cleaning_calendar_excluded;
+ALTER TABLE occupancies DROP COLUMN cleaning_calendar_excluded_at;
+ALTER TABLE occupancies DROP COLUMN cleaning_calendar_excluded_by_user_id;
+ALTER TABLE occupancies DROP COLUMN cleaning_calendar_exclusion_reason;
+ALTER TABLE occupancies DROP COLUMN cleaning_calendar_excluded;

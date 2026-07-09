@@ -3,6 +3,7 @@ package occupancy
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -197,17 +198,21 @@ END:VCALENDAR
 
 func TestSyncProperty_SplitsExpandedBookingUnavailableBlockWithGeneratedGuestCode(t *testing.T) {
 	st := newTestStore(t)
-	payload := `BEGIN:VCALENDAR
+	start := time.Now().UTC().AddDate(0, 2, 0)
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	initialEnd := start.AddDate(0, 0, 1)
+	expandedEnd := start.AddDate(0, 0, 3)
+	payload := fmt.Sprintf(`BEGIN:VCALENDAR
 VERSION:2.0
 BEGIN:VEVENT
 UID:f119449a97461f913129e2bcf11ffaab@booking.com
 DTSTAMP:20260706T131906Z
-DTSTART;VALUE=DATE:20260706
-DTEND;VALUE=DATE:20260707
+DTSTART;VALUE=DATE:%s
+DTEND;VALUE=DATE:%s
 SUMMARY:CLOSED - Not available
 END:VEVENT
 END:VCALENDAR
-`
+`, start.Format("20060102"), initialEnd.Format("20060102"))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(strings.ReplaceAll(payload, "\n", "\r\n")))
 	}))
@@ -231,14 +236,14 @@ END:VCALENDAR
 		OccupancyID:      occ.ID,
 		CodeLabel:        "Booking-Lenka",
 		ExternalNukiID:   sql.NullString{String: "ext-lenka", Valid: true},
-		ValidFrom:        time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
-		ValidUntil:       time.Date(2026, 7, 7, 7, 0, 0, 0, time.UTC),
+		ValidFrom:        start.Add(12 * time.Hour),
+		ValidUntil:       initialEnd.Add(7 * time.Hour),
 		Status:           "generated",
 		AccessCodeMasked: sql.NullString{String: "******", Valid: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	payload = strings.Replace(payload, "DTEND;VALUE=DATE:20260707", "DTEND;VALUE=DATE:20260709", 1)
+	payload = strings.Replace(payload, "DTEND;VALUE=DATE:"+initialEnd.Format("20060102"), "DTEND;VALUE=DATE:"+expandedEnd.Format("20060102"), 1)
 	if err := svc.SyncProperty(ctx, pid, "manual"); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +260,11 @@ END:VCALENDAR
 	if len(active) != 3 {
 		t.Fatalf("active rows=%d want 3", len(active))
 	}
-	wantStarts := []string{"2026-07-06T00:00:00Z", "2026-07-07T00:00:00Z", "2026-07-08T00:00:00Z"}
+	wantStarts := []string{
+		start.Format(time.RFC3339),
+		start.AddDate(0, 0, 1).Format(time.RFC3339),
+		start.AddDate(0, 0, 2).Format(time.RFC3339),
+	}
 	for i, row := range active {
 		if row.SourceEventUID == "f119449a97461f913129e2bcf11ffaab@booking.com" {
 			t.Fatalf("row %d kept unsplit uid", i)
