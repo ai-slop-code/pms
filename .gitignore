@@ -19,6 +19,7 @@ e2e/.playwright/
 backend/.env
 deploy/.env
 pms-booking-*.json
+spec/statement_processing/*.csv
 
 # Editor / OS
 .DS_Store
