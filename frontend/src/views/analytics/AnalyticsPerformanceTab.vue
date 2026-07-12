@@ -329,6 +329,25 @@ function onHeatKeydown(e: KeyboardEvent) {
         </div>
       </div>
 
+      <!-- PMS_19 §10.3.1: availability vs guest occupancy. -->
+      <div class="kpi-grid">
+        <div class="card kpi-card">
+          <div class="kpi-head">Availability occupancy</div>
+          <strong>{{ pct(performance.kpis.availability_occupancy ?? 0) }}</strong>
+          <div class="kpi-prior">{{ performance.kpis.availability_nights ?? 0 }} nights blocked on Booking.com</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-head">Guest occupancy</div>
+          <strong>{{ pct(performance.kpis.guest_occupancy ?? 0) }}</strong>
+          <div class="kpi-prior">{{ performance.kpis.guest_nights ?? 0 }} nights with a real guest</div>
+        </div>
+      </div>
+      <p class="caption-muted occupancy-metric-note">
+        Availability occupancy counts every night Booking.com blocks (unnamed blocks, named stays, and
+        external sales). Guest occupancy counts only nights with a real guest (named stays and external
+        sales). The gap is unclassified Booking blocks and shrinks as you name stays or mark closures.
+      </p>
+
       <h3 class="block-head">Monthly trend (last 24 months)</h3>
       <div class="card">
         <template v-if="monthlyTrendVisible.length >= 2">
@@ -603,6 +622,7 @@ function onHeatKeydown(e: KeyboardEvent) {
   margin-bottom: var(--space-2);
 }
 .muted-block { color: var(--color-text-muted); margin: 0; }
+.occupancy-metric-note { margin-top: var(--space-2); }
 .text-success { color: var(--success-fg); }
 .text-danger { color: var(--danger-fg); }
 .chart-scroll { overflow-x: auto; }

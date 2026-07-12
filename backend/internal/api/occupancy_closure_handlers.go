@@ -42,6 +42,8 @@ type closeOccupancyBody struct {
 	Reason   string `json:"reason"`
 	Category string `json:"category"`
 	Night    string `json:"night"`
+	CheckIn  string `json:"check_in"`
+	CheckOut string `json:"check_out"`
 }
 
 type externalSaleBody struct {
@@ -95,6 +97,8 @@ func (s *Server) postOccupancyClose(w http.ResponseWriter, r *http.Request) {
 	body.Reason = strings.TrimSpace(body.Reason)
 	body.Category = strings.TrimSpace(body.Category)
 	body.Night = strings.TrimSpace(body.Night)
+	body.CheckIn = strings.TrimSpace(body.CheckIn)
+	body.CheckOut = strings.TrimSpace(body.CheckOut)
 	if len(body.Reason) > closureReasonMaxLen {
 		WriteError(w, http.StatusBadRequest, "reason too long")
 		return
@@ -107,7 +111,9 @@ func (s *Server) postOccupancyClose(w http.ResponseWriter, r *http.Request) {
 	}
 	idStr := strconv.FormatInt(occID, 10)
 	s.audit(r, actor, "occupancy_close", "occupancy", idStr, "attempt")
-	if body.Night != "" {
+	if body.CheckIn != "" || body.CheckOut != "" {
+		err = s.Store.CloseOccupancyRange(r.Context(), propID, occID, actor.ID, body.CheckIn, body.CheckOut, body.Reason, body.Category)
+	} else if body.Night != "" {
 		err = s.Store.CloseOccupancyNight(r.Context(), propID, occID, actor.ID, body.Night, body.Reason, body.Category)
 	} else {
 		err = s.Store.CloseOccupancy(r.Context(), propID, occID, actor.ID, body.Reason, body.Category)
@@ -117,6 +123,10 @@ func (s *Server) postOccupancyClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, actor, "occupancy_close", "occupancy", idStr, "success")
+	s.audit(r, actor, "occupancy_block_marked_no_guest", "occupancy", idStr, "success")
+	// PMS_19 §5.3: closing a night must remove its provisional/named cleaning
+	// event immediately, not on the next scheduled sync.
+	s.reconcileCleaningBestEffort(r, propID, "occupancy_close")
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
 }
 
@@ -165,6 +175,9 @@ func (s *Server) postOccupancyExternalSale(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.audit(r, actor, "occupancy_mark_external_sale", "occupancy", idStr, "success")
+	// PMS_19 §5.6: external-sale nights keep cleaning; reconcile so the checkout
+	// event reflects the labelled range immediately.
+	s.reconcileCleaningBestEffort(r, propID, "occupancy_external_sale")
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
 }
 
@@ -217,6 +230,10 @@ func (s *Server) postOccupancyReopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, actor, "occupancy_reopen", "occupancy", idStr, "success")
+	s.audit(r, actor, "occupancy_block_reopened", "occupancy", idStr, "success")
+	// PMS_19 §5.3/§13.12: reopening restores unnamed-block coverage, which must
+	// recreate the provisional cleaning event immediately.
+	s.reconcileCleaningBestEffort(r, propID, "occupancy_reopen")
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
 }
 

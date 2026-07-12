@@ -197,12 +197,13 @@ func TestCloseOccupancyNight_SplitsMultiNightStayAndClosesOnlySelectedNight(t *t
 	for _, row := range rows {
 		statusByUID[row.SourceEventUID] = row
 	}
-	if got := statusByUID["august-block"].Status; got != "deleted_from_source" {
-		t.Fatalf("original status=%s want deleted_from_source", got)
+	// PMS_19 model: the aggregate stays active as the unnamed-block filler; only
+	// the selected night gets a closed representation. No before/after rows.
+	if got := statusByUID["august-block"].Status; got != "active" && got != "updated" {
+		t.Fatalf("aggregate status=%s want active", got)
 	}
-	before := statusByUID["manual_split:august-block:before:20260807"]
-	if before.Status != "active" || before.StartAt.Format(time.RFC3339) != "2026-08-07T00:00:00Z" || before.EndAt.Format(time.RFC3339) != "2026-08-10T00:00:00Z" {
-		t.Fatalf("before row=%+v", before)
+	if _, ok := statusByUID["manual_split:august-block:before:20260807"]; ok {
+		t.Fatal("did not expect a before split row in the new model")
 	}
 	closed := statusByUID["manual_split:august-block:closed:20260810"]
 	if closed.Status != "active" || !closed.ClosureState.Valid || closed.ClosureState.String != ClosureStateClosed {
@@ -210,6 +211,15 @@ func TestCloseOccupancyNight_SplitsMultiNightStayAndClosesOnlySelectedNight(t *t
 	}
 	if closed.StartAt.Format(time.RFC3339) != "2026-08-10T00:00:00Z" || closed.EndAt.Format(time.RFC3339) != "2026-08-11T00:00:00Z" {
 		t.Fatalf("closed window=%s..%s", closed.StartAt, closed.EndAt)
+	}
+	for _, d := range []string{"2026-08-07", "2026-08-08", "2026-08-09", "2026-08-10"} {
+		n, err := st.ActiveOccupancyNightCount(ctx, p.ID, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("night %s active count=%d want 1", d, n)
+		}
 	}
 	hasManual, err := st.HasManualSplitForSourceEventUID(ctx, p.ID, "august-block")
 	if err != nil {
@@ -261,9 +271,6 @@ func TestSplitOccupancyIntoNights_CreatesManualNightRows(t *testing.T) {
 	}
 	activeManual := 0
 	for _, row := range rows {
-		if row.SourceEventUID == "july-merged" && row.Status != "deleted_from_source" {
-			t.Fatalf("original status=%s want deleted_from_source", row.Status)
-		}
 		if strings.HasPrefix(row.SourceEventUID, "manual_split:july-merged:night:") && row.Status == "active" {
 			activeManual++
 			if row.EndAt.Sub(row.StartAt) != 24*time.Hour {
@@ -273,6 +280,17 @@ func TestSplitOccupancyIntoNights_CreatesManualNightRows(t *testing.T) {
 	}
 	if activeManual != 2 {
 		t.Fatalf("active manual nights=%d want 2", activeManual)
+	}
+	// Each night has exactly one active representation (the night row wins over
+	// the aggregate filler).
+	for _, d := range []string{"2026-07-30", "2026-07-31"} {
+		n, err := st.ActiveOccupancyNightCount(ctx, p.ID, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("night %s active count=%d want 1", d, n)
+		}
 	}
 }
 
@@ -319,12 +337,12 @@ func TestSplitOccupancyIntoNightRange_SplitsOnlySelectedNights(t *testing.T) {
 	for _, row := range rows {
 		byUID[row.SourceEventUID] = row
 	}
-	if got := byUID["august-reservation"].Status; got != "deleted_from_source" {
-		t.Fatalf("original status=%s want deleted_from_source", got)
+	// New model: aggregate stays active as filler; no before row is created.
+	if got := byUID["august-reservation"].Status; got != "active" && got != "updated" {
+		t.Fatalf("aggregate status=%s want active", got)
 	}
-	before := byUID["manual_split:august-reservation:before:20260807"]
-	if before.Status != "active" || before.StartAt.Format(time.RFC3339) != "2026-08-07T00:00:00Z" || before.EndAt.Format(time.RFC3339) != "2026-08-10T00:00:00Z" {
-		t.Fatalf("before row=%+v", before)
+	if _, ok := byUID["manual_split:august-reservation:before:20260807"]; ok {
+		t.Fatal("did not expect a before split row in the new model")
 	}
 	night := byUID["manual_split:august-reservation:night:20260810"]
 	if night.Status != "active" || night.StartAt.Format(time.RFC3339) != "2026-08-10T00:00:00Z" || night.EndAt.Format(time.RFC3339) != "2026-08-11T00:00:00Z" {
@@ -333,6 +351,16 @@ func TestSplitOccupancyIntoNightRange_SplitsOnlySelectedNights(t *testing.T) {
 	for uid := range byUID {
 		if strings.HasPrefix(uid, "manual_split:august-reservation:night:") && uid != "manual_split:august-reservation:night:20260810" {
 			t.Fatalf("unexpected split night row %s", uid)
+		}
+	}
+	// The filler covers 8/7-8/9 and the night row covers 8/10, one each.
+	for _, d := range []string{"2026-08-07", "2026-08-08", "2026-08-09", "2026-08-10"} {
+		n, err := st.ActiveOccupancyNightCount(ctx, p.ID, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("night %s active count=%d want 1", d, n)
 		}
 	}
 }

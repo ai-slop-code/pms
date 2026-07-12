@@ -58,6 +58,12 @@ is handled outside the cleaning lady's Google Calendar. Stays remain normal
 occupied/financial stays, but PMS suppresses or removes the managed cleaning
 event until the owner restores default behavior.
 
+### `PMS_19_Booking_ICS_Reconciliation_Spec.md`
+Bulletproof Booking.com ICS reconciliation contract covering upstream event
+identity, generated/manual split rows, source disappearance, duplicate active
+occupancy prevention, repair of existing bad rows, and July 2026 acceptance
+tests.
+
 ## Recommended Reading Order
 1. `PMS_00_Implementation_Prompt.md`
 2. `PMS_01_Architecture_and_Global_Spec.md`
@@ -70,8 +76,9 @@ event until the owner restores default behavior.
 9. `PMS_16_Finance_Reset_Preserve_Cleaning_Salary_Spec.md`
 10. `PMS_17_Stay_Outcome_Overrides_Spec.md`
 11. `PMS_18_Cleaning_Event_Exclusion_Spec.md`
-12. `initial_prompt.md`
-13. `Prompt_answers.md`
+12. `PMS_19_Booking_ICS_Reconciliation_Spec.md`
+13. `initial_prompt.md`
+14. `Prompt_answers.md`
 
 ## External API references
 - **Nuki Smart Lock API** (OpenAPI / Swagger UI): https://api.nuki.io/

@@ -466,3 +466,38 @@ func canonicalStatusForDB(b statements.CanonicalBooking) *string {
 	}
 	return nil
 }
+
+// MoveFinanceMappingTx moves a finance booking link from one occupancy to
+// another (PMS_19 §10.4). Used when a named stay unambiguously replaces the
+// aggregate block that held the finance mapping. No-op if the source has no
+// mapping or the destination already has one.
+func (s *Store) MoveFinanceMappingTx(ctx context.Context, tx *sql.Tx, propertyID, fromOccupancyID, toOccupancyID int64) (bool, error) {
+	if fromOccupancyID <= 0 || toOccupancyID <= 0 || fromOccupancyID == toOccupancyID {
+		return false, nil
+	}
+	var bookingID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT finance_booking_id FROM occupancies WHERE property_id = ? AND id = ?`, propertyID, fromOccupancyID).Scan(&bookingID); err != nil {
+		return false, err
+	}
+	if !bookingID.Valid {
+		return false, nil
+	}
+	var destBooking sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT finance_booking_id FROM occupancies WHERE property_id = ? AND id = ?`, propertyID, toOccupancyID).Scan(&destBooking); err != nil {
+		return false, err
+	}
+	if destBooking.Valid {
+		return false, nil // destination already mapped; leave both as-is
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := tx.ExecContext(ctx, `UPDATE finance_bookings SET occupancy_id = ?, updated_at = ? WHERE property_id = ? AND id = ?`, toOccupancyID, now, propertyID, bookingID.Int64); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE occupancies SET finance_booking_id = ?, last_synced_at = ? WHERE id = ?`, bookingID.Int64, now, toOccupancyID); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE occupancies SET finance_booking_id = NULL, last_synced_at = ? WHERE id = ?`, now, fromOccupancyID); err != nil {
+		return false, err
+	}
+	return true, nil
+}

@@ -45,6 +45,9 @@ type ReconcileStats struct {
 	EventsSeen     int `json:"events_seen"`
 	EventsUpserted int `json:"events_upserted"`
 	EventsRemoved  int `json:"events_removed"`
+	// PMS_19 §12 observability: provisional (unnamed-block) checkout counts.
+	ProvisionalCreated int `json:"provisional_cleaning_events_created"`
+	ProvisionalRemoved int `json:"provisional_cleaning_events_removed"`
 }
 
 func (s *Service) ReconcileProperty(ctx context.Context, propertyID int64, trigger string) (*ReconcileStats, error) {
@@ -95,32 +98,55 @@ func (s *Service) ReconcileProperty(ctx context.Context, propertyID int64, trigg
 	}
 	windowStart := now.AddDate(0, 0, -reconcilePastWindowDays)
 	windowEnd := now.AddDate(0, 0, reconcileFutureWindowDays)
-	candidates, err := s.Store.ListCleaningCalendarCheckoutCandidates(ctx, propertyID, windowStart, windowEnd)
+	fromDate := windowStart.In(loc).Format("2006-01-02")
+	toDate := windowEnd.In(loc).Format("2006-01-02")
+	candidates, err := s.Store.ListCleaningEligibleOccupancies(ctx, propertyID, windowStart, windowEnd)
 	if err != nil {
 		return finish(err)
 	}
-	eligible := make(map[int64]struct{}, len(candidates))
+	hasCoverage, err := s.Store.PropertyHasOccupancyNights(ctx, propertyID)
+	if err != nil {
+		return finish(err)
+	}
+	// PMS_19 §5.4: expand each eligible occupancy into checkout targets. Unnamed
+	// blocks produce one provisional checkout per blocked night; named stays and
+	// external sales produce a single checkout at the stay end. Every event is
+	// idempotent on its identity key.
+	desired := make(map[string]struct{})
 	for _, occ := range candidates {
-		stats.EventsSeen++
-		eligible[occ.ID] = struct{}{}
-		event, err := s.buildEvent(ctx, settings, profile, prop.Timezone, loc, occ)
-		if err != nil {
-			msg := err.Error()
-			runErr = &msg
-			_ = s.Store.InsertCleaningCalendarEventLog(ctx, propertyID, nil, &runID, "build_error", msg)
+		if !occ.UpstreamEventUID.Valid || strings.TrimSpace(occ.UpstreamEventUID.String) == "" {
 			continue
 		}
-		if existing, err := s.Store.GetCleaningCalendarEventByOccupancy(ctx, propertyID, occ.ID); err == nil {
-			preserveExistingWindowForSameDayOnlyChange(existing, event)
-		}
-		saved, err := s.Store.UpsertCleaningCalendarEvent(ctx, event)
-		if err != nil {
-			return finish(err)
-		}
-		stats.EventsUpserted++
-		if err := s.syncUpsert(ctx, saved, prop.Timezone, runID); err != nil {
-			msg := err.Error()
-			runErr = &msg
+		dates, kind := s.Store.CleaningCheckoutDatesForOccupancy(ctx, &occ, hasCoverage)
+		for _, d := range dates {
+			if d < fromDate || d >= toDate {
+				continue
+			}
+			stats.EventsSeen++
+			key := cleaningIdentityKey(occ.UpstreamEventUID.String, d, kind)
+			desired[key] = struct{}{}
+			event, err := s.buildEvent(ctx, settings, profile, prop.Timezone, loc, occ, d, kind)
+			if err != nil {
+				msg := err.Error()
+				runErr = &msg
+				_ = s.Store.InsertCleaningCalendarEventLog(ctx, propertyID, nil, &runID, "build_error", msg)
+				continue
+			}
+			if existing, err := s.Store.GetCleaningCalendarEventByIdentity(ctx, propertyID, occ.UpstreamEventUID.String, d, kind); err == nil {
+				preserveExistingWindowForSameDayOnlyChange(existing, event)
+			}
+			saved, err := s.Store.UpsertCleaningCalendarEventByIdentity(ctx, event)
+			if err != nil {
+				return finish(err)
+			}
+			stats.EventsUpserted++
+			if kind == store.CleaningKindProvisionalBlock {
+				stats.ProvisionalCreated++
+			}
+			if err := s.syncUpsert(ctx, saved, prop.Timezone, runID); err != nil {
+				msg := err.Error()
+				runErr = &msg
+			}
 		}
 	}
 	active, err := s.Store.ListActiveCleaningCalendarEvents(ctx, propertyID)
@@ -128,8 +154,14 @@ func (s *Service) ReconcileProperty(ctx context.Context, propertyID int64, trigg
 		return finish(err)
 	}
 	for _, ev := range active {
-		if _, ok := eligible[ev.OccupancyID]; ok {
-			continue
+		// An event survives only if its identity key is still desired. Legacy
+		// events without an identity (null upstream/checkout) are never desired,
+		// so they are cleaned up on the first reconcile.
+		key := cleaningIdentityKey(ev.UpstreamEventUID.String, ev.CheckoutDate.String, ev.CleaningKind)
+		if ev.UpstreamEventUID.Valid && ev.CheckoutDate.Valid {
+			if _, ok := desired[key]; ok {
+				continue
+			}
 		}
 		removalReason := s.removalReason(ctx, propertyID, ev.OccupancyID)
 		if err := s.syncDelete(ctx, &ev, runID, removalReason); err != nil {
@@ -138,8 +170,15 @@ func (s *Service) ReconcileProperty(ctx context.Context, propertyID int64, trigg
 			continue
 		}
 		stats.EventsRemoved++
+		if ev.CleaningKind == store.CleaningKindProvisionalBlock {
+			stats.ProvisionalRemoved++
+		}
 	}
 	return finish(nil)
+}
+
+func cleaningIdentityKey(upstreamUID, checkoutDate, kind string) string {
+	return upstreamUID + "\x00" + checkoutDate + "\x00" + kind
 }
 
 func preserveExistingWindowForSameDayOnlyChange(existing *store.CleaningCalendarEvent, next *store.CleaningCalendarEvent) {
@@ -171,9 +210,12 @@ func (s *Service) RetryEvent(ctx context.Context, propertyID, eventID int64) err
 	return s.syncUpsert(ctx, event, prop.Timezone, 0)
 }
 
-func (s *Service) buildEvent(ctx context.Context, settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, occ store.Occupancy) (*store.CleaningCalendarEvent, error) {
-	checkoutDay := occ.EndAt.In(loc)
-	dayStart := time.Date(checkoutDay.Year(), checkoutDay.Month(), checkoutDay.Day(), 0, 0, 0, 0, loc)
+func (s *Service) buildEvent(ctx context.Context, settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, occ store.Occupancy, checkoutDate, kind string) (*store.CleaningCalendarEvent, error) {
+	cd, err := time.ParseInLocation("2006-01-02", checkoutDate, loc)
+	if err != nil {
+		return nil, err
+	}
+	dayStart := time.Date(cd.Year(), cd.Month(), cd.Day(), 0, 0, 0, 0, loc)
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	next, err := s.Store.FindCleaningCalendarSameDayArrival(ctx, occ.PropertyID, occ.ID, dayStart.UTC(), dayEnd.UTC())
 	if err != nil {
@@ -181,14 +223,14 @@ func (s *Service) buildEvent(ctx context.Context, settings *store.GoogleCleaning
 	}
 	outH, outM := parseHM(profile.DefaultCheckOutTime, 10, 0)
 	inH, inM := parseHM(profile.DefaultCheckInTime, 14, 0)
-	starts := time.Date(checkoutDay.Year(), checkoutDay.Month(), checkoutDay.Day(), outH, outM, 0, 0, loc)
+	starts := time.Date(cd.Year(), cd.Month(), cd.Day(), outH, outM, 0, 0, loc)
 	ends := starts.Add(time.Duration(settings.DefaultDurationMinutes) * time.Minute)
 	sameDay := next != nil
 	var nextID sql.NullInt64
 	var warning sql.NullString
 	if sameDay {
 		nextID = sql.NullInt64{Int64: next.ID, Valid: true}
-		ends = time.Date(checkoutDay.Year(), checkoutDay.Month(), checkoutDay.Day(), inH, inM, 0, 0, loc).Add(-time.Hour)
+		ends = time.Date(cd.Year(), cd.Month(), cd.Day(), inH, inM, 0, 0, loc).Add(-time.Hour)
 		if !ends.After(starts) {
 			ends = starts.Add(minimalConflictDuration)
 			warning = sql.NullString{String: "same-day check-in leaves less than one hour after checkout", Valid: true}
@@ -198,6 +240,9 @@ func (s *Service) buildEvent(ctx context.Context, settings *store.GoogleCleaning
 	return &store.CleaningCalendarEvent{
 		PropertyID:       occ.PropertyID,
 		OccupancyID:      occ.ID,
+		UpstreamEventUID: occ.UpstreamEventUID,
+		CheckoutDate:     sql.NullString{String: checkoutDate, Valid: true},
+		CleaningKind:     kind,
 		GoogleCalendarID: strings.TrimSpace(settings.CalendarID.String),
 		CleaningDate:     dayStart.Format("2006-01-02"),
 		StartsAt:         starts.UTC(),
@@ -238,7 +283,12 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 	if err := s.Store.UpdateCleaningCalendarEventGoogleResult(ctx, event.PropertyID, event.ID, googleID, store.CleaningCalendarStatusSynced, nil); err != nil {
 		return err
 	}
-	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, "upsert", "synced")
+	action := "upsert"
+	if event.CleaningKind == store.CleaningKindProvisionalBlock {
+		action = "cleaning_provisional_created" // PMS_19 §11B
+		_ = s.Store.InsertAuditLog(ctx, nil, action, "cleaning_calendar_event", fmt.Sprintf("%d", event.ID), "synced", "system", "cleaning_sync")
+	}
+	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, action, "synced")
 	return nil
 }
 
@@ -264,7 +314,12 @@ func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarE
 	if removalReason != nil && strings.TrimSpace(*removalReason) != "" {
 		message = strings.TrimSpace(*removalReason)
 	}
-	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, "delete", message)
+	action := "delete"
+	if event.CleaningKind == store.CleaningKindProvisionalBlock {
+		action = "cleaning_provisional_removed" // PMS_19 §11B
+		_ = s.Store.InsertAuditLog(ctx, nil, action, "cleaning_calendar_event", fmt.Sprintf("%d", event.ID), message, "system", "cleaning_sync")
+	}
+	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, action, message)
 	return nil
 }
 

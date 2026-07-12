@@ -10,7 +10,9 @@ export interface Occupancy {
   end_at: string
   status: string
   raw_summary: string
+  guest_display_name?: string
   last_synced_at: string
+  last_sync_run_id?: number
   has_payout_data?: boolean
   // Closure / external-sale labelling (PMS_14). Absent when the row has
   // no manual label.
@@ -30,6 +32,12 @@ export interface Occupancy {
   cleaning_calendar_exclusion_reason?: string | null
   cleaning_calendar_excluded_at?: string | null
   cleaning_calendar_excluded_by_user_id?: number | null
+  // PMS_19 durable upstream identity + night-level truth.
+  upstream_source_type?: string | null
+  upstream_event_uid?: string | null
+  representation_kind?: string | null
+  covered_nights?: string[]
+  superseded?: boolean
 }
 
 /** Lightweight occupancy shape used by MessagesView's generate picker. */
@@ -52,6 +60,10 @@ export interface OccupancySyncRun {
   occupancies_upserted: number
   http_status?: number
   trigger: string
+  deletion_enabled?: boolean
+  representations_deleted_from_source?: number
+  duplicate_nights_resolved?: number
+  named_stays_deleted_from_source?: number
 }
 
 export interface OccupancyApiToken {
@@ -59,4 +71,29 @@ export interface OccupancyApiToken {
   label?: string
   created_at: string
   last_used_at?: string
+}
+
+export interface OccupancyRepairReport {
+  property_id: number
+  dry_run: boolean
+  nights_resolved: number
+  duplicates_resolved: number
+  rows_deleted_from_source?: number
+  resolutions?: Array<{
+    local_night: string
+    winner_occupancy_id: number
+    winner_upstream_uid?: string
+    winner_kind?: string
+    loser_occupancy_ids: number[]
+    reason: string
+  }>
+  row_actions?: Array<{
+    occupancy_id: number
+    upstream_uid: string
+    action: string
+    reason: string
+    guest_name?: string
+    revoke_nuki: boolean
+    remove_cleaning: boolean
+  }>
 }

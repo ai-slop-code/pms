@@ -38,8 +38,8 @@ func TestReconcilePropertyCreatesSameDayCleaningEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkout := occupancy(propertyID, "checkout", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
-	arrival := occupancy(propertyID, "arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), "active")
+	checkout := occupancy(propertyID, "checkout", time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	arrival := occupancy(propertyID, "arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC), "active")
 	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestReconcilePropertyLateSameDayArrivalUpdatesOnlyTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkout := occupancy(propertyID, "checkout", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	checkout := occupancy(propertyID, "checkout", time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
 	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestReconcilePropertyLateSameDayArrivalUpdatesOnlyTitle(t *testing.T) {
 	if before.Title != "Upratovanie: Bez Hosta" {
 		t.Fatalf("initial title=%q", before.Title)
 	}
-	arrival := occupancy(propertyID, "arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), "active")
+	arrival := occupancy(propertyID, "arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC), "active")
 	if err := st.UpsertOccupancy(ctx, arrival, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestReconcilePropertyIncludesExternalSale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkout := occupancy(propertyID, "external", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	checkout := occupancy(propertyID, "external", time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
 	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestReconcilePropertyRemovesStayOutcomeCleaningEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkout := occupancy(propertyID, "no-show", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	checkout := occupancy(propertyID, "no-show", time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
 	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestReconcilePropertyRemovesAndRecreatesManualCleaningExclusion(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkout := occupancy(propertyID, "manual-exclusion", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	checkout := occupancy(propertyID, "manual-exclusion", time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
 	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -253,8 +253,8 @@ func TestReconcilePropertyManualExcludedArrivalStillCountsAsSameDay(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkout := occupancy(propertyID, "checkout-before-excluded", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
-	arrival := occupancy(propertyID, "excluded-arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), "active")
+	checkout := occupancy(propertyID, "checkout-before-excluded", time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	arrival := occupancy(propertyID, "excluded-arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC), "active")
 	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -295,8 +295,8 @@ func TestReconcilePropertySameDayArrivalIgnoresStayOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkout := occupancy(propertyID, "checkout", time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
-	arrival := occupancy(propertyID, "arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), "active")
+	checkout := occupancy(propertyID, "checkout", time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), "active")
+	arrival := occupancy(propertyID, "arrival", time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC), "active")
 	if err := st.UpsertOccupancy(ctx, checkout, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -349,6 +349,161 @@ func setupCleaningCalendarProperty(t *testing.T, ctx context.Context) (*store.St
 		t.Fatal(err)
 	}
 	return st, property.ID
+}
+
+// PMS_19 §13.11: an unnamed Booking block creates one provisional cleaning
+// checkout per blocked night; naming the whole range collapses them to a single
+// checkout; a disappeared UID removes all future provisional events.
+func TestReconcileProvisionalPerNightAndCollapseOnNaming(t *testing.T) {
+	ctx := context.Background()
+	st, propertyID := setupCleaningCalendarProperty(t, ctx)
+	uid := "prov-block@booking.com"
+	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	block := store.DesiredBlock{UID: uid, Start: time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), Summary: "CLOSED - Not available", ContentHash: "h1"}
+	if err := st.ReconcileBookingICSSync(ctx, propertyID, "booking_ics", []store.DesiredBlock{block}, now, &store.SyncCounters{}); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeCalendarClient{configured: true}
+	svc := &Service{Store: st, Client: client, Now: func() time.Time { return now }}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	events := activeCleaningDates(t, st, propertyID)
+	if len(events) != 3 || !events["2026-07-10"] || !events["2026-07-11"] || !events["2026-07-12"] {
+		t.Fatalf("provisional checkouts=%v want 10,11,12", events)
+	}
+
+	// Name the whole 3-night range as one stay → collapse to a single checkout.
+	if _, err := st.CreateNamedStay(ctx, propertyID, uid, "2026-07-09", "2026-07-12", "Whole Stay", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	events = activeCleaningDates(t, st, propertyID)
+	if len(events) != 1 || !events["2026-07-12"] {
+		t.Fatalf("after naming, checkouts=%v want only 07-12", events)
+	}
+
+	// UID disappears → all future cleaning events removed.
+	if err := st.ReconcileBookingICSSync(ctx, propertyID, "booking_ics", []store.DesiredBlock{}, now, &store.SyncCounters{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	events = activeCleaningDates(t, st, propertyID)
+	if len(events) != 0 {
+		t.Fatalf("after disappearance, checkouts=%v want none", events)
+	}
+}
+
+// PMS_19 §13.12: marking an unnamed blocked night closed / no guest removes the
+// provisional cleaning event and drops the night out of guest occupancy while
+// still counting it as availability-blocked... until it is closed.
+func TestReconcile_NoGuestClosureRemovesCleaningAndGuestOccupancy(t *testing.T) {
+	ctx := context.Background()
+	st, propertyID := setupCleaningCalendarProperty(t, ctx)
+	uid := "closure-block@booking.com"
+	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	blk := store.DesiredBlock{UID: uid, Start: time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC), Summary: "CLOSED - Not available", ContentHash: "h"}
+	if err := st.ReconcileBookingICSSync(ctx, propertyID, "booking_ics", []store.DesiredBlock{blk}, now, &store.SyncCounters{}); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeCalendarClient{configured: true}
+	svc := &Service{Store: st, Client: client, Now: func() time.Time { return now }}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := activeCleaningDates(t, st, propertyID); len(got) != 1 || !got["2026-07-16"] {
+		t.Fatalf("provisional cleaning=%v want 07-16", got)
+	}
+	avail, guest, err := st.OccupancyMetricNights(ctx, propertyID, "2026-07-15", "2026-07-16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if avail != 1 || guest != 0 {
+		t.Fatalf("before closure avail=%d guest=%d want 1/0", avail, guest)
+	}
+	row, err := st.GetOccupancyBySourceEventUID(ctx, propertyID, uid)
+	if err != nil || row == nil {
+		t.Fatalf("get occupancy: %v", err)
+	}
+	if err := st.CloseOccupancy(ctx, propertyID, row.ID, 1, "owner use", "owner_stay"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := activeCleaningDates(t, st, propertyID); len(got) != 0 {
+		t.Fatalf("after closure cleaning=%v want none", got)
+	}
+	avail, guest, err = st.OccupancyMetricNights(ctx, propertyID, "2026-07-15", "2026-07-16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if avail != 0 || guest != 0 {
+		t.Fatalf("after closure avail=%d guest=%d want 0/0 (closed excluded)", avail, guest)
+	}
+
+	// PMS_19 §13.12 (second paragraph): reopening restores unnamed-block
+	// coverage and recreates the provisional cleaning event.
+	if err := st.ReopenOccupancy(ctx, propertyID, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := activeCleaningDates(t, st, propertyID); len(got) != 1 || !got["2026-07-16"] {
+		t.Fatalf("after reopen cleaning=%v want 07-16 restored", got)
+	}
+	avail, guest, err = st.OccupancyMetricNights(ctx, propertyID, "2026-07-15", "2026-07-16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if avail != 1 || guest != 0 {
+		t.Fatalf("after reopen avail=%d guest=%d want 1/0", avail, guest)
+	}
+}
+
+// PMS_19 §13.14: syncing the same feed twice must not create duplicate cleaning
+// events; each identity key maps to exactly one event.
+func TestReconcile_CleaningIdempotency(t *testing.T) {
+	ctx := context.Background()
+	st, propertyID := setupCleaningCalendarProperty(t, ctx)
+	uid := "idem-block@booking.com"
+	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	blk := store.DesiredBlock{UID: uid, Start: time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC), Summary: "CLOSED - Not available", ContentHash: "h"}
+	client := &fakeCalendarClient{configured: true}
+	svc := &Service{Store: st, Client: client, Now: func() time.Time { return now }}
+	for i := 0; i < 2; i++ {
+		if err := st.ReconcileBookingICSSync(ctx, propertyID, "booking_ics", []store.DesiredBlock{blk}, now, &store.SyncCounters{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.ReconcileProperty(ctx, propertyID, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := st.ListActiveCleaningCalendarEvents(ctx, propertyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("cleaning events=%d want 3 (no duplicates)", len(all))
+	}
+}
+
+func activeCleaningDates(t *testing.T, st *store.Store, propertyID int64) map[string]bool {
+	t.Helper()
+	all, err := st.ListActiveCleaningCalendarEvents(context.Background(), propertyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, e := range all {
+		out[e.CleaningDate] = true
+	}
+	return out
 }
 
 func occupancy(propertyID int64, uid string, start, end time.Time, status string) *store.Occupancy {

@@ -87,4 +87,7 @@ export interface CleaningCalendarReconcileStats {
   events_seen: number
   events_upserted: number
   events_removed: number
+  // PMS_19 §12: provisional (unnamed-block) checkout counts.
+  provisional_cleaning_events_created?: number
+  provisional_cleaning_events_removed?: number
 }

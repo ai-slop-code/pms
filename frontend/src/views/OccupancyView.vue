@@ -36,6 +36,7 @@ import type {
   Occupancy as Occ,
   OccupancySyncRun as Run,
   OccupancyApiToken as TokenRow,
+  OccupancyRepairReport,
 } from '@/api/types/occupancy'
 
 const { pid } = useCurrentProperty()
@@ -57,6 +58,8 @@ const source = ref<{ active: boolean; source_type: string } | null>(null)
 const newTokenPlain = ref('')
 const syncing = ref(false)
 const copiedExport = ref('')
+const repairBusy = ref(false)
+const repairReport = ref<OccupancyRepairReport | null>(null)
 
 // PMS_14 manual labelling state.
 const dialogOpen = ref(false)
@@ -65,6 +68,10 @@ const dialogBusy = ref(false)
 const dialogError = ref('')
 const dialogTarget = ref<Occ | null>(null)
 const dialogTargetNight = ref('')
+const dialogCheckIn = ref('')
+const dialogCheckOut = ref('')
+const dialogMinDate = ref('')
+const dialogMaxDate = ref('')
 const splitDialogOpen = ref(false)
 const splitDialogBusy = ref(false)
 const splitDialogError = ref('')
@@ -82,6 +89,139 @@ const cleaningDialogBusy = ref(false)
 const cleaningDialogError = ref('')
 const cleaningDialogTarget = ref<Occ | null>(null)
 const cleaningReason = ref('')
+// PMS_19 named-stay flow.
+const nameStayDialogOpen = ref(false)
+const nameStayBusy = ref(false)
+const nameStayError = ref('')
+const nameStayTarget = ref<Occ | null>(null)
+const nameStayMode = ref<'create' | 'edit'>('create')
+const nameStayCheckIn = ref('')
+const nameStayCheckOut = ref('')
+const nameStayGuest = ref('')
+const nameStayLabel = computed(() => {
+  const o = nameStayTarget.value
+  if (!o) return ''
+  return `${o.start_at.slice(0, 10)} → ${o.end_at.slice(0, 10)} • Booking block`
+})
+const nameStayDialogTitle = computed(() =>
+  nameStayMode.value === 'edit' ? 'Edit named stay' : 'Name stay / create guest stay',
+)
+const nameStaySubmitLabel = computed(() =>
+  nameStayMode.value === 'edit' ? 'Save named stay' : 'Create named stay',
+)
+// §5.1 step 5: the selectable range is limited to the latest Booking.com block.
+const nameStayBlock = computed(() => {
+  const target = nameStayTarget.value
+  if (!target?.upstream_event_uid) return target
+  return occupancies.value.find((o) => o.source_event_uid === target.upstream_event_uid) || target
+})
+const nameStayBlockStart = computed(() => nameStayBlock.value?.start_at.slice(0, 10) ?? '')
+const nameStayBlockEnd = computed(() => nameStayBlock.value?.end_at.slice(0, 10) ?? '')
+const nameStayCheckInMax = computed(() =>
+  nameStayBlockEnd.value ? addISODate(nameStayBlockEnd.value, -1) : '',
+)
+function canNameStay(o: Occ) {
+  return (
+    !isLabelled(o) &&
+    !hasStayOutcome(o) &&
+    !o.superseded &&
+    (o.representation_kind === 'unnamed_block' || o.representation_kind === 'legacy_generated_night') &&
+    !!o.upstream_event_uid
+  )
+}
+function isProvisionalBlock(o: Occ) {
+  return o.representation_kind === 'unnamed_block' || o.representation_kind === 'legacy_generated_night'
+}
+function canEditNamedStay(o: Occ) {
+  return !o.superseded && o.representation_kind === 'named_stay' && o.status !== 'deleted_from_source' && o.status !== 'cancelled'
+}
+function openNameStayDialog(o: Occ, night = '') {
+  nameStayMode.value = 'create'
+  nameStayTarget.value = o
+  const clicked = night || o.start_at.slice(0, 10)
+  nameStayCheckIn.value = clicked
+  nameStayCheckOut.value = addISODate(clicked, 1)
+  nameStayGuest.value = ''
+  nameStayError.value = ''
+  nameStayDialogOpen.value = true
+}
+function openEditNameStayDialog(o: Occ) {
+  dayDialogOpen.value = false
+  nameStayMode.value = 'edit'
+  nameStayTarget.value = o
+  nameStayCheckIn.value = o.start_at.slice(0, 10)
+  nameStayCheckOut.value = o.end_at.slice(0, 10)
+  nameStayGuest.value = o.guest_display_name || o.raw_summary || ''
+  nameStayError.value = ''
+  nameStayDialogOpen.value = true
+}
+function nameStayFromDay(o: Occ) {
+  dayDialogOpen.value = false
+  openNameStayDialog(o, dayDialogDate.value)
+}
+async function submitNameStayDialog() {
+  if (!pid.value || !nameStayTarget.value) return
+  const uid = nameStayTarget.value.upstream_event_uid
+  if (!uid) {
+    nameStayError.value = 'This block has no upstream identity to attach a stay to.'
+    return
+  }
+  const guest = nameStayGuest.value.trim()
+  if (!guest) {
+    nameStayError.value = 'Enter a guest / stay name.'
+    return
+  }
+  if (!isISODate(nameStayCheckIn.value) || !isISODate(nameStayCheckOut.value) || nameStayCheckOut.value <= nameStayCheckIn.value) {
+    nameStayError.value = 'Choose a valid check-in and later check-out.'
+    return
+  }
+  if (nameStayCheckIn.value < nameStayBlockStart.value || nameStayCheckOut.value > nameStayBlockEnd.value) {
+    nameStayError.value = `Stay must stay within the Booking.com block ${nameStayBlockStart.value} → ${nameStayBlockEnd.value}.`
+    return
+  }
+  nameStayBusy.value = true
+  nameStayError.value = ''
+  error.value = ''
+  success.value = ''
+  try {
+    const path =
+      nameStayMode.value === 'edit'
+        ? `/api/properties/${pid.value}/occupancies/${nameStayTarget.value.id}/named-stay`
+        : `/api/properties/${pid.value}/occupancy-blocks/${encodeURIComponent(uid)}/named-stays`
+    const r = await api<{ ok: boolean; error?: string }>(path, {
+      method: nameStayMode.value === 'edit' ? 'PATCH' : 'POST',
+      json: { check_in: nameStayCheckIn.value, check_out: nameStayCheckOut.value, guest_display_name: guest },
+    })
+    if (!r.ok) throw new Error(r.error || 'Failed to save named stay')
+    nameStayDialogOpen.value = false
+    success.value = nameStayMode.value === 'edit' ? `Named stay “${guest}” updated.` : `Named stay “${guest}” created.`
+    await reloadCurrentOccupancyView()
+  } catch (e) {
+    nameStayError.value = e instanceof Error ? e.message : 'Failed to save named stay'
+  } finally {
+    nameStayBusy.value = false
+  }
+}
+async function deleteNamedStay(o: Occ) {
+  if (!pid.value) return
+  dayDialogOpen.value = false
+  const ok = await confirm({
+    title: 'Delete named stay',
+    message: 'Remove this named guest stay and return its source-covered nights to unnamed Booking block coverage?',
+    confirmLabel: 'Delete named stay',
+  })
+  if (!ok) return
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/occupancies/${o.id}/named-stay`, { method: 'DELETE' })
+    if (!r.ok) throw new Error(r.error || 'Failed to delete named stay')
+    success.value = 'Named stay deleted.'
+    await reloadCurrentOccupancyView()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to delete named stay'
+  }
+}
 const dialogStayLabel = computed(() => {
   const o = dialogTarget.value
   if (!o) return ''
@@ -127,6 +267,22 @@ function onCalendarCellClick(payload: { dateKey: string; stays: Occ[] }) {
 
 function stayLabel(o: Occ) {
   return `${o.start_at?.slice(0, 10)} → ${o.end_at?.slice(0, 10)} · ${o.raw_summary || o.source_event_uid || 'Stay'}`
+}
+
+function isManualSplit(o: Occ) {
+  return o.source_type === 'manual' || o.source_event_uid?.startsWith('manual_split:') || false
+}
+
+function metadataRows(o: Occ) {
+  return [
+    ['Source type', o.source_type || '—'],
+    ['Upstream source', o.upstream_source_type || '—'],
+    ['Upstream UID', o.upstream_event_uid || '—'],
+    ['Representation', o.representation_kind || '—'],
+    ['Status', o.status || '—'],
+    ['Last sync run', o.last_sync_run_id ? String(o.last_sync_run_id) : '—'],
+    ['Manual split', isManualSplit(o) ? 'Yes' : 'No'],
+  ]
 }
 
 function stayNights(o: Occ) {
@@ -306,6 +462,13 @@ async function reloadCurrentOccupancyView() {
 function openCloseDialog(o: Occ, night = '') {
   dialogTarget.value = o
   dialogTargetNight.value = night
+  const start = o.start_at.slice(0, 10)
+  const end = o.end_at.slice(0, 10)
+  const clicked = night || start
+  dialogCheckIn.value = clicked
+  dialogCheckOut.value = night ? addISODate(clicked, 1) : end
+  dialogMinDate.value = start
+  dialogMaxDate.value = end
   dialogMode.value = 'close'
   dialogError.value = ''
   dialogOpen.value = true
@@ -314,6 +477,10 @@ function openCloseDialog(o: Occ, night = '') {
 function openExternalSaleDialog(o: Occ) {
   dialogTarget.value = o
   dialogTargetNight.value = ''
+  dialogCheckIn.value = ''
+  dialogCheckOut.value = ''
+  dialogMinDate.value = ''
+  dialogMaxDate.value = ''
   dialogMode.value = 'external_sale'
   dialogError.value = ''
   dialogOpen.value = true
@@ -330,8 +497,8 @@ async function submitDialog(payload: ClosureSubmit) {
   dialogError.value = ''
   try {
     const json =
-      dialogMode.value === 'close' && dialogTargetNight.value
-        ? { ...payload, night: dialogTargetNight.value }
+      dialogMode.value === 'close'
+        ? { ...payload, check_in: dialogCheckIn.value, check_out: dialogCheckOut.value }
         : payload
     await api(path, { method: 'POST', json })
     dialogOpen.value = false
@@ -458,7 +625,9 @@ async function loadList() {
   try {
     let q = `/api/properties/${pid.value}/occupancies?limit=200`
     if (month.value) q += `&month=${encodeURIComponent(month.value)}`
-    if (statusFilter.value) q += `&status=${encodeURIComponent(statusFilter.value)}`
+    // 'superseded' is a client-side (audit) view, not a DB status, so we fetch
+    // all rows and let the list component filter (PMS_19 §8).
+    if (statusFilter.value && statusFilter.value !== 'superseded') q += `&status=${encodeURIComponent(statusFilter.value)}`
     const r = await api<{ occupancies: Occ[] }>(q)
     occupancies.value = r.occupancies
   } catch (e) {
@@ -503,6 +672,51 @@ async function runManualSync() {
     error.value = e instanceof Error ? e.message : 'Failed to run occupancy sync'
   } finally {
     syncing.value = false
+  }
+}
+
+async function dryRunRepair() {
+  if (!pid.value) return
+  repairBusy.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    repairReport.value = await api<OccupancyRepairReport>(
+      `/api/properties/${pid.value}/occupancy-repair/ics-reconciliation/dry-run`,
+      { method: 'POST' },
+    )
+    success.value = 'Repair dry-run completed.'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Repair dry-run failed'
+  } finally {
+    repairBusy.value = false
+  }
+}
+
+async function applyRepair() {
+  if (!pid.value) return
+  const ok = await confirm({
+    title: 'Apply ICS repair',
+    message: 'Apply the dry-run repair plan now? This never hard-deletes occupancy rows, but it may supersede duplicates and mark disappeared rows deleted from source.',
+    confirmLabel: 'Apply repair',
+  })
+  if (!ok) return
+  repairBusy.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    repairReport.value = await api<OccupancyRepairReport>(
+      `/api/properties/${pid.value}/occupancy-repair/ics-reconciliation/apply`,
+      { method: 'POST' },
+    )
+    success.value = 'ICS repair applied.'
+    await loadSyncPanel()
+    if (tab.value === 'calendar') await loadCalendar()
+    if (tab.value === 'list') await loadList()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Repair apply failed'
+  } finally {
+    repairBusy.value = false
   }
 }
 
@@ -644,10 +858,14 @@ watch(
             :runs="runs"
             :tokens="tokens"
             :syncing="syncing"
+            :repair-busy="repairBusy"
+            :repair-report="repairReport"
             :new-token-plain="newTokenPlain"
             :copied-export="copiedExport"
             @toggle-source="toggleSourceActive"
             @run-sync="runManualSync"
+            @repair-dry-run="dryRunRepair"
+            @repair-apply="applyRepair"
             @create-token="createToken"
             @remove-token="removeToken"
             @copy-curl="copyExportCurl"
@@ -659,6 +877,10 @@ watch(
         v-model:open="dialogOpen"
         :mode="dialogMode"
         :stay-label="dialogStayLabel"
+        :check-in="dialogCheckIn"
+        :check-out="dialogCheckOut"
+        :min-date="dialogMinDate"
+        :max-date="dialogMaxDate"
         :busy="dialogBusy"
         :error-message="dialogError"
         @submit="submitDialog"
@@ -746,6 +968,31 @@ watch(
         </template>
       </UiDialog>
 
+      <UiDialog v-model:open="nameStayDialogOpen" :title="nameStayDialogTitle" size="sm">
+        <form class="split-dialog" @submit.prevent="submitNameStayDialog">
+          <p class="split-dialog__copy">
+            {{ nameStayMode === 'edit' ? 'Update' : 'Create' }} a named guest stay inside {{ nameStayLabel }}.
+            Dates must remain inside this Booking.com block. A named stay is required before Nuki code generation.
+          </p>
+          <UiInput
+            v-model="nameStayGuest"
+            label="Guest / stay name"
+            required
+            :disabled="nameStayBusy"
+            placeholder="e.g. Koilpitchai"
+          />
+          <div class="split-dialog__grid">
+            <UiInput v-model="nameStayCheckIn" type="date" label="Check-in" required :disabled="nameStayBusy" :min="nameStayBlockStart" :max="nameStayCheckInMax" />
+            <UiInput v-model="nameStayCheckOut" type="date" label="Check-out" required :disabled="nameStayBusy" :min="nameStayCheckIn" :max="nameStayBlockEnd" />
+          </div>
+          <p v-if="nameStayError" class="split-dialog__error">{{ nameStayError }}</p>
+        </form>
+        <template #footer>
+          <UiButton variant="ghost" :disabled="nameStayBusy" @click="nameStayDialogOpen = false">Cancel</UiButton>
+          <UiButton variant="primary" :loading="nameStayBusy" @click="submitNameStayDialog">{{ nameStaySubmitLabel }}</UiButton>
+        </template>
+      </UiDialog>
+
       <UiDialog
         v-model:open="dayDialogOpen"
         :title="dayDialogDate ? `Stays on ${dayDialogDate}` : 'Stays'"
@@ -767,6 +1014,9 @@ watch(
                   <UiBadge :tone="hasCleaningCalendarExclusion(o) ? 'warning' : 'success'">
                     {{ cleaningCalendarStatusLabel(o) }}
                   </UiBadge>
+                  <UiBadge v-if="isProvisionalBlock(o) && !isLabelled(o)" tone="info">
+                    Provisional cleaning (from Booking block)
+                  </UiBadge>
                   <span v-if="o.closure_state === 'external_sale'" class="day-dialog__amount">
                     {{ formatExternalAmount(o) }}
                   </span>
@@ -774,16 +1024,31 @@ watch(
                     {{ o.cleaning_calendar_exclusion_reason }}
                   </span>
                 </div>
+                <dl class="day-dialog__debug">
+                  <div v-for="(row, idx) in metadataRows(o)" :key="idx" class="day-dialog__debug-row">
+                    <dt>{{ row[0] }}</dt>
+                    <dd>{{ row[1] }}</dd>
+                  </div>
+                </dl>
               </div>
               <div class="day-dialog__actions">
-                <template v-if="!isLabelled(o) && !hasStayOutcome(o)">
+                <template v-if="!isLabelled(o) && !hasStayOutcome(o) && !canEditNamedStay(o)">
+                  <UiButton
+                    v-if="canNameStay(o)"
+                    size="sm"
+                    variant="primary"
+                    :disabled="dialogBusy || splitDialogBusy || nameStayBusy"
+                    @click="nameStayFromDay(o)"
+                  >
+                    Name stay
+                  </UiButton>
                   <UiButton
                     size="sm"
                     variant="ghost"
                     :disabled="dialogBusy || splitDialogBusy"
                     @click="openCloseFromDay(o)"
                   >
-                    Close
+                    Close / no guest
                   </UiButton>
                   <UiButton
                     size="sm"
@@ -819,6 +1084,24 @@ watch(
                     @click="markOutcomeFromDay(o, 'no_show')"
                   >
                     No-show
+                  </UiButton>
+                </template>
+                <template v-else-if="canEditNamedStay(o)">
+                  <UiButton
+                    size="sm"
+                    variant="primary"
+                    :disabled="dialogBusy || nameStayBusy"
+                    @click="openEditNameStayDialog(o)"
+                  >
+                    Edit named stay
+                  </UiButton>
+                  <UiButton
+                    size="sm"
+                    variant="ghost"
+                    :disabled="dialogBusy || nameStayBusy"
+                    @click="deleteNamedStay(o)"
+                  >
+                    Delete named stay
                   </UiButton>
                 </template>
                 <UiButton
@@ -958,8 +1241,29 @@ watch(
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex-wrap: wrap;
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
+}
+.day-dialog__debug {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px var(--space-3);
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+.day-dialog__debug-row {
+  display: flex;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.day-dialog__debug dt {
+  font-weight: 600;
+}
+.day-dialog__debug dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 .day-dialog__actions {
   display: flex;

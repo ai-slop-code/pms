@@ -26,22 +26,22 @@ type analyticsFreshnessResponse struct {
 }
 
 type analyticsKPIWindow struct {
-	Days             int   `json:"days"`
-	NightsSold       int   `json:"nights_sold"`
-	AvailableNights  int   `json:"available_nights"`
-	ConfirmedCents   int64 `json:"confirmed_cents"`
-	EstimatedCents   int64 `json:"estimated_cents"`
+	Days              int   `json:"days"`
+	NightsSold        int   `json:"nights_sold"`
+	AvailableNights   int   `json:"available_nights"`
+	ConfirmedCents    int64 `json:"confirmed_cents"`
+	EstimatedCents    int64 `json:"estimated_cents"`
 	TotalRevenueCents int64 `json:"total_revenue_cents"`
 }
 
 type analyticsOutlookResponse struct {
-	GeneratedAt    time.Time                `json:"generated_at"`
-	Windows        []analyticsKPIWindow     `json:"windows"`
-	PacingSeries   []analyticsPacePoint     `json:"pacing_series"`
-	UnsoldNights   []analyticsUnsoldNight   `json:"unsold_nights"`
-	NewBookings    []analyticsCountByDay    `json:"new_bookings"`
-	RevenueAsOf    *string                  `json:"revenue_as_of,omitempty"`
-	TrailingADR    int64                    `json:"trailing_adr_cents"`
+	GeneratedAt  time.Time              `json:"generated_at"`
+	Windows      []analyticsKPIWindow   `json:"windows"`
+	PacingSeries []analyticsPacePoint   `json:"pacing_series"`
+	UnsoldNights []analyticsUnsoldNight `json:"unsold_nights"`
+	NewBookings  []analyticsCountByDay  `json:"new_bookings"`
+	RevenueAsOf  *string                `json:"revenue_as_of,omitempty"`
+	TrailingADR  int64                  `json:"trailing_adr_cents"`
 }
 
 type analyticsPacePoint struct {
@@ -50,9 +50,9 @@ type analyticsPacePoint struct {
 }
 
 type analyticsUnsoldNight struct {
-	Date       string `json:"date"`
-	PrevGuest  string `json:"prev_guest,omitempty"`
-	NextGuest  string `json:"next_guest,omitempty"`
+	Date      string `json:"date"`
+	PrevGuest string `json:"prev_guest,omitempty"`
+	NextGuest string `json:"next_guest,omitempty"`
 }
 
 type analyticsCountByDay struct {
@@ -61,17 +61,22 @@ type analyticsCountByDay struct {
 }
 
 type analyticsPerformanceKPIs struct {
-	NightsSold              int     `json:"nights_sold"`
-	AvailableNights         int     `json:"available_nights"`
-	OccupancyRate           float64 `json:"occupancy_rate"`
-	ADRCents                int64   `json:"adr_cents"`
-	RevPARCents             int64   `json:"revpar_cents"`
-	GrossCents              int64   `json:"gross_cents"`
-	NetCents                int64   `json:"net_cents"`
-	CommissionCents         int64   `json:"commission_cents"`
-	PaymentFeesCents        int64   `json:"payment_fees_cents"`
-	EffectiveTakeRate       float64 `json:"effective_take_rate"`
-	MatchedNights           int     `json:"matched_nights"`
+	NightsSold        int     `json:"nights_sold"`
+	AvailableNights   int     `json:"available_nights"`
+	OccupancyRate     float64 `json:"occupancy_rate"`
+	ADRCents          int64   `json:"adr_cents"`
+	RevPARCents       int64   `json:"revpar_cents"`
+	GrossCents        int64   `json:"gross_cents"`
+	NetCents          int64   `json:"net_cents"`
+	CommissionCents   int64   `json:"commission_cents"`
+	PaymentFeesCents  int64   `json:"payment_fees_cents"`
+	EffectiveTakeRate float64 `json:"effective_take_rate"`
+	MatchedNights     int     `json:"matched_nights"`
+	// PMS_19 §10.3.1 two occupancy metrics.
+	AvailabilityNights    int     `json:"availability_nights"`
+	AvailabilityOccupancy float64 `json:"availability_occupancy"`
+	GuestNights           int     `json:"guest_nights"`
+	GuestOccupancy        float64 `json:"guest_occupancy"`
 }
 
 type analyticsMonthlyTrendRow struct {
@@ -97,10 +102,10 @@ type analyticsDOWCell struct {
 }
 
 type analyticsCancellationStat struct {
-	Rate      float64            `json:"rate"`
-	Buckets   []analyticsBucket  `json:"buckets"`
-	Total     int                `json:"total_active_plus_cancelled"`
-	Cancelled int                `json:"total_cancelled"`
+	Rate      float64           `json:"rate"`
+	Buckets   []analyticsBucket `json:"buckets"`
+	Total     int               `json:"total_active_plus_cancelled"`
+	Cancelled int               `json:"total_cancelled"`
 }
 
 // analyticsCancellationCohortRow is one (month, rate) point for the
@@ -182,42 +187,42 @@ type analyticsYearlyFinanceBlock struct {
 }
 
 type analyticsPerformanceResponse struct {
-	GeneratedAt     time.Time                   `json:"generated_at"`
-	From            string                      `json:"from"`
-	To              string                      `json:"to"`
-	KPIs            analyticsPerformanceKPIs    `json:"kpis"`
-	PriorKPIs       *analyticsPerformanceKPIs   `json:"prior_kpis,omitempty"`
-	MonthlyTrend    []analyticsMonthlyTrendRow  `json:"monthly_trend"`
-	SeasonalityHeatmap []analyticsHeatmapCell   `json:"seasonality_heatmap"`
-	DOWOccupancy    []analyticsDOWCell          `json:"dow_occupancy"`
-	Cancellation    analyticsCancellationStat   `json:"cancellation"`
+	GeneratedAt                time.Time                        `json:"generated_at"`
+	From                       string                           `json:"from"`
+	To                         string                           `json:"to"`
+	KPIs                       analyticsPerformanceKPIs         `json:"kpis"`
+	PriorKPIs                  *analyticsPerformanceKPIs        `json:"prior_kpis,omitempty"`
+	MonthlyTrend               []analyticsMonthlyTrendRow       `json:"monthly_trend"`
+	SeasonalityHeatmap         []analyticsHeatmapCell           `json:"seasonality_heatmap"`
+	DOWOccupancy               []analyticsDOWCell               `json:"dow_occupancy"`
+	Cancellation               analyticsCancellationStat        `json:"cancellation"`
 	CancellationByBookingMonth []analyticsCancellationCohortRow `json:"cancellation_by_booking_month"`
 	CancellationByArrivalMonth []analyticsCancellationCohortRow `json:"cancellation_by_arrival_month"`
-	CommissionRateTrend []analyticsCommissionTrendRow      `json:"commission_rate_trend"`
-	CommissionPerStay   []analyticsCommissionPerStayRow    `json:"commission_per_stay"`
-	HasStatementData    bool                                `json:"has_statement_data"`
-	NetPerStay      []analyticsNetPerStayRow    `json:"net_per_stay"`
-	YearlyCleaning  analyticsYearlyCleaningBlock `json:"yearly_cleaning"`
-	YearlyFinance   analyticsYearlyFinanceBlock `json:"yearly_finance"`
-	RevenueAsOf     *string                     `json:"revenue_as_of,omitempty"`
+	CommissionRateTrend        []analyticsCommissionTrendRow    `json:"commission_rate_trend"`
+	CommissionPerStay          []analyticsCommissionPerStayRow  `json:"commission_per_stay"`
+	HasStatementData           bool                             `json:"has_statement_data"`
+	NetPerStay                 []analyticsNetPerStayRow         `json:"net_per_stay"`
+	YearlyCleaning             analyticsYearlyCleaningBlock     `json:"yearly_cleaning"`
+	YearlyFinance              analyticsYearlyFinanceBlock      `json:"yearly_finance"`
+	RevenueAsOf                *string                          `json:"revenue_as_of,omitempty"`
 }
 
 type analyticsDemandResponse struct {
-	GeneratedAt     time.Time              `json:"generated_at"`
-	From            string                 `json:"from"`
-	To              string                 `json:"to"`
-	LeadTime        []analyticsBucket      `json:"lead_time"`
-	LeadTimeStatement []analyticsBucket    `json:"lead_time_statement"`
-	LengthOfStay    []analyticsBucket      `json:"length_of_stay"`
+	GeneratedAt         time.Time                `json:"generated_at"`
+	From                string                   `json:"from"`
+	To                  string                   `json:"to"`
+	LeadTime            []analyticsBucket        `json:"lead_time"`
+	LeadTimeStatement   []analyticsBucket        `json:"lead_time_statement"`
+	LengthOfStay        []analyticsBucket        `json:"length_of_stay"`
 	PersonsDistribution []analyticsPersonsBucket `json:"persons_distribution"`
-	ADRByMonth      []analyticsADRRow      `json:"adr_by_month"`
-	ADRByDOW        []analyticsADRRow      `json:"adr_by_dow"`
-	ADRByLeadBucket []analyticsADRRow      `json:"adr_by_lead_bucket"`
-	ADRByPersons    []analyticsADRRow      `json:"adr_by_persons"`
-	GapNights       []analyticsGapRow      `json:"gap_nights"`
-	OrphanMidweek   []analyticsGapRow      `json:"orphan_midweek"`
-	ReturningGuests analyticsReturningStat `json:"returning_guests"`
-	HasStatementData bool                  `json:"has_statement_data"`
+	ADRByMonth          []analyticsADRRow        `json:"adr_by_month"`
+	ADRByDOW            []analyticsADRRow        `json:"adr_by_dow"`
+	ADRByLeadBucket     []analyticsADRRow        `json:"adr_by_lead_bucket"`
+	ADRByPersons        []analyticsADRRow        `json:"adr_by_persons"`
+	GapNights           []analyticsGapRow        `json:"gap_nights"`
+	OrphanMidweek       []analyticsGapRow        `json:"orphan_midweek"`
+	ReturningGuests     analyticsReturningStat   `json:"returning_guests"`
+	HasStatementData    bool                     `json:"has_statement_data"`
 }
 
 type analyticsADRRow struct {
@@ -235,9 +240,9 @@ type analyticsGapRow struct {
 }
 
 type analyticsReturningStat struct {
-	TotalActive    int     `json:"total_active"`
-	Returning      int     `json:"returning"`
-	ReturningRate  float64 `json:"returning_rate"`
+	TotalActive   int     `json:"total_active"`
+	Returning     int     `json:"returning"`
+	ReturningRate float64 `json:"returning_rate"`
 }
 
 type analyticsReturningGuestRow struct {
@@ -694,6 +699,13 @@ func (s *Server) computePerformanceKPIs(r *http.Request, pid int64, from, to tim
 	if gross > 0 {
 		takeRate = float64(commission+fees) / float64(gross)
 	}
+	// PMS_19 §10.3.1: availability vs guest occupancy over the bookable-nights
+	// denominator. Both read night-level truth from occupancy_nights.
+	fromDate := from.In(loc).Format("2006-01-02")
+	toDate := to.In(loc).Format("2006-01-02")
+	availabilityNights, guestNights, _ := s.Store.OccupancyMetricNights(r.Context(), pid, fromDate, toDate)
+	closedStays, _ := s.Store.ListClosedOccupanciesInDateRange(r.Context(), pid, from, to)
+	bookable := store.BookableNightsInRange(closedStays, from, to)
 	return &analyticsPerformanceKPIs{
 		NightsSold: nights, AvailableNights: avail,
 		OccupancyRate: safeDiv(float64(nights), float64(avail)),
@@ -701,6 +713,10 @@ func (s *Server) computePerformanceKPIs(r *http.Request, pid int64, from, to tim
 		GrossCents: gross, NetCents: net,
 		CommissionCents: commission, PaymentFeesCents: fees,
 		EffectiveTakeRate: takeRate, MatchedNights: matchedNights,
+		AvailabilityNights:    availabilityNights,
+		AvailabilityOccupancy: safeDiv(float64(availabilityNights), float64(bookable)),
+		GuestNights:           guestNights,
+		GuestOccupancy:        safeDiv(float64(guestNights), float64(bookable)),
 	}, nil
 }
 

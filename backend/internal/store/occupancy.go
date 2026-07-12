@@ -30,6 +30,38 @@ type OccupancySyncRun struct {
 	HTTPStatus          sql.NullInt64
 	Trigger             string
 	CreatedAt           time.Time
+	// PMS_19 §12 observability counters.
+	UpstreamEventsParsed             int
+	ParseErrors                      int
+	RepresentationsInserted          int
+	RepresentationsUpdated           int
+	RepresentationsUnchanged         int
+	RepresentationsSuperseded        int
+	RepresentationsDeletedFromSource int
+	DuplicateNightsResolved          int
+	LegacyGeneratedRowsConverted     int
+	NamedStaysDeletedFromSource      int
+	ProvisionalCleaningEventsCreated int
+	ProvisionalCleaningEventsRemoved int
+	DeletionEnabled                  bool
+}
+
+// SyncCounters accumulates PMS_19 §12 counts during a sync run.
+type SyncCounters struct {
+	UpstreamEventsSeen               int
+	UpstreamEventsParsed             int
+	ParseErrors                      int
+	RepresentationsInserted          int
+	RepresentationsUpdated           int
+	RepresentationsUnchanged         int
+	RepresentationsSuperseded        int
+	RepresentationsDeletedFromSource int
+	DuplicateNightsResolved          int
+	LegacyGeneratedRowsConverted     int
+	NamedStaysDeletedFromSource      int
+	ProvisionalCleaningEventsCreated int
+	ProvisionalCleaningEventsRemoved int
+	DeletionEnabled                  bool
 }
 
 type Occupancy struct {
@@ -69,6 +101,14 @@ type Occupancy struct {
 	CleaningCalendarExclusionReason  sql.NullString
 	CleaningCalendarExcludedByUserID sql.NullInt64
 	CleaningCalendarExcludedAt       sql.NullTime
+	// PMS_19 durable upstream ownership + row identity.
+	UpstreamSourceType sql.NullString
+	UpstreamEventUID   sql.NullString
+	RepresentationKind sql.NullString
+	RepresentationDate sql.NullString
+	SupersededAt       sql.NullTime
+	SupersededReason   sql.NullString
+	SourceDtstamp      sql.NullString
 }
 
 // Closure state constants (occupancies.closure_state values).
@@ -79,6 +119,30 @@ const (
 	StayOutcomeNoShow                 = "no_show"
 	manualSplitSourceType             = "manual"
 	manualSplitUIDPrefix              = "manual_split:"
+)
+
+// PMS_19 representation_kind values (occupancies.representation_kind). These
+// describe the row's shape/origin and must stay consistent with closure_state
+// (see spec §5.5). closure_state remains the source of truth for downstream
+// business behaviour.
+const (
+	RepresentationUnnamedBlock         = "unnamed_block"
+	RepresentationNamedStay            = "named_stay"
+	RepresentationManualClosure        = "manual_closure"
+	RepresentationExternalSale         = "external_sale"
+	RepresentationSyntheticFinance     = "synthetic_finance"
+	RepresentationLegacyGeneratedNight = "legacy_generated_night"
+
+	UpstreamSourceBookingICS = "booking_ics"
+
+	// Superseded reasons.
+	SupersededReplacedByNamedStay = "replaced_by_named_stay"
+	SupersededReplacedByAggregate = "replaced_by_aggregate"
+	SupersededSourceDeleted       = "source_deleted"
+	SupersededSplitStrategy       = "split_strategy_changed"
+	SupersededDuplicateResolved   = "duplicate_resolved"
+
+	StatusDeletedFromSource = "deleted_from_source"
 )
 
 type UpcomingOccupancy struct {
@@ -174,18 +238,29 @@ func (s *Store) FinishOccupancySyncRun(ctx context.Context, runID int64, status 
 }
 
 func (s *Store) InsertOccupancyRawEvent(ctx context.Context, propertyID, syncRunID int64, uid, raw, summary, startRFC, endRFC string, seq int, icalStatus, hash string) error {
+	return s.InsertOccupancyRawEventDetailed(ctx, propertyID, syncRunID, UpstreamSourceBookingICS, uid, raw, summary, startRFC, endRFC, seq, icalStatus, "", hash)
+}
+
+// InsertOccupancyRawEventDetailed stores a raw upstream snapshot including the
+// source_type namespace and DTSTAMP (§6.2). dtstamp may be empty when absent.
+func (s *Store) InsertOccupancyRawEventDetailed(ctx context.Context, propertyID, syncRunID int64, sourceType, uid, raw, summary, startRFC, endRFC string, seq int, icalStatus, dtstamp, hash string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	if sourceType == "" {
+		sourceType = UpstreamSourceBookingICS
+	}
 	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO occupancy_raw_events (property_id, sync_run_id, source_event_uid, raw_component, summary, event_start, event_end, sequence_num, ical_status, content_hash, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(property_id, sync_run_id, source_event_uid) DO UPDATE SET
+		INSERT INTO occupancy_raw_events (property_id, sync_run_id, source_type, source_event_uid, raw_component, summary, event_start, event_end, sequence_num, ical_status, dtstamp, content_hash, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(property_id, sync_run_id, source_type, source_event_uid) DO UPDATE SET
 			raw_component = excluded.raw_component,
 			summary = excluded.summary,
 			event_start = excluded.event_start,
 			event_end = excluded.event_end,
 			sequence_num = excluded.sequence_num,
 			ical_status = excluded.ical_status,
-			content_hash = excluded.content_hash`, propertyID, syncRunID, uid, raw, summary, startRFC, endRFC, seq, icalStatus, hash, now)
+			dtstamp = excluded.dtstamp,
+			content_hash = excluded.content_hash`,
+		propertyID, syncRunID, sourceType, uid, raw, summary, startRFC, endRFC, seq, icalStatus, nullableString(dtstamp), hash, now)
 	return err
 }
 
@@ -202,8 +277,9 @@ func (s *Store) UpsertOccupancy(ctx context.Context, o *Occupancy, syncRunID int
 		sum = o.RawSummary.String
 	}
 	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO occupancies (property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO occupancies (property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id,
+			upstream_source_type, upstream_event_uid, representation_kind)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(property_id, source_event_uid) DO UPDATE SET
 			start_at = excluded.start_at,
 			end_at = excluded.end_at,
@@ -212,8 +288,12 @@ func (s *Store) UpsertOccupancy(ctx context.Context, o *Occupancy, syncRunID int
 			guest_display_name = COALESCE(excluded.guest_display_name, occupancies.guest_display_name),
 			content_hash = excluded.content_hash,
 			last_synced_at = excluded.last_synced_at,
-			last_sync_run_id = excluded.last_sync_run_id`,
-		o.PropertyID, o.SourceType, o.SourceEventUID, start, end, o.Status, sum, guest, o.ContentHash, now, now, syncRunID)
+			last_sync_run_id = excluded.last_sync_run_id,
+			upstream_source_type = COALESCE(occupancies.upstream_source_type, excluded.upstream_source_type),
+			upstream_event_uid = COALESCE(occupancies.upstream_event_uid, excluded.upstream_event_uid),
+			representation_kind = COALESCE(occupancies.representation_kind, excluded.representation_kind)`,
+		o.PropertyID, o.SourceType, o.SourceEventUID, start, end, o.Status, sum, guest, o.ContentHash, now, now, syncRunID,
+		UpstreamSourceBookingICS, DeriveUpstreamUID(o.SourceEventUID), RepresentationUnnamedBlock)
 	return err
 }
 
@@ -358,13 +438,22 @@ const occupancySelectColumns = `
 	       external_net_amount_cents, external_currency, external_channel, finance_booking_id,
 	       stay_outcome, stay_outcome_reason, stay_outcome_marked_by_user_id, stay_outcome_marked_at,
 	       cleaning_calendar_excluded, cleaning_calendar_exclusion_reason,
-	       cleaning_calendar_excluded_by_user_id, cleaning_calendar_excluded_at`
+	       cleaning_calendar_excluded_by_user_id, cleaning_calendar_excluded_at,
+	       upstream_source_type, upstream_event_uid, representation_kind, representation_date,
+	       superseded_at, superseded_reason, source_dtstamp`
 
 func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface{}) ([]Occupancy, error) {
 	rows, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
+	return scanOccupancyRows(rows)
+}
+
+// scanOccupancyRows decodes occupancySelectColumns rows and is shared by both
+// DB and transaction-scoped queries.
+func scanOccupancyRows(rows *sql.Rows) ([]Occupancy, error) {
 	defer rows.Close()
 	var out []Occupancy
 	for rows.Next() {
@@ -375,6 +464,7 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 		var outcomeMarkedAt sql.NullString
 		var cleaningExcluded int
 		var cleaningExcludedAt sql.NullString
+		var supersededAt sql.NullString
 		if err := rows.Scan(
 			&o.ID, &o.PropertyID, &o.SourceType, &o.SourceEventUID, &start, &end, &o.Status,
 			&o.RawSummary, &o.GuestDisplayName, &o.ContentHash, &imp, &last, &runID,
@@ -382,6 +472,8 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 			&o.ExternalNetAmountCents, &o.ExternalCurrency, &o.ExternalChannel, &o.FinanceBookingID,
 			&o.StayOutcome, &o.StayOutcomeReason, &o.StayOutcomeMarkedByUserID, &outcomeMarkedAt,
 			&cleaningExcluded, &o.CleaningCalendarExclusionReason, &o.CleaningCalendarExcludedByUserID, &cleaningExcludedAt,
+			&o.UpstreamSourceType, &o.UpstreamEventUID, &o.RepresentationKind, &o.RepresentationDate,
+			&supersededAt, &o.SupersededReason, &o.SourceDtstamp,
 		); err != nil {
 			return nil, err
 		}
@@ -403,6 +495,10 @@ func (s *Store) scanOccupancies(ctx context.Context, q string, args ...interface
 			t, _ := time.Parse(time.RFC3339, cleaningExcludedAt.String)
 			o.CleaningCalendarExcludedAt = sql.NullTime{Time: t, Valid: true}
 		}
+		if supersededAt.Valid && supersededAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, supersededAt.String)
+			o.SupersededAt = sql.NullTime{Time: t, Valid: true}
+		}
 		out = append(out, o)
 	}
 	return out, rows.Err()
@@ -420,7 +516,10 @@ func (s *Store) ListOccupancySyncRunsPaged(ctx context.Context, propertyID int64
 		offset = 0
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, property_id, started_at, finished_at, status, error_message, events_seen, occupancies_upserted, http_status, trigger, created_at
+		SELECT id, property_id, started_at, finished_at, status, error_message, events_seen, occupancies_upserted, http_status, trigger, created_at,
+		       upstream_events_parsed, parse_errors, representations_inserted, representations_updated, representations_unchanged,
+		       representations_superseded, representations_deleted_from_source, duplicate_nights_resolved, legacy_generated_rows_converted,
+		       named_stays_deleted_from_source, provisional_cleaning_events_created, provisional_cleaning_events_removed, deletion_enabled
 		FROM occupancy_sync_runs WHERE property_id = ? ORDER BY started_at DESC LIMIT ? OFFSET ?`, propertyID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -431,9 +530,14 @@ func (s *Store) ListOccupancySyncRunsPaged(ctx context.Context, propertyID int64
 		var r OccupancySyncRun
 		var started, created string
 		var finished sql.NullString
-		if err := rows.Scan(&r.ID, &r.PropertyID, &started, &finished, &r.Status, &r.ErrorMessage, &r.EventsSeen, &r.OccupanciesUpserted, &r.HTTPStatus, &r.Trigger, &created); err != nil {
+		var deletionEnabled int
+		if err := rows.Scan(&r.ID, &r.PropertyID, &started, &finished, &r.Status, &r.ErrorMessage, &r.EventsSeen, &r.OccupanciesUpserted, &r.HTTPStatus, &r.Trigger, &created,
+			&r.UpstreamEventsParsed, &r.ParseErrors, &r.RepresentationsInserted, &r.RepresentationsUpdated, &r.RepresentationsUnchanged,
+			&r.RepresentationsSuperseded, &r.RepresentationsDeletedFromSource, &r.DuplicateNightsResolved, &r.LegacyGeneratedRowsConverted,
+			&r.NamedStaysDeletedFromSource, &r.ProvisionalCleaningEventsCreated, &r.ProvisionalCleaningEventsRemoved, &deletionEnabled); err != nil {
 			return nil, err
 		}
+		r.DeletionEnabled = deletionEnabled == 1
 		r.StartedAt, _ = time.Parse(time.RFC3339, started)
 		r.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		if finished.Valid && finished.String != "" {
@@ -615,6 +719,14 @@ func (s *Store) CloseOccupancy(ctx context.Context, propertyID, occupancyID, use
 }
 
 func (s *Store) CloseOccupancyNight(ctx context.Context, propertyID, occupancyID, userID int64, nightDate, reason, category string) error {
+	night, err := parseOccupancySplitDate(nightDate)
+	if err != nil {
+		return fmt.Errorf("invalid night")
+	}
+	return s.CloseOccupancyRange(ctx, propertyID, occupancyID, userID, night.Format("2006-01-02"), night.AddDate(0, 0, 1).Format("2006-01-02"), reason, category)
+}
+
+func (s *Store) CloseOccupancyRange(ctx context.Context, propertyID, occupancyID, userID int64, checkIn, checkOut, reason, category string) error {
 	row, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
 	if err != nil {
 		return err
@@ -622,45 +734,39 @@ func (s *Store) CloseOccupancyNight(ctx context.Context, propertyID, occupancyID
 	if row.ClosureState.Valid || row.StayOutcome.Valid {
 		return ErrOccupancyAlreadyLabelled
 	}
-	night, err := time.Parse("2006-01-02", strings.TrimSpace(nightDate))
+	rangeStart, err := parseOccupancySplitDate(checkIn)
 	if err != nil {
-		return fmt.Errorf("invalid night")
+		return ErrInvalidOccupancySplit
 	}
-	night = time.Date(night.Year(), night.Month(), night.Day(), 0, 0, 0, 0, time.UTC)
-	nightEnd := night.AddDate(0, 0, 1)
+	rangeEnd, err := parseOccupancySplitDate(checkOut)
+	if err != nil {
+		return ErrInvalidOccupancySplit
+	}
 	start := toUTCMidnight(row.StartAt)
 	end := toUTCMidnight(row.EndAt)
-	if night.Before(start) || !nightEnd.After(start) || nightEnd.After(end) {
+	if rangeStart.Before(start) || rangeEnd.After(end) || !rangeEnd.After(rangeStart) {
 		return sql.ErrNoRows
 	}
-	if start.Equal(night) && end.Equal(nightEnd) {
+	if start.Equal(rangeStart) && end.Equal(rangeEnd) {
 		return s.CloseOccupancy(ctx, propertyID, occupancyID, userID, reason, category)
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339)
+	upstreamUID := DeriveUpstreamUID(row.SourceEventUID)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE occupancies
-		SET status = 'deleted_from_source', last_synced_at = ?
-		WHERE property_id = ? AND id = ?`, now, propertyID, occupancyID); err != nil {
+	// New PMS_19 model: keep the aggregate as the unnamed-block filler and add a
+	// closed representation for the selected range. Reconciliation gives those
+	// nights to the closure row and the rest to the filler.
+	if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "closed", rangeStart, rangeEnd, &reason, &category, userID, nowStr); err != nil {
 		return err
 	}
-	baseUID := row.SourceEventUID
-	if start.Before(night) {
-		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, baseUID, "before", start, night, nil, nil, userID, now); err != nil {
-			return err
-		}
-	}
-	if err := s.insertManualSplitOccupancyTx(ctx, tx, row, baseUID, "closed", night, nightEnd, &reason, &category, userID, now); err != nil {
+	loc := s.propertyLocationTx(ctx, tx, propertyID)
+	if err := s.reconcileUpstreamCoverageTx(ctx, tx, propertyID, upstreamUID, nightsUTC(row.StartAt, row.EndAt), now, loc, nil); err != nil {
 		return err
-	}
-	if nightEnd.Before(end) {
-		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, baseUID, "after", nightEnd, end, nil, nil, userID, now); err != nil {
-			return err
-		}
 	}
 	return tx.Commit()
 }
@@ -707,33 +813,26 @@ func (s *Store) SplitOccupancyIntoNightRange(ctx context.Context, propertyID, oc
 	if splitDays <= 0 || !splitStart.AddDate(0, 0, splitDays).Equal(splitEnd) {
 		return ErrInvalidOccupancySplit
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339)
+	upstreamUID := DeriveUpstreamUID(row.SourceEventUID)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE occupancies
-		SET status = 'deleted_from_source', last_synced_at = ?
-		WHERE property_id = ? AND id = ?`, now, propertyID, occupancyID); err != nil {
-		return err
-	}
-	if start.Before(splitStart) {
-		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "before", start, splitStart, nil, nil, 0, now); err != nil {
-			return err
-		}
-	}
+	// New PMS_19 model: the aggregate stays active as the unnamed-block filler.
+	// We only materialise per-night rows for the selected range; reconciliation
+	// assigns each night to exactly one active representation.
 	for i := 0; i < splitDays; i++ {
 		night := splitStart.AddDate(0, 0, i)
-		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "night", night, night.AddDate(0, 0, 1), nil, nil, 0, now); err != nil {
+		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "night", night, night.AddDate(0, 0, 1), nil, nil, 0, nowStr); err != nil {
 			return err
 		}
 	}
-	if splitEnd.Before(end) {
-		if err := s.insertManualSplitOccupancyTx(ctx, tx, row, row.SourceEventUID, "after", splitEnd, end, nil, nil, 0, now); err != nil {
-			return err
-		}
+	loc := s.propertyLocationTx(ctx, tx, propertyID)
+	if err := s.reconcileUpstreamCoverageTx(ctx, tx, propertyID, upstreamUID, nightsUTC(row.StartAt, row.EndAt), now, loc, nil); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -770,13 +869,19 @@ func (s *Store) insertManualSplitOccupancyTx(ctx context.Context, tx *sql.Tx, ba
 	closureCategory := interface{}(nil)
 	closedBy := interface{}(nil)
 	closedAt := interface{}(nil)
+	repKind := RepresentationUnnamedBlock
 	if role == "closed" {
 		closureState = ClosureStateClosed
 		closureReason = nullableString(ptrStringValue(reason))
 		closureCategory = nullableString(ptrStringValue(category))
 		closedBy = userID
 		closedAt = now
+		repKind = RepresentationManualClosure
 	}
+	if base.GuestDisplayName.Valid && strings.TrimSpace(base.GuestDisplayName.String) != "" && role == "night" {
+		repKind = RepresentationNamedStay
+	}
+	upstreamUID := DeriveUpstreamUID(baseUID)
 	var summary interface{}
 	if base.RawSummary.Valid {
 		summary = base.RawSummary.String
@@ -790,9 +895,10 @@ func (s *Store) insertManualSplitOccupancyTx(ctx context.Context, tx *sql.Tx, ba
 		INSERT INTO occupancies (
 			property_id, source_type, source_event_uid, start_at, end_at, status,
 			raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id,
-			closure_state, closure_reason, closure_category, closed_by_user_id, closed_at
+			closure_state, closure_reason, closure_category, closed_by_user_id, closed_at,
+			upstream_source_type, upstream_event_uid, representation_kind
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(property_id, source_event_uid) DO UPDATE SET
 			start_at = excluded.start_at,
 			end_at = excluded.end_at,
@@ -805,9 +911,15 @@ func (s *Store) insertManualSplitOccupancyTx(ctx context.Context, tx *sql.Tx, ba
 			closure_reason = excluded.closure_reason,
 			closure_category = excluded.closure_category,
 			closed_by_user_id = excluded.closed_by_user_id,
-			closed_at = excluded.closed_at`,
+			closed_at = excluded.closed_at,
+			upstream_source_type = excluded.upstream_source_type,
+			upstream_event_uid = excluded.upstream_event_uid,
+			representation_kind = excluded.representation_kind,
+			superseded_at = NULL,
+			superseded_reason = NULL`,
 		base.PropertyID, manualSplitSourceType, uid, start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), status,
-		summary, guest, contentHash, now, now, closureState, closureReason, closureCategory, closedBy, closedAt)
+		summary, guest, contentHash, now, now, closureState, closureReason, closureCategory, closedBy, closedAt,
+		UpstreamSourceBookingICS, upstreamUID, repKind)
 	return err
 }
 
@@ -851,38 +963,83 @@ func (s *Store) MarkOccupancyExternalSale(ctx context.Context, propertyID, occup
 	return nil
 }
 
-// ReopenOccupancy removes any closure / external-sale label, restoring the row
-// to its original ICS-driven status. No-op (returns sql.ErrNoRows) if the row
-// is already unlabelled.
+// ReopenOccupancy removes any closure / external-sale label and restores the
+// affected nights to active coverage (PMS_19 §5.3/§13.12): a synthetic
+// closed-night split row is superseded so the unnamed-block aggregate reclaims
+// the night, and a directly-labelled row returns to unnamed-block (or named
+// stay) coverage. Per-night coverage is rebuilt in the same transaction so the
+// caller can immediately recreate provisional cleaning. Returns sql.ErrNoRows
+// if the row is missing or already unlabelled.
 func (s *Store) ReopenOccupancy(ctx context.Context, propertyID, occupancyID int64) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.DB.ExecContext(ctx, `
-		UPDATE occupancies
-		SET closure_state = NULL,
-		    closure_reason = NULL,
-		    closure_category = NULL,
-		    closed_by_user_id = NULL,
-		    closed_at = NULL,
-		    external_net_amount_cents = NULL,
-		    external_currency = NULL,
-		    external_channel = NULL,
-		    last_synced_at = ?
-		WHERE property_id = ? AND id = ? AND closure_state IS NOT NULL`,
-		now, propertyID, occupancyID)
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339)
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("reopen occupancy: %w", err)
+		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		// Either not found or not labelled; differentiate so the handler can
-		// return a clean 404 vs 409.
-		_, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
-		if err != nil {
-			return err
-		}
+	defer tx.Rollback()
+
+	row, err := s.getOccupancyByIDTx(ctx, tx, propertyID, occupancyID)
+	if err != nil {
+		return err
+	}
+	if !row.ClosureState.Valid {
+		// Not labelled: nothing to reopen (handler maps this to 404/409).
 		return sql.ErrNoRows
 	}
-	return nil
+
+	// A closed-night split row (manual_split:UID:closed:date) exists only to
+	// represent the closure; superseding it lets the aggregate filler reclaim
+	// the night as unnamed-block coverage. Any other row (aggregate, named
+	// stay, external sale) keeps its identity and returns to active coverage.
+	syntheticClosure := strings.HasPrefix(row.SourceEventUID, manualSplitUIDPrefix) &&
+		strings.Contains(row.SourceEventUID, ":closed:")
+	if syntheticClosure {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE occupancies
+			SET closure_state = NULL, closure_reason = NULL, closure_category = NULL,
+			    closed_by_user_id = NULL, closed_at = NULL,
+			    external_net_amount_cents = NULL, external_currency = NULL, external_channel = NULL,
+			    status = 'deleted_from_source', superseded_at = ?, superseded_reason = ?, last_synced_at = ?
+			WHERE id = ?`,
+			nowStr, SupersededReplacedByAggregate, nowStr, occupancyID); err != nil {
+			return fmt.Errorf("reopen occupancy: %w", err)
+		}
+		if err := deactivateOccupancyNightsTx(ctx, tx, occupancyID); err != nil {
+			return err
+		}
+	} else {
+		newKind := RepresentationUnnamedBlock
+		if row.GuestDisplayName.Valid && strings.TrimSpace(row.GuestDisplayName.String) != "" {
+			newKind = RepresentationNamedStay
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE occupancies
+			SET closure_state = NULL, closure_reason = NULL, closure_category = NULL,
+			    closed_by_user_id = NULL, closed_at = NULL,
+			    external_net_amount_cents = NULL, external_currency = NULL, external_channel = NULL,
+			    representation_kind = ?, last_synced_at = ?
+			WHERE id = ?`,
+			newKind, nowStr, occupancyID); err != nil {
+			return fmt.Errorf("reopen occupancy: %w", err)
+		}
+	}
+
+	// Rebuild per-night coverage for the owning upstream event so the reopened
+	// night is claimed by the filler / named stay again.
+	upstreamUID := DeriveUpstreamUID(row.SourceEventUID)
+	if row.UpstreamEventUID.Valid && strings.TrimSpace(row.UpstreamEventUID.String) != "" {
+		upstreamUID = row.UpstreamEventUID.String
+	}
+	var sourceNights []string
+	if agg, err := s.aggregateForUpstreamTx(ctx, tx, propertyID, upstreamUID); err == nil {
+		sourceNights = nightsUTC(agg.StartAt, agg.EndAt)
+	}
+	loc := s.propertyLocationTx(ctx, tx, propertyID)
+	if err := s.reconcileUpstreamCoverageTx(ctx, tx, propertyID, upstreamUID, sourceNights, now, loc, nil); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // checkOccupancyLabelled is called after a 0-row UPDATE to decide whether the

@@ -92,6 +92,11 @@ export interface PerformanceKPIs {
   payment_fees_cents: number
   effective_take_rate: number
   matched_nights: number
+  // PMS_19 §10.3.1 two occupancy metrics.
+  availability_nights?: number
+  availability_occupancy?: number
+  guest_nights?: number
+  guest_occupancy?: number
 }
 
 export interface MonthlyTrendRow {

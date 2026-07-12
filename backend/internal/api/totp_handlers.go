@@ -15,9 +15,9 @@ import (
 // --- DTOs ---------------------------------------------------------------
 
 type twoFAStatusResponse struct {
-	Enrolled                bool `json:"enrolled"`
-	MFAPending              bool `json:"mfa_pending,omitempty"`
-	RecoveryCodesRemaining  int  `json:"recovery_codes_remaining"`
+	Enrolled               bool `json:"enrolled"`
+	MFAPending             bool `json:"mfa_pending,omitempty"`
+	RecoveryCodesRemaining int  `json:"recovery_codes_remaining"`
 }
 
 type twoFAVerifyBody struct {

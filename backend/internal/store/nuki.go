@@ -326,8 +326,14 @@ func (s *Store) ListOccupanciesForNukiSync(ctx context.Context, propertyID int64
 	// Closure-labelled rows are excluded from Nuki sync — closed nights have
 	// no guest, externally-sold nights have a guest who arrives outside the
 	// Booking.com flow (PMS_14 §3.4).
+	//
+	// PMS_19 §10.1 / §5.6: Nuki codes are only for active, non-superseded named
+	// stays. Unnamed Booking.com block nights (no guest name) must never receive
+	// a guest code, and superseded representations are ineligible.
 	q := occupancySelectColumns + ` FROM occupancies
 		WHERE property_id = ? AND status IN ('active', 'updated') AND closure_state IS NULL
+		AND superseded_at IS NULL
+		AND guest_display_name IS NOT NULL AND TRIM(guest_display_name) <> ''
 		AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show')) AND end_at >= ?
 		ORDER BY start_at ASC`
 	return s.scanOccupancies(ctx, q, propertyID, time.Now().UTC().Format(time.RFC3339))
@@ -335,7 +341,7 @@ func (s *Store) ListOccupanciesForNukiSync(ctx context.Context, propertyID int64
 
 func (s *Store) ListOccupanciesForNukiRevocation(ctx context.Context, propertyID int64) ([]Occupancy, error) {
 	q := occupancySelectColumns + ` FROM occupancies
-		WHERE property_id = ? AND (status IN ('cancelled', 'deleted_from_source') OR stay_outcome IN ('cancelled_non_refundable', 'no_show'))
+		WHERE property_id = ? AND (status IN ('cancelled', 'deleted_from_source') OR stay_outcome IN ('cancelled_non_refundable', 'no_show') OR superseded_at IS NOT NULL)
 		ORDER BY start_at ASC`
 	return s.scanOccupancies(ctx, q, propertyID)
 }
@@ -854,4 +860,71 @@ func (s *Store) HasShorterGeneratedNukiCodeForSourceUID(ctx context.Context, pro
 		}
 	}
 	return false, rows.Err()
+}
+
+// RelinkSupersededNukiCodesTx implements PMS_19 §10.1: when a legacy generated
+// split row is superseded by a newly-created named stay covering the same
+// window, the existing Nuki code is relinked (same PIN) if its validity window
+// matches the named stay, avoiding a PIN change for the guest. Returns the
+// number of codes relinked. Codes that do not match are left in place and the
+// normal revocation flow revokes them.
+func (s *Store) RelinkSupersededNukiCodesTx(ctx context.Context, tx *sql.Tx, propertyID, namedStayOccID int64, upstreamUID, checkIn, checkOut string) (int, error) {
+	// If the named stay already owns a code, we cannot move another onto it
+	// (the table is unique on (property_id, occupancy_id)).
+	var existing int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM nuki_access_codes WHERE property_id = ? AND occupancy_id = ?`, propertyID, namedStayOccID).Scan(&existing); err != nil {
+		return 0, err
+	}
+	if existing > 0 {
+		return 0, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT nac.id, nac.valid_from, nac.valid_until
+		FROM nuki_access_codes nac
+		JOIN occupancies o ON o.id = nac.occupancy_id
+		WHERE nac.property_id = ?
+		  AND o.upstream_event_uid = ?
+		  AND o.id <> ?
+		  AND o.superseded_at IS NOT NULL
+		  AND nac.status = 'generated'
+		  AND nac.revoked_at IS NULL
+		ORDER BY nac.id ASC`, propertyID, upstreamUID, namedStayOccID)
+	if err != nil {
+		return 0, err
+	}
+	type cand struct {
+		id                 int64
+		validFrom, validTo string
+	}
+	var cands []cand
+	for rows.Next() {
+		var c cand
+		if err := rows.Scan(&c.id, &c.validFrom, &c.validTo); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		cands = append(cands, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	relinked := 0
+	for _, c := range cands {
+		vf, _ := time.Parse(time.RFC3339, c.validFrom)
+		vt, _ := time.Parse(time.RFC3339, c.validTo)
+		// "Validity window exactly matches" is evaluated on the property-local
+		// night dates: check-in day == code start day, check-out day == code end.
+		if vf.UTC().Format("2006-01-02") != checkIn || vt.UTC().Format("2006-01-02") != checkOut {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE nuki_access_codes SET occupancy_id = ?, updated_at = ? WHERE id = ? AND property_id = ?`,
+			namedStayOccID, now, c.id, propertyID); err != nil {
+			return relinked, err
+		}
+		relinked++
+		break // only one code can occupy the named stay row
+	}
+	return relinked, nil
 }

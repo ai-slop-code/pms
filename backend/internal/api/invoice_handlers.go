@@ -88,24 +88,24 @@ type invoiceRequestBody struct {
 	BookingPayoutID        *int64                `json:"booking_payout_id"`
 	BookingPayoutReference *string               `json:"booking_payout_reference"`
 	Language               string                `json:"language"`
-	IssueDate         string                `json:"issue_date"`
-	TaxableSupplyDate string                `json:"taxable_supply_date"`
-	DueDate           string                `json:"due_date"`
-	StayStartDate     string                `json:"stay_start_date"`
-	StayEndDate       string                `json:"stay_end_date"`
-	AmountTotalCents  *int                  `json:"amount_total_cents"`
-	PaymentNote       *string               `json:"payment_note"`
-	Customer          *invoicePartySnapshot `json:"customer"`
+	IssueDate              string                `json:"issue_date"`
+	TaxableSupplyDate      string                `json:"taxable_supply_date"`
+	DueDate                string                `json:"due_date"`
+	StayStartDate          string                `json:"stay_start_date"`
+	StayEndDate            string                `json:"stay_end_date"`
+	AmountTotalCents       *int                  `json:"amount_total_cents"`
+	PaymentNote            *string               `json:"payment_note"`
+	Customer               *invoicePartySnapshot `json:"customer"`
 }
 
 type invoiceOccupancyCandidate struct {
-	ID              int64   `json:"id"`
-	StartAt         string  `json:"start_at"`
-	EndAt           string  `json:"end_at"`
-	Status          string  `json:"status"`
-	Summary         string  `json:"summary"`
+	ID               int64   `json:"id"`
+	StartAt          string  `json:"start_at"`
+	EndAt            string  `json:"end_at"`
+	Status           string  `json:"status"`
+	Summary          string  `json:"summary"`
 	GuestDisplayName *string `json:"guest_display_name,omitempty"`
-	HasPayoutData   bool    `json:"has_payout_data"`
+	HasPayoutData    bool    `json:"has_payout_data"`
 }
 
 type invoiceOccupancyCandidatesResponse struct {

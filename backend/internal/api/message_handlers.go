@@ -56,8 +56,8 @@ func (s *Server) listMessageTemplates(w http.ResponseWriter, r *http.Request) {
 		out = append(out, templateToDTO(&t))
 	}
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"templates":            out,
-		"supported_languages":  store.SupportedMessageLanguages,
+		"templates":              out,
+		"supported_languages":    store.SupportedMessageLanguages,
 		"supported_placeholders": store.AllPlaceholders,
 	})
 }
@@ -211,10 +211,10 @@ func (s *Server) generateMessage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"occupancy_id":  occID,
-		"messages":      out,
+		"occupancy_id":   occID,
+		"messages":       out,
 		"nuki_available": nukiAvailable,
-		"placeholders":  vals,
+		"placeholders":   vals,
 	})
 }
 

@@ -33,9 +33,9 @@ type loginResponse struct {
 // without having to second-guess the backend (e.g. when the dev bypass
 // is on).
 type meResponse struct {
-	User                  *userDTO `json:"user,omitempty"`
-	MFARequired           bool     `json:"mfa_required,omitempty"`
-	ProvisioningRequired  bool     `json:"provisioning_required,omitempty"`
+	User                 *userDTO `json:"user,omitempty"`
+	MFARequired          bool     `json:"mfa_required,omitempty"`
+	ProvisioningRequired bool     `json:"provisioning_required,omitempty"`
 }
 
 type userWithPermissionsResponse struct {

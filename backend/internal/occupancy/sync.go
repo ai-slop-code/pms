@@ -2,7 +2,6 @@ package occupancy
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,15 +17,30 @@ const (
 	maxICSBodyBytes        = 20 << 20
 	maxParseErrorsShown    = 3
 	maxSyncErrorLength     = 900
+	propertySyncLeaseTTL   = 5 * time.Minute
+
+	// StatusPartialNoMutation makes it explicit that a partial parse applied
+	// zero occupancy mutations (PMS_19 §7.2).
+	StatusPartialNoMutation = "partial_no_mutation"
 )
 
 // Service runs ICS fetch and occupancy normalization.
 type Service struct {
 	Store *store.Store
 	HTTP  *http.Client
+	Now   func() time.Time
 }
 
-// SyncProperty fetches the property ICS URL and updates occupancies. Idempotent per UID.
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// SyncProperty fetches the property ICS URL and reconciles occupancies. A
+// successful full sync is authoritative for current/future Booking.com events;
+// failed or partial syncs never mutate occupancies (PMS_19 §7).
 func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger string) error {
 	if s.HTTP == nil {
 		s.HTTP = &http.Client{Timeout: defaultSyncHTTPTimeout, Transport: otelx.HTTPTransport(nil)}
@@ -58,160 +72,113 @@ func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger st
 	if err != nil {
 		return err
 	}
+	leaseName := fmt.Sprintf("occupancy_sync_property_%d", propertyID)
+	leaseOwner := fmt.Sprintf("run-%d", runID)
+	leaseOK, err := s.Store.TryAcquireJobLease(ctx, leaseName, leaseOwner, propertySyncLeaseTTL)
+	if err != nil {
+		return s.failRun(ctx, runID, "sync_lease: "+err.Error(), nil)
+	}
+	if !leaseOK {
+		msg := "sync_already_running"
+		_ = s.Store.FinishOccupancySyncRun(ctx, runID, "skipped", &msg, nil, 0, 0)
+		return fmt.Errorf("%s", msg)
+	}
+	defer func() { _ = s.Store.ReleaseJobLease(context.Background(), leaseName, leaseOwner) }()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return s.failRun(ctx, runID, err.Error(), nil, 0, 0)
+		return s.failRun(ctx, runID, err.Error(), nil)
 	}
 	req.Header.Set("User-Agent", "PMS-OccupancySync/1.0")
 	res, err := s.HTTP.Do(req)
 	if err != nil {
-		return s.failRun(ctx, runID, err.Error(), nil, 0, 0)
+		return s.failRun(ctx, runID, err.Error(), nil)
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxICSBodyBytes))
 	if err != nil {
-		return s.failRun(ctx, runID, err.Error(), &res.StatusCode, 0, 0)
+		return s.failRun(ctx, runID, err.Error(), &res.StatusCode)
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		msg := fmt.Sprintf("http_%d", res.StatusCode)
-		return s.failRun(ctx, runID, msg, &res.StatusCode, 0, 0)
+		return s.failRun(ctx, runID, msg, &res.StatusCode)
 	}
 
 	parsedRes, err := ParseICalendarDetailed(body)
 	if err != nil {
-		return s.failRun(ctx, runID, "parse_ics: "+err.Error(), &res.StatusCode, 0, 0)
-	}
-	parsed, err := s.expandBookingUnavailableEvents(ctx, propertyID, parsedRes.Events)
-	if err != nil {
-		return s.failRun(ctx, runID, err.Error(), &res.StatusCode, parsedRes.SeenEvents, 0)
+		return s.failRun(ctx, runID, "parse_ics: "+err.Error(), &res.StatusCode)
 	}
 
-	seen := make([]string, 0, len(parsed))
-	upserted := 0
-	sourceType := src.SourceType
-	for _, pe := range parsed {
-		seen = append(seen, pe.UID)
-		existing, err := s.Store.GetOccupancyBySourceEventUID(ctx, propertyID, pe.UID)
-		if err != nil {
-			_ = s.Store.FinishOccupancySyncRun(ctx, runID, "partial", ptrStr(err.Error()), &res.StatusCode, parsedRes.SeenEvents, upserted)
-			return err
-		}
-		st := "active"
-		if pe.Cancelled {
-			st = "cancelled"
-		} else if existing != nil {
-			// Make changes auditable in downstream modules.
-			if existing.ContentHash != pe.ContentHash || existing.Status == "cancelled" || existing.Status == "deleted_from_source" {
-				st = "updated"
-			}
-		}
-		rs := sql.NullString{String: pe.Summary, Valid: pe.Summary != ""}
-		occ := &store.Occupancy{
-			PropertyID:     propertyID,
-			SourceType:     sourceType,
-			SourceEventUID: pe.UID,
-			StartAt:        pe.StartUTC,
-			EndAt:          pe.EndUTC,
-			Status:         st,
-			RawSummary:     rs,
-			ContentHash:    pe.ContentHash,
-		}
-		if err := s.Store.InsertOccupancyRawEvent(ctx, propertyID, runID, pe.UID, pe.RawICS, pe.Summary,
-			pe.StartUTC.Format(time.RFC3339), pe.EndUTC.Format(time.RFC3339), pe.Sequence, pe.ICalStatus, pe.ContentHash); err != nil {
-			_ = s.Store.FinishOccupancySyncRun(ctx, runID, "partial", ptrStr(err.Error()), &res.StatusCode, parsedRes.SeenEvents, upserted)
-			return err
-		}
-		if err := s.Store.UpsertOccupancy(ctx, occ, runID); err != nil {
-			_ = s.Store.FinishOccupancySyncRun(ctx, runID, "partial", ptrStr(err.Error()), &res.StatusCode, parsedRes.SeenEvents, upserted)
-			return err
-		}
-		upserted++
+	counters := &store.SyncCounters{
+		UpstreamEventsSeen:   parsedRes.SeenEvents,
+		UpstreamEventsParsed: len(parsedRes.Events),
+		ParseErrors:          len(parsedRes.ParseErrors),
+		DeletionEnabled:      true,
 	}
 
-	if err := s.Store.MarkOccupanciesDeletedFromSource(ctx, propertyID, sourceType, seen); err != nil {
-		_ = s.Store.FinishOccupancySyncRun(ctx, runID, "partial", ptrStr(err.Error()), &res.StatusCode, parsedRes.SeenEvents, upserted)
-		return err
-	}
-	status := "success"
-	var msg *string
+	// PMS_19 §7.2: any event-level parse failure aborts mutation entirely so a
+	// skipped event can never be mistaken for a disappeared one.
 	if len(parsedRes.ParseErrors) > 0 {
-		status = "partial"
-		s := summarizeParseErrors(len(parsedRes.Events), parsedRes.SeenEvents, parsedRes.ParseErrors)
-		msg = &s
+		counters.DeletionEnabled = false
+		msg := summarizeParseErrors(len(parsedRes.Events), parsedRes.SeenEvents, parsedRes.ParseErrors)
+		_ = s.Store.FinishOccupancySyncRunDetailed(ctx, runID, StatusPartialNoMutation, &msg, &res.StatusCode, counters)
+		return nil
 	}
-	return s.Store.FinishOccupancySyncRun(ctx, runID, status, msg, &res.StatusCode, parsedRes.SeenEvents, upserted)
-}
 
-func (s *Service) expandBookingUnavailableEvents(ctx context.Context, propertyID int64, events []*ParsedEvent) ([]*ParsedEvent, error) {
-	out := make([]*ParsedEvent, 0, len(events))
-	for _, ev := range events {
-		parts, err := s.splitBookingUnavailableEventIfNeeded(ctx, propertyID, ev)
-		if err != nil {
-			return nil, err
+	// Store raw upstream snapshots before expansion (§7.1 step 6).
+	for _, pe := range parsedRes.Events {
+		dtstamp := ""
+		if !pe.DTStampUTC.IsZero() {
+			dtstamp = pe.DTStampUTC.Format(time.RFC3339)
 		}
-		out = append(out, parts...)
+		if err := s.Store.InsertOccupancyRawEventDetailed(ctx, propertyID, runID, src.SourceType, pe.UID, pe.RawICS, pe.Summary,
+			pe.StartUTC.Format(time.RFC3339), pe.EndUTC.Format(time.RFC3339), pe.Sequence, pe.ICalStatus, dtstamp, pe.ContentHash); err != nil {
+			return s.failRunDetailed(ctx, runID, err.Error(), &res.StatusCode, counters)
+		}
 	}
-	return out, nil
+
+	blocks := make([]store.DesiredBlock, 0, len(parsedRes.Events))
+	for _, pe := range parsedRes.Events {
+		blocks = append(blocks, store.DesiredBlock{
+			UID:         pe.UID,
+			Start:       pe.StartUTC,
+			End:         pe.EndUTC,
+			Summary:     pe.Summary,
+			ContentHash: pe.ContentHash,
+			Cancelled:   pe.Cancelled,
+			DTStamp:     pe.DTStampUTC,
+		})
+	}
+
+	if err := s.Store.ReconcileBookingICSSync(ctx, propertyID, src.SourceType, blocks, s.now(), counters); err != nil {
+		return s.failRunDetailed(ctx, runID, err.Error(), &res.StatusCode, counters)
+	}
+
+	// PMS_19 §11B: sync-driven deletions are attributable to the sync run.
+	if counters.RepresentationsDeletedFromSource > 0 {
+		_ = s.Store.InsertAuditLog(ctx, nil, "occupancy_ics_row_deleted_from_source", "occupancy_sync_run",
+			fmt.Sprintf("%d", runID), fmt.Sprintf("deleted=%d named=%d", counters.RepresentationsDeletedFromSource, counters.NamedStaysDeletedFromSource), "sync", url)
+	}
+
+	return s.Store.FinishOccupancySyncRunDetailed(ctx, runID, "success", nil, &res.StatusCode, counters)
 }
 
-func (s *Service) splitBookingUnavailableEventIfNeeded(ctx context.Context, propertyID int64, ev *ParsedEvent) ([]*ParsedEvent, error) {
-	if ev == nil || ev.Cancelled || !isBookingUnavailableSummary(ev.Summary) {
-		return []*ParsedEvent{ev}, nil
-	}
-	start := ev.StartUTC.UTC()
-	end := ev.EndUTC.UTC()
-	if start.Hour() != 0 || start.Minute() != 0 || start.Second() != 0 || start.Nanosecond() != 0 {
-		return []*ParsedEvent{ev}, nil
-	}
-	if end.Hour() != 0 || end.Minute() != 0 || end.Second() != 0 || end.Nanosecond() != 0 {
-		return []*ParsedEvent{ev}, nil
-	}
-	days := int(end.Sub(start).Hours() / 24)
-	if days <= 1 || !start.AddDate(0, 0, days).Equal(end) {
-		return []*ParsedEvent{ev}, nil
-	}
-	manualSplit, err := s.Store.HasManualSplitForSourceEventUID(ctx, propertyID, ev.UID)
-	if err != nil {
-		return nil, fmt.Errorf("check_manual_split: %w", err)
-	}
-	if manualSplit {
-		return nil, nil
-	}
-	shouldSplit, err := s.Store.HasShorterGeneratedNukiCodeForSourceUID(ctx, propertyID, ev.UID, start, end)
-	if err != nil {
-		return nil, fmt.Errorf("check_split_booking_unavailable: %w", err)
-	}
-	if !shouldSplit {
-		return []*ParsedEvent{ev}, nil
-	}
-	out := make([]*ParsedEvent, 0, days)
-	for i := 0; i < days; i++ {
-		partStart := start.AddDate(0, 0, i)
-		partEnd := partStart.AddDate(0, 0, 1)
-		part := *ev
-		part.UID = fmt.Sprintf("%s#night-%s", ev.UID, partStart.Format("20060102"))
-		part.StartUTC = partStart
-		part.EndUTC = partEnd
-		part.ContentHash = hashOccupancy(part.UID, part.StartUTC, part.EndUTC, part.Summary, part.Sequence, part.ICalStatus)
-		out = append(out, &part)
-	}
-	return out, nil
-}
-
-func (s *Service) failRun(ctx context.Context, runID int64, msg string, httpStatus *int, seen, upserted int) error {
-	_ = s.Store.FinishOccupancySyncRun(ctx, runID, "failure", &msg, httpStatus, seen, upserted)
+func (s *Service) failRun(ctx context.Context, runID int64, msg string, httpStatus *int) error {
+	_ = s.Store.FinishOccupancySyncRun(ctx, runID, "failure", &msg, httpStatus, 0, 0)
 	return fmt.Errorf("%s", msg)
 }
 
-func ptrStr(s string) *string { return &s }
+func (s *Service) failRunDetailed(ctx context.Context, runID int64, msg string, httpStatus *int, c *store.SyncCounters) error {
+	_ = s.Store.FinishOccupancySyncRunDetailed(ctx, runID, "failure", &msg, httpStatus, c)
+	return fmt.Errorf("%s", msg)
+}
 
 func summarizeParseErrors(parsedCount, seenCount int, errs []string) string {
 	shown := errs
 	if len(shown) > maxParseErrorsShown {
 		shown = shown[:maxParseErrorsShown]
 	}
-	msg := fmt.Sprintf("parsed %d/%d event(s); %d skipped: %s", parsedCount, seenCount, len(errs), strings.Join(shown, " | "))
+	msg := fmt.Sprintf("parsed %d/%d event(s); %d skipped (no mutation applied): %s", parsedCount, seenCount, len(errs), strings.Join(shown, " | "))
 	if len(errs) > maxParseErrorsShown {
 		msg += " | ..."
 	}

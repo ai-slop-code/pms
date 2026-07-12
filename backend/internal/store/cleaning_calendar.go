@@ -36,6 +36,9 @@ type CleaningCalendarEvent struct {
 	ID               int64
 	PropertyID       int64
 	OccupancyID      int64
+	UpstreamEventUID sql.NullString
+	CheckoutDate     sql.NullString
+	CleaningKind     string
 	GoogleCalendarID string
 	GoogleEventID    sql.NullString
 	CleaningDate     string
@@ -51,6 +54,16 @@ type CleaningCalendarEvent struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
+
+// PMS_19 §5.4 cleaning_kind values.
+const (
+	CleaningKindProvisionalBlock = "provisional_block"
+	CleaningKindNamedStay        = "named_stay"
+)
+
+const cleaningCalendarColumns = `id, property_id, occupancy_id, upstream_event_uid, checkout_date, cleaning_kind,
+	google_calendar_id, google_event_id, cleaning_date, starts_at, ends_at,
+	same_day_arrival, next_occupancy_id, title, status, warning_message, error_message, last_synced_at, created_at, updated_at`
 
 type CleaningCalendarSyncRun struct {
 	ID             int64
@@ -193,11 +206,30 @@ func (s *Store) ListPropertyIDsWithGoogleCleaningSync(ctx context.Context) ([]in
 	return ids, rows.Err()
 }
 
+// ListCleaningEligibleOccupancies returns cleaning-eligible occupancies that
+// overlap [fromUTC, toUTC). PMS_19 §5.4 needs the whole block (not just its end)
+// so every provisional per-night checkout inside the window is covered.
+func (s *Store) ListCleaningEligibleOccupancies(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time) ([]Occupancy, error) {
+	q := occupancySelectColumns + `
+		FROM occupancies
+		WHERE property_id = ?
+		  AND status IN ('active', 'updated')
+		  AND superseded_at IS NULL
+		  AND (closure_state IS NULL OR closure_state <> 'closed')
+		  AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
+		  AND cleaning_calendar_excluded = 0
+		  AND start_at < ?
+		  AND end_at > ?
+		ORDER BY end_at ASC`
+	return s.scanOccupancies(ctx, q, propertyID, toUTC.UTC().Format(time.RFC3339), fromUTC.UTC().Format(time.RFC3339))
+}
+
 func (s *Store) ListCleaningCalendarCheckoutCandidates(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time) ([]Occupancy, error) {
 	q := occupancySelectColumns + `
 		FROM occupancies
 		WHERE property_id = ?
 		  AND status IN ('active', 'updated')
+		  AND superseded_at IS NULL
 		  AND (closure_state IS NULL OR closure_state <> 'closed')
 		  AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
 		  AND cleaning_calendar_excluded = 0
@@ -213,6 +245,7 @@ func (s *Store) FindCleaningCalendarSameDayArrival(ctx context.Context, property
 		WHERE property_id = ?
 		  AND id <> ?
 		  AND status IN ('active', 'updated')
+		  AND superseded_at IS NULL
 		  AND (closure_state IS NULL OR closure_state <> 'closed')
 		  AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
 		  AND start_at >= ?
@@ -255,12 +288,118 @@ func (s *Store) UpsertCleaningCalendarEvent(ctx context.Context, event *Cleaning
 	if event.LastSyncedAt.Valid {
 		lastSynced = event.LastSyncedAt.Time.UTC().Format(time.RFC3339)
 	}
+	kind := event.CleaningKind
+	if kind == "" {
+		kind = CleaningKindNamedStay
+	}
+	// occupancy_id is no longer unique (PMS_19 §5.4 provisional per-night), so
+	// this occupancy-keyed helper does a manual update-or-insert.
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE cleaning_calendar_events SET
+			upstream_event_uid = ?, checkout_date = ?, cleaning_kind = ?,
+			google_calendar_id = ?, google_event_id = COALESCE(?, google_event_id),
+			cleaning_date = ?, starts_at = ?, ends_at = ?, same_day_arrival = ?,
+			next_occupancy_id = ?, title = ?, status = ?, warning_message = ?, error_message = ?,
+			last_synced_at = COALESCE(?, last_synced_at), updated_at = ?
+		WHERE property_id = ? AND occupancy_id = ?`,
+		nullStr(event.UpstreamEventUID), nullStr(event.CheckoutDate), kind,
+		event.GoogleCalendarID, googleEventID,
+		event.CleaningDate, event.StartsAt.UTC().Format(time.RFC3339), event.EndsAt.UTC().Format(time.RFC3339), sameDay,
+		next, event.Title, event.Status, warning, errMsg, lastSynced, now,
+		event.PropertyID, event.OccupancyID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		if _, err := s.DB.ExecContext(ctx, `
+			INSERT INTO cleaning_calendar_events (
+				property_id, occupancy_id, upstream_event_uid, checkout_date, cleaning_kind,
+				google_calendar_id, google_event_id, cleaning_date, starts_at, ends_at,
+				same_day_arrival, next_occupancy_id, title, status, warning_message, error_message, last_synced_at, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			event.PropertyID, event.OccupancyID, nullStr(event.UpstreamEventUID), nullStr(event.CheckoutDate), kind,
+			event.GoogleCalendarID, googleEventID, event.CleaningDate,
+			event.StartsAt.UTC().Format(time.RFC3339), event.EndsAt.UTC().Format(time.RFC3339), sameDay, next, event.Title,
+			event.Status, warning, errMsg, lastSynced, now, now); err != nil {
+			return nil, err
+		}
+	}
+	return s.GetCleaningCalendarEventByOccupancy(ctx, event.PropertyID, event.OccupancyID)
+}
+
+func (s *Store) GetCleaningCalendarEventByOccupancy(ctx context.Context, propertyID, occupancyID int64) (*CleaningCalendarEvent, error) {
+	rows, err := s.scanCleaningCalendarEvents(ctx, `
+		SELECT `+cleaningCalendarColumns+`
+		FROM cleaning_calendar_events
+		WHERE property_id = ? AND occupancy_id = ?
+		ORDER BY checkout_date ASC, id ASC`, propertyID, occupancyID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return &rows[0], nil
+}
+
+// GetCleaningCalendarEventByIdentity looks up an event by the PMS_19 §5.4
+// identity key so per-night provisional events stay idempotent.
+func (s *Store) GetCleaningCalendarEventByIdentity(ctx context.Context, propertyID int64, upstreamUID, checkoutDate, cleaningKind string) (*CleaningCalendarEvent, error) {
+	rows, err := s.scanCleaningCalendarEvents(ctx, `
+		SELECT `+cleaningCalendarColumns+`
+		FROM cleaning_calendar_events
+		WHERE property_id = ? AND upstream_event_uid = ? AND checkout_date = ? AND cleaning_kind = ?`,
+		propertyID, upstreamUID, checkoutDate, cleaningKind)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return &rows[0], nil
+}
+
+// UpsertCleaningCalendarEventByIdentity upserts on the identity key so a block
+// can own several provisional per-night events without collisions (§5.4).
+func (s *Store) UpsertCleaningCalendarEventByIdentity(ctx context.Context, event *CleaningCalendarEvent) (*CleaningCalendarEvent, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	sameDay := 0
+	if event.SameDayArrival {
+		sameDay = 1
+	}
+	var next interface{}
+	if event.NextOccupancyID.Valid {
+		next = event.NextOccupancyID.Int64
+	}
+	var googleEventID interface{}
+	if event.GoogleEventID.Valid && strings.TrimSpace(event.GoogleEventID.String) != "" {
+		googleEventID = strings.TrimSpace(event.GoogleEventID.String)
+	}
+	var warning interface{}
+	if event.WarningMessage.Valid && strings.TrimSpace(event.WarningMessage.String) != "" {
+		warning = strings.TrimSpace(event.WarningMessage.String)
+	}
+	var errMsg interface{}
+	if event.ErrorMessage.Valid && strings.TrimSpace(event.ErrorMessage.String) != "" {
+		errMsg = strings.TrimSpace(event.ErrorMessage.String)
+	}
+	var lastSynced interface{}
+	if event.LastSyncedAt.Valid {
+		lastSynced = event.LastSyncedAt.Time.UTC().Format(time.RFC3339)
+	}
+	kind := event.CleaningKind
+	if kind == "" {
+		kind = CleaningKindNamedStay
+	}
 	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO cleaning_calendar_events (
-			property_id, occupancy_id, google_calendar_id, google_event_id, cleaning_date, starts_at, ends_at,
+			property_id, occupancy_id, upstream_event_uid, checkout_date, cleaning_kind,
+			google_calendar_id, google_event_id, cleaning_date, starts_at, ends_at,
 			same_day_arrival, next_occupancy_id, title, status, warning_message, error_message, last_synced_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(property_id, occupancy_id) DO UPDATE SET
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(property_id, upstream_event_uid, checkout_date, cleaning_kind)
+			WHERE upstream_event_uid IS NOT NULL AND checkout_date IS NOT NULL DO UPDATE SET
+			occupancy_id = excluded.occupancy_id,
 			google_calendar_id = excluded.google_calendar_id,
 			google_event_id = COALESCE(excluded.google_event_id, cleaning_calendar_events.google_event_id),
 			cleaning_date = excluded.cleaning_date,
@@ -274,34 +413,19 @@ func (s *Store) UpsertCleaningCalendarEvent(ctx context.Context, event *Cleaning
 			error_message = excluded.error_message,
 			last_synced_at = COALESCE(excluded.last_synced_at, cleaning_calendar_events.last_synced_at),
 			updated_at = excluded.updated_at`,
-		event.PropertyID, event.OccupancyID, event.GoogleCalendarID, googleEventID, event.CleaningDate,
+		event.PropertyID, event.OccupancyID, nullStr(event.UpstreamEventUID), nullStr(event.CheckoutDate), kind,
+		event.GoogleCalendarID, googleEventID, event.CleaningDate,
 		event.StartsAt.UTC().Format(time.RFC3339), event.EndsAt.UTC().Format(time.RFC3339), sameDay, next, event.Title,
 		event.Status, warning, errMsg, lastSynced, now, now)
 	if err != nil {
 		return nil, err
 	}
-	return s.GetCleaningCalendarEventByOccupancy(ctx, event.PropertyID, event.OccupancyID)
-}
-
-func (s *Store) GetCleaningCalendarEventByOccupancy(ctx context.Context, propertyID, occupancyID int64) (*CleaningCalendarEvent, error) {
-	rows, err := s.scanCleaningCalendarEvents(ctx, `
-		SELECT id, property_id, occupancy_id, google_calendar_id, google_event_id, cleaning_date, starts_at, ends_at,
-		       same_day_arrival, next_occupancy_id, title, status, warning_message, error_message, last_synced_at, created_at, updated_at
-		FROM cleaning_calendar_events
-		WHERE property_id = ? AND occupancy_id = ?`, propertyID, occupancyID)
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, sql.ErrNoRows
-	}
-	return &rows[0], nil
+	return s.GetCleaningCalendarEventByIdentity(ctx, event.PropertyID, nullOrString(event.UpstreamEventUID), nullOrString(event.CheckoutDate), kind)
 }
 
 func (s *Store) GetCleaningCalendarEvent(ctx context.Context, propertyID, eventID int64) (*CleaningCalendarEvent, error) {
 	rows, err := s.scanCleaningCalendarEvents(ctx, `
-		SELECT id, property_id, occupancy_id, google_calendar_id, google_event_id, cleaning_date, starts_at, ends_at,
-		       same_day_arrival, next_occupancy_id, title, status, warning_message, error_message, last_synced_at, created_at, updated_at
+		SELECT `+cleaningCalendarColumns+`
 		FROM cleaning_calendar_events
 		WHERE property_id = ? AND id = ?`, propertyID, eventID)
 	if err != nil {
@@ -315,8 +439,7 @@ func (s *Store) GetCleaningCalendarEvent(ctx context.Context, propertyID, eventI
 
 func (s *Store) ListCleaningCalendarEventsForMonth(ctx context.Context, propertyID int64, month string) ([]CleaningCalendarEvent, error) {
 	return s.scanCleaningCalendarEvents(ctx, `
-		SELECT id, property_id, occupancy_id, google_calendar_id, google_event_id, cleaning_date, starts_at, ends_at,
-		       same_day_arrival, next_occupancy_id, title, status, warning_message, error_message, last_synced_at, created_at, updated_at
+		SELECT `+cleaningCalendarColumns+`
 		FROM cleaning_calendar_events
 		WHERE property_id = ? AND substr(cleaning_date, 1, 7) = ?
 		ORDER BY cleaning_date ASC, starts_at ASC`, propertyID, month)
@@ -324,8 +447,7 @@ func (s *Store) ListCleaningCalendarEventsForMonth(ctx context.Context, property
 
 func (s *Store) ListActiveCleaningCalendarEvents(ctx context.Context, propertyID int64) ([]CleaningCalendarEvent, error) {
 	return s.scanCleaningCalendarEvents(ctx, `
-		SELECT id, property_id, occupancy_id, google_calendar_id, google_event_id, cleaning_date, starts_at, ends_at,
-		       same_day_arrival, next_occupancy_id, title, status, warning_message, error_message, last_synced_at, created_at, updated_at
+		SELECT `+cleaningCalendarColumns+`
 		FROM cleaning_calendar_events
 		WHERE property_id = ? AND status <> 'removed'
 		ORDER BY cleaning_date ASC, starts_at ASC`, propertyID)
@@ -430,7 +552,8 @@ func (s *Store) scanCleaningCalendarEvents(ctx context.Context, q string, args .
 		var starts, ends, created, updated string
 		var sameDay int
 		var lastSynced sql.NullString
-		if err := rows.Scan(&row.ID, &row.PropertyID, &row.OccupancyID, &row.GoogleCalendarID, &row.GoogleEventID, &row.CleaningDate, &starts, &ends,
+		if err := rows.Scan(&row.ID, &row.PropertyID, &row.OccupancyID, &row.UpstreamEventUID, &row.CheckoutDate, &row.CleaningKind,
+			&row.GoogleCalendarID, &row.GoogleEventID, &row.CleaningDate, &starts, &ends,
 			&sameDay, &row.NextOccupancyID, &row.Title, &row.Status, &row.WarningMessage, &row.ErrorMessage, &lastSynced, &created, &updated); err != nil {
 			return nil, err
 		}

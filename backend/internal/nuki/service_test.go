@@ -102,13 +102,14 @@ func upsertOcc(t *testing.T, st *store.Store, pid int64, uid, status string, sta
 		t.Fatal(err)
 	}
 	err = st.UpsertOccupancy(context.Background(), &store.Occupancy{
-		PropertyID:     pid,
-		SourceType:     "ics_booking",
-		SourceEventUID: uid,
-		StartAt:        start,
-		EndAt:          end,
-		Status:         status,
-		ContentHash:    uid + "-" + status,
+		PropertyID:       pid,
+		SourceType:       "ics_booking",
+		SourceEventUID:   uid,
+		StartAt:          start,
+		EndAt:            end,
+		Status:           status,
+		ContentHash:      uid + "-" + status,
+		GuestDisplayName: sql.NullString{String: "Guest " + uid, Valid: true},
 	}, runID)
 	if err != nil {
 		t.Fatal(err)

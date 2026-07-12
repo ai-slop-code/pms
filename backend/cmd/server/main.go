@@ -75,6 +75,9 @@ func main() {
 		log.Printf("attachment migration: %v", err)
 	}
 	st := &store.Store{DB: db}
+	if err := st.BackfillUpstreamOwnership(context.Background()); err != nil {
+		log.Printf("occupancy upstream-ownership backfill: %v", err)
+	}
 	if cfg.MasterKey != "" {
 		box, err := secretbox.New(cfg.MasterKey)
 		if err != nil {

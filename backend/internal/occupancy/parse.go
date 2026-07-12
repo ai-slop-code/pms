@@ -22,6 +22,7 @@ type ParsedEvent struct {
 	Cancelled   bool
 	RawICS      string
 	ContentHash string
+	DTStampUTC  time.Time
 }
 
 type ParseResult struct {
@@ -122,6 +123,7 @@ func parseVEvent(ev *ics.VEvent) (*ParsedEvent, error) {
 	if uid == "" {
 		uid = fallbackEventUID(start, end, summary, seq, st)
 	}
+	dtstamp := parseDtstampUTC(ev)
 	raw := ev.Serialize(serialCfg)
 	h := hashOccupancy(uid, start, end, summary, seq, st)
 	return &ParsedEvent{
@@ -134,7 +136,24 @@ func parseVEvent(ev *ics.VEvent) (*ParsedEvent, error) {
 		Cancelled:   cancelled,
 		RawICS:      raw,
 		ContentHash: h,
+		DTStampUTC:  dtstamp,
 	}, nil
+}
+
+// parseDtstampUTC extracts DTSTAMP (last-modified marker) as UTC. Returns the
+// zero time when absent or unparseable; callers must treat zero as "unknown".
+func parseDtstampUTC(ev *ics.VEvent) time.Time {
+	p := ev.GetProperty(ics.ComponentPropertyDtstamp)
+	if p == nil {
+		return time.Time{}
+	}
+	v := strings.TrimSpace(p.Value)
+	for _, layout := range []string{"20060102T150405Z", "20060102T150405"} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 func fallbackEventUID(start, end time.Time, summary string, seq int, status string) string {

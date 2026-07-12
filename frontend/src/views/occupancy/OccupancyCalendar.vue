@@ -11,7 +11,7 @@ import UiTable from '@/components/ui/UiTable.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import { hasCleaningCalendarExclusion, stayOutcomeLabel, stayOutcomeTone } from './closure'
 import { parseMonthKey } from '@/utils/month'
-import { nightsBetween, nightsCount } from './status'
+import { nightsCount, activeNights } from './status'
 import type { Occupancy as Occ } from '@/api/types/occupancy'
 
 const props = defineProps<{
@@ -55,8 +55,8 @@ const calendarCells = computed<CalendarCell[]>(() => {
     let cleaningExcludedCount = 0
     let stayCount = 0
     for (const o of props.occupancies) {
-      if (o.status === 'deleted_from_source') continue
-      const inNight = nightsBetween(o.start_at, o.end_at).has(key)
+      if (o.status === 'deleted_from_source' || o.superseded) continue
+      const inNight = activeNights(o).has(key)
       if (inNight) {
         stayCount++
         if (hasCleaningCalendarExclusion(o)) cleaningExcludedCount++
@@ -77,8 +77,8 @@ const calendarCells = computed<CalendarCell[]>(() => {
 
 function staysOnDay(dateKey: string): Occ[] {
   return props.occupancies.filter((o) => {
-    if (o.status === 'deleted_from_source') return false
-    return nightsBetween(o.start_at, o.end_at).has(dateKey)
+    if (o.status === 'deleted_from_source' || o.superseded) return false
+    return activeNights(o).has(dateKey)
   })
 }
 
@@ -116,7 +116,7 @@ function cellAriaLabel(c: CalendarCell): string {
 
 const staysInMonth = computed(() =>
   props.occupancies
-    .filter((o) => o.status !== 'deleted_from_source')
+    .filter((o) => o.status !== 'deleted_from_source' && !o.superseded)
     .map((o) => ({
       id: o.id,
       summary: o.raw_summary || 'Stay',
@@ -142,8 +142,8 @@ const monthNightSummary = computed(() => {
     let occupied = false
     let closed = false
     for (const o of props.occupancies) {
-      if (o.status === 'deleted_from_source' || o.status === 'cancelled') continue
-      if (!nightsBetween(o.start_at, o.end_at).has(key)) continue
+      if (o.status === 'deleted_from_source' || o.status === 'cancelled' || o.superseded) continue
+      if (!activeNights(o).has(key)) continue
       if (o.closure_state === 'closed') closed = true
       else occupied = true // active or external_sale both count as sold per PMS_14 §4
     }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -47,17 +48,25 @@ func extractExportToken(r *http.Request) (string, exportTokenSource) {
 }
 
 type occupancyRow struct {
-	ID             int64  `json:"id"`
-	PropertyID     int64  `json:"property_id"`
-	SourceType     string `json:"source_type"`
-	SourceEventUID string `json:"source_event_uid"`
-	StartAt        string `json:"start_at"`
-	EndAt          string `json:"end_at"`
-	Status         string `json:"status"`
-	RawSummary     string `json:"raw_summary"`
-	LastSyncedAt   string `json:"last_synced_at"`
-	ContentHash    string `json:"content_hash"`
-	HasPayoutData  bool   `json:"has_payout_data"`
+	ID               int64  `json:"id"`
+	PropertyID       int64  `json:"property_id"`
+	SourceType       string `json:"source_type"`
+	SourceEventUID   string `json:"source_event_uid"`
+	StartAt          string `json:"start_at"`
+	EndAt            string `json:"end_at"`
+	Status           string `json:"status"`
+	RawSummary       string `json:"raw_summary"`
+	GuestDisplayName string `json:"guest_display_name"`
+	LastSyncedAt     string `json:"last_synced_at"`
+	LastSyncRunID    *int64 `json:"last_sync_run_id,omitempty"`
+	ContentHash      string `json:"content_hash"`
+	HasPayoutData    bool   `json:"has_payout_data"`
+	// PMS_19 durable upstream identity + night-level truth.
+	UpstreamSourceType *string  `json:"upstream_source_type,omitempty"`
+	UpstreamEventUID   *string  `json:"upstream_event_uid,omitempty"`
+	RepresentationKind *string  `json:"representation_kind,omitempty"`
+	CoveredNights      []string `json:"covered_nights"`
+	Superseded         bool     `json:"superseded"`
 	// Closure / external-sale labelling (PMS_14). NULL JSON omitted.
 	ClosureState                     *string `json:"closure_state,omitempty"`
 	ClosureReason                    *string `json:"closure_reason,omitempty"`
@@ -115,15 +124,19 @@ type occupancyRunsResponse struct {
 }
 
 type occupancySyncRunRow struct {
-	ID                  int64   `json:"id"`
-	StartedAt           string  `json:"started_at"`
-	FinishedAt          *string `json:"finished_at,omitempty"`
-	Status              string  `json:"status"`
-	ErrorMessage        *string `json:"error_message,omitempty"`
-	EventsSeen          int     `json:"events_seen"`
-	OccupanciesUpserted int     `json:"occupancies_upserted"`
-	HTTPStatus          *int    `json:"http_status,omitempty"`
-	Trigger             string  `json:"trigger"`
+	ID                               int64   `json:"id"`
+	StartedAt                        string  `json:"started_at"`
+	FinishedAt                       *string `json:"finished_at,omitempty"`
+	Status                           string  `json:"status"`
+	ErrorMessage                     *string `json:"error_message,omitempty"`
+	EventsSeen                       int     `json:"events_seen"`
+	OccupanciesUpserted              int     `json:"occupancies_upserted"`
+	HTTPStatus                       *int    `json:"http_status,omitempty"`
+	Trigger                          string  `json:"trigger"`
+	DeletionEnabled                  bool    `json:"deletion_enabled"`
+	RepresentationsDeletedFromSource int     `json:"representations_deleted_from_source"`
+	DuplicateNightsResolved          int     `json:"duplicate_nights_resolved"`
+	NamedStaysDeletedFromSource      int     `json:"named_stays_deleted_from_source"`
 }
 
 func (s *Server) getOccupancyExportPublic(w http.ResponseWriter, r *http.Request) {
@@ -231,7 +244,8 @@ func (s *Server) getOccupancies(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, o.ID)
 	}
 	payoutMap, _ := s.Store.OccupancyIDsWithPayoutData(r.Context(), id, ids)
-	WriteJSON(w, http.StatusOK, occupancyListResponse{Occupancies: occupancyRows(list, payoutMap)})
+	coveredMap, _ := s.Store.CoveredNightsForOccupancies(r.Context(), ids)
+	WriteJSON(w, http.StatusOK, occupancyListResponse{Occupancies: occupancyRows(list, payoutMap, coveredMap)})
 }
 
 func (s *Server) getOccupanciesCalendar(w http.ResponseWriter, r *http.Request) {
@@ -242,10 +256,14 @@ func (s *Server) getOccupanciesCalendar(w http.ResponseWriter, r *http.Request) 
 	s.getOccupancies(w, r)
 }
 
-func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool) []occupancyRow {
+func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool, coveredMap map[int64][]string) []occupancyRow {
 	out := make([]occupancyRow, 0, len(list))
 	for _, o := range list {
 		rs := occupancySummary(o)
+		covered := coveredMap[o.ID]
+		if covered == nil {
+			covered = []string{}
+		}
 		row := occupancyRow{
 			ID:                       o.ID,
 			PropertyID:               o.PropertyID,
@@ -255,10 +273,26 @@ func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool) []occupancy
 			EndAt:                    o.EndAt.UTC().Format(time.RFC3339),
 			Status:                   o.Status,
 			RawSummary:               rs,
+			GuestDisplayName:         nullStringValue(o.GuestDisplayName),
 			LastSyncedAt:             o.LastSyncedAt.UTC().Format(time.RFC3339),
 			ContentHash:              o.ContentHash,
 			HasPayoutData:            payoutMap[o.ID],
 			CleaningCalendarExcluded: o.CleaningCalendarExcluded,
+			CoveredNights:            covered,
+			Superseded:               o.SupersededAt.Valid,
+		}
+		if o.LastSyncRunID.Valid {
+			v := o.LastSyncRunID.Int64
+			row.LastSyncRunID = &v
+		}
+		if o.UpstreamSourceType.Valid {
+			row.UpstreamSourceType = optString(o.UpstreamSourceType.String)
+		}
+		if o.UpstreamEventUID.Valid {
+			row.UpstreamEventUID = optString(o.UpstreamEventUID.String)
+		}
+		if o.RepresentationKind.Valid {
+			row.RepresentationKind = optString(o.RepresentationKind.String)
 		}
 		if o.ClosureState.Valid {
 			row.ClosureState = optString(o.ClosureState.String)
@@ -318,6 +352,13 @@ func occupancyRows(list []store.Occupancy, payoutMap map[int64]bool) []occupancy
 }
 
 func optString(s string) *string { return &s }
+
+func nullStringValue(v sql.NullString) string {
+	if v.Valid {
+		return v.String
+	}
+	return ""
+}
 
 func occupancySummary(o store.Occupancy) string {
 	if o.GuestDisplayName.Valid && o.GuestDisplayName.String != "" {
@@ -394,15 +435,19 @@ func (s *Server) listOccupancySyncRuns(w http.ResponseWriter, r *http.Request) {
 			hs = &v
 		}
 		out = append(out, occupancySyncRunRow{
-			ID:                  run.ID,
-			StartedAt:           run.StartedAt.UTC().Format(time.RFC3339),
-			FinishedAt:          fin,
-			Status:              run.Status,
-			ErrorMessage:        em,
-			EventsSeen:          run.EventsSeen,
-			OccupanciesUpserted: run.OccupanciesUpserted,
-			HTTPStatus:          hs,
-			Trigger:             run.Trigger,
+			ID:                               run.ID,
+			StartedAt:                        run.StartedAt.UTC().Format(time.RFC3339),
+			FinishedAt:                       fin,
+			Status:                           run.Status,
+			ErrorMessage:                     em,
+			EventsSeen:                       run.EventsSeen,
+			OccupanciesUpserted:              run.OccupanciesUpserted,
+			HTTPStatus:                       hs,
+			Trigger:                          run.Trigger,
+			DeletionEnabled:                  run.DeletionEnabled,
+			RepresentationsDeletedFromSource: run.RepresentationsDeletedFromSource,
+			DuplicateNightsResolved:          run.DuplicateNightsResolved,
+			NamedStaysDeletedFromSource:      run.NamedStaysDeletedFromSource,
 		})
 	}
 	WriteJSON(w, http.StatusOK, occupancyRunsResponse{Runs: out, Page: page, Limit: limit, HasMore: hasMore})

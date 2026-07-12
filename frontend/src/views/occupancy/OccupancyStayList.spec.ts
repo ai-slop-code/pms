@@ -104,4 +104,37 @@ describe('OccupancyStayList outcomes', () => {
 
     expect(w.findAll('button').filter((b) => b.text() === 'Do not send cleaning event')).toHaveLength(1)
   })
+
+  it('hides deleted and superseded rows from the default view (PMS_19 §8)', () => {
+    const w = mount(OccupancyStayList, {
+      props: {
+        month: '2026-08',
+        statusFilter: '',
+        occupancies: [
+          occupancy({ id: 1, source_event_uid: 'active-uid' }),
+          occupancy({ id: 2, source_event_uid: 'deleted-uid', status: 'deleted_from_source' }),
+          occupancy({ id: 3, source_event_uid: 'superseded-uid', superseded: true }),
+        ],
+      },
+    })
+    expect(w.text()).toContain('active-uid')
+    expect(w.text()).not.toContain('deleted-uid')
+    expect(w.text()).not.toContain('superseded-uid')
+  })
+
+  it('shows only superseded rows under the superseded filter', () => {
+    const w = mount(OccupancyStayList, {
+      props: {
+        month: '2026-08',
+        statusFilter: 'superseded',
+        occupancies: [
+          occupancy({ id: 1, source_event_uid: 'active-uid' }),
+          occupancy({ id: 3, source_event_uid: 'superseded-uid', superseded: true }),
+        ],
+      },
+    })
+    expect(w.text()).toContain('superseded-uid')
+    expect(w.text()).toContain('Superseded')
+    expect(w.text()).not.toContain('active-uid')
+  })
 })

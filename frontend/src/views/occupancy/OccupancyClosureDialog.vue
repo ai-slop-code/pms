@@ -16,6 +16,10 @@ const props = defineProps<{
   mode: Mode
   /** Stay summary shown in the header (e.g. "Apr 12 → Apr 14, Booking Block"). */
   stayLabel?: string
+  checkIn?: string
+  checkOut?: string
+  minDate?: string
+  maxDate?: string
   busy?: boolean
   errorMessage?: string
 }>()
@@ -29,6 +33,8 @@ export interface SubmitPayload {
   reason: string
   // close-only:
   category?: string
+  check_in?: string
+  check_out?: string
   // external-sale-only:
   net_amount_cents?: number
   currency?: string
@@ -40,6 +46,8 @@ const category = ref('')
 const amountStr = ref('')
 const currency = ref('EUR')
 const channel = ref('')
+const checkIn = ref('')
+const checkOut = ref('')
 
 watch(
   () => props.open,
@@ -50,12 +58,24 @@ watch(
       amountStr.value = ''
       currency.value = 'EUR'
       channel.value = ''
+      checkIn.value = props.checkIn || ''
+      checkOut.value = props.checkOut || ''
+    }
+  },
+)
+
+watch(
+  () => [props.checkIn, props.checkOut],
+  ([ci, co]) => {
+    if (props.open) {
+      checkIn.value = ci || ''
+      checkOut.value = co || ''
     }
   },
 )
 
 const title = computed(() =>
-  props.mode === 'close' ? 'Mark night as closed' : 'Mark night as externally sold',
+  props.mode === 'close' ? 'Mark as closed / no guest' : 'Mark night as externally sold',
 )
 
 const amountCents = computed(() => {
@@ -67,6 +87,9 @@ const amountCents = computed(() => {
 const submitDisabled = computed(() => {
   if (props.busy) return true
   if (reason.value.length > 500) return true
+  if (props.mode === 'close' && checkIn.value && checkOut.value && checkOut.value <= checkIn.value) {
+    return true
+  }
   if (props.mode === 'external_sale') {
     if (amountCents.value === null) return true
   }
@@ -79,6 +102,8 @@ function onSubmit() {
     emit('submit', {
       reason: reason.value.trim(),
       category: category.value || undefined,
+      check_in: checkIn.value || undefined,
+      check_out: checkOut.value || undefined,
     })
     return
   }
@@ -99,6 +124,10 @@ function onSubmit() {
 
     <div class="closure-dialog__fields">
       <template v-if="props.mode === 'close'">
+        <div class="closure-dialog__grid">
+          <UiInput v-model="checkIn" type="date" label="First night" :min="props.minDate" :max="props.maxDate" />
+          <UiInput v-model="checkOut" type="date" label="Check-out" :min="checkIn" :max="props.maxDate" />
+        </div>
         <UiSelect v-model="category" label="Category (optional)">
           <option value="">—</option>
           <option v-for="c in closureCategories" :key="c.value" :value="c.value">{{ c.label }}</option>
@@ -155,6 +184,11 @@ function onSubmit() {
   display: grid;
   gap: var(--space-3);
 }
+.closure-dialog__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
 .closure-dialog__error {
   margin-top: var(--space-3);
   color: var(--color-text-danger);
@@ -180,5 +214,10 @@ function onSubmit() {
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   align-self: flex-end;
+}
+@media (max-width: 767.98px) {
+  .closure-dialog__grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

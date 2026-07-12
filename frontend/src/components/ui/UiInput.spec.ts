@@ -22,6 +22,15 @@ describe('UiInput', () => {
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['hello'])
   })
 
+  it('forwards min/max to the input (date range bounds)', () => {
+    const wrapper = mount(UiInput, {
+      props: { modelValue: '', label: 'D', type: 'date', min: '2026-07-09', max: '2026-07-11' },
+    })
+    const input = wrapper.find('input')
+    expect(input.attributes('min')).toBe('2026-07-09')
+    expect(input.attributes('max')).toBe('2026-07-11')
+  })
+
   it('renders help text with aria-describedby linkage', () => {
     const wrapper = mount(UiInput, {
       props: { modelValue: '', label: 'L', help: 'Some help' },

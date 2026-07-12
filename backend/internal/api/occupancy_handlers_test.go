@@ -29,7 +29,7 @@ func TestExtractExportToken(t *testing.T) {
 			wantSrc:   exportTokenSourceHeader,
 		},
 		{
-			name:    "query is rejected (PMS_11/T2.6 removed legacy path)",
+			name:     "query is rejected (PMS_11/T2.6 removed legacy path)",
 			rawQuery: "token=legacy",
 			wantSrc:  exportTokenSourceNone,
 		},

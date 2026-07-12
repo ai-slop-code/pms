@@ -15,6 +15,8 @@ interface Props {
   id?: string
   name?: string
   inputmode?: 'none' | 'text' | 'tel' | 'url' | 'email' | 'numeric' | 'decimal' | 'search'
+  min?: string | number
+  max?: string | number
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -31,6 +33,8 @@ const props = withDefaults(defineProps<Props>(), {
   id: '',
   name: '',
   inputmode: undefined,
+  min: undefined,
+  max: undefined,
 })
 
 const emit = defineEmits<{
@@ -72,6 +76,8 @@ function onInput(e: Event) {
       :autocomplete="autocomplete || undefined"
       :name="name || undefined"
       :inputmode="inputmode"
+      :min="min ?? undefined"
+      :max="max ?? undefined"
       :aria-invalid="!!error || undefined"
       :aria-describedby="describedBy"
       @input="onInput"

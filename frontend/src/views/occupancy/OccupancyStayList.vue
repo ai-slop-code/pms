@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import UiToolbar from '@/components/ui/UiToolbar.vue'
 import UiInput from '@/components/ui/UiInput.vue'
@@ -22,7 +23,7 @@ import {
 } from './closure'
 import type { Occupancy as Occ } from '@/api/types/occupancy'
 
-defineProps<{
+const props = defineProps<{
   month: string
   statusFilter: string
   occupancies: Occ[]
@@ -43,6 +44,21 @@ const emit = defineEmits<{
   excludeCleaningCalendar: [occ: Occ]
   includeCleaningCalendar: [occ: Occ]
 }>()
+
+// PMS_19 §8: the default active stay list must not mix in deleted or superseded
+// rows. They stay available behind the "Deleted from source" / "Superseded"
+// filters for audit.
+const visibleOccupancies = computed<Occ[]>(() => {
+  const f = props.statusFilter
+  return props.occupancies.filter((o) => {
+    if (f === 'superseded') return !!o.superseded
+    if (f === 'deleted_from_source') return o.status === 'deleted_from_source'
+    if (f === 'cancelled') return o.status === 'cancelled'
+    if (f === 'active' || f === 'updated') return o.status === f && !o.superseded
+    // Default ("Any"): active representations only.
+    return o.status !== 'deleted_from_source' && o.status !== 'cancelled' && !o.superseded
+  })
+})
 </script>
 
 <template>
@@ -69,6 +85,7 @@ const emit = defineEmits<{
         <option value="updated">Updated</option>
         <option value="cancelled">Cancelled</option>
         <option value="deleted_from_source">Deleted from source</option>
+        <option value="superseded">Superseded (audit)</option>
       </UiSelect>
       <template #trailing>
         <UiButton variant="primary" @click="emit('refresh')">Refresh</UiButton>
@@ -77,7 +94,7 @@ const emit = defineEmits<{
 
     <UiTable
       sticky-header
-      :empty="!occupancies.length"
+      :empty="!visibleOccupancies.length"
       empty-text="No occupancies found. Configure an ICS URL and run occupancy sync."
     >
       <template #head>
@@ -94,11 +111,12 @@ const emit = defineEmits<{
           <th class="actions-col">Actions</th>
         </tr>
       </template>
-      <tr v-for="o in occupancies" :key="o.id" :class="{ 'row-closed': o.closure_state === 'closed' }">
+      <tr v-for="o in visibleOccupancies" :key="o.id" :class="{ 'row-closed': o.closure_state === 'closed' }">
         <td>{{ o.start_at?.slice(0, 10) }}</td>
         <td>{{ o.end_at?.slice(0, 10) }}</td>
         <td>
           <UiBadge :tone="statusTone(o.status)" dot>{{ displayStatus(o.status) }}</UiBadge>
+          <UiBadge v-if="o.superseded" tone="neutral">Superseded</UiBadge>
         </td>
         <td>
           <template v-if="isLabelled(o)">

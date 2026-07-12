@@ -152,6 +152,121 @@ func TestOccupancyClosureLifecycle(t *testing.T) {
 	}
 }
 
+// TestReopenSingleNightClosureRestoresCoverage covers PMS_19 §5.3/§13.12: after
+// closing one night of a multi-night block (a synthetic manual_split closure
+// row), reopening supersedes that synthetic row and returns the night to the
+// unnamed-block aggregate so all source nights are active again.
+func TestReopenSingleNightClosureRestoresCoverage(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, _ := st.CreateUser(ctx, "owner2@test.local", "h", "owner")
+	p, _ := st.CreateProperty(ctx, u.ID, "P2", "UTC", "en")
+
+	uid := "multi@booking.com"
+	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	blk := DesiredBlock{
+		UID:         uid,
+		Start:       time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC),
+		End:         time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC),
+		Summary:     "CLOSED - Not available",
+		ContentHash: "h",
+	}
+	if err := st.ReconcileBookingICSSync(ctx, p.ID, "booking_ics", []DesiredBlock{blk}, now, &SyncCounters{}); err != nil {
+		t.Fatal(err)
+	}
+	agg, err := st.GetOccupancyBySourceEventUID(ctx, p.ID, uid)
+	if err != nil || agg == nil {
+		t.Fatalf("get aggregate: %v", err)
+	}
+
+	// All three nights start active under the aggregate filler.
+	for _, n := range []string{"2026-07-09", "2026-07-10", "2026-07-11"} {
+		if c, _ := st.ActiveOccupancyNightCount(ctx, p.ID, n); c != 1 {
+			t.Fatalf("night %s active count = %d, want 1", n, c)
+		}
+	}
+
+	// Close only 2026-07-10.
+	if err := st.CloseOccupancyNight(ctx, p.ID, agg.ID, u.ID, "2026-07-10", "owner use", "owner_stay"); err != nil {
+		t.Fatalf("close night: %v", err)
+	}
+	// Find the synthetic closure row.
+	rows, err := st.ListOccupanciesForUpstreamUID(ctx, p.ID, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var closureID int64
+	for i := range rows {
+		if rows[i].ClosureState.Valid && rows[i].ClosureState.String == ClosureStateClosed {
+			closureID = rows[i].ID
+		}
+	}
+	if closureID == 0 {
+		t.Fatalf("no synthetic closure row created")
+	}
+
+	// Reopen the closed night.
+	if err := st.ReopenOccupancy(ctx, p.ID, closureID); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+
+	// Every source night must be active again under exactly one representation.
+	for _, n := range []string{"2026-07-09", "2026-07-10", "2026-07-11"} {
+		if c, _ := st.ActiveOccupancyNightCount(ctx, p.ID, n); c != 1 {
+			t.Fatalf("after reopen night %s active count = %d, want 1", n, c)
+		}
+	}
+	// availability metric: 3 nights, no guests.
+	avail, guest, err := st.OccupancyMetricNights(ctx, p.ID, "2026-07-09", "2026-07-12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if avail != 3 || guest != 0 {
+		t.Fatalf("after reopen avail=%d guest=%d want 3/0", avail, guest)
+	}
+}
+
+func TestCloseOccupancyRangeCreatesSingleClosureRepresentation(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	u, _ := st.CreateUser(ctx, "owner3@test.local", "h", "owner")
+	p, _ := st.CreateProperty(ctx, u.ID, "P3", "UTC", "en")
+	uid := "range-close@booking.com"
+	if err := st.ReconcileBookingICSSync(ctx, p.ID, "booking_ics", []DesiredBlock{block(uid, "2026-07-09", "2026-07-13")}, dt("2026-07-01"), &SyncCounters{}); err != nil {
+		t.Fatal(err)
+	}
+	agg, err := st.GetOccupancyBySourceEventUID(ctx, p.ID, uid)
+	if err != nil || agg == nil {
+		t.Fatalf("get aggregate: %v", err)
+	}
+	if err := st.CloseOccupancyRange(ctx, p.ID, agg.ID, u.ID, "2026-07-10", "2026-07-12", "owner use", "owner_stay"); err != nil {
+		t.Fatalf("close range: %v", err)
+	}
+	rows, err := st.ListOccupanciesForUpstreamUID(ctx, p.ID, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closures := 0
+	for _, r := range rows {
+		if r.ClosureState.Valid && r.ClosureState.String == ClosureStateClosed {
+			closures++
+			if !toUTCMidnight(r.StartAt).Equal(dt("2026-07-10")) || !toUTCMidnight(r.EndAt).Equal(dt("2026-07-12")) {
+				t.Fatalf("closure range=%s..%s want 2026-07-10..2026-07-12", r.StartAt, r.EndAt)
+			}
+		}
+	}
+	if closures != 1 {
+		t.Fatalf("closures=%d want 1", closures)
+	}
+	avail, guest, err := st.OccupancyMetricNights(ctx, p.ID, "2026-07-09", "2026-07-13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if avail != 2 || guest != 0 {
+		t.Fatalf("availability/guest=%d/%d want 2/0 (two closed nights excluded)", avail, guest)
+	}
+}
+
 // TestOccupancyClosure_UpsertPreservesLabel verifies that a follow-up
 // ICS resync (UpsertOccupancy on a row that was manually closed) does
 // NOT clear the closure label. This is the key persistence guarantee

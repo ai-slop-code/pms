@@ -186,7 +186,7 @@ async function runCalendarReconcileNow() {
       await loadAll()
       return
     }
-    success.value = `Google cleaning calendar reconciled: seen ${r.stats?.events_seen ?? 0}, upserted ${r.stats?.events_upserted ?? 0}, removed ${r.stats?.events_removed ?? 0}.`
+    success.value = `Google cleaning calendar reconciled: seen ${r.stats?.events_seen ?? 0}, upserted ${r.stats?.events_upserted ?? 0}, removed ${r.stats?.events_removed ?? 0} (provisional: ${r.stats?.provisional_cleaning_events_created ?? 0} created, ${r.stats?.provisional_cleaning_events_removed ?? 0} removed).`
     await loadAll()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to reconcile Google cleaning calendar'
