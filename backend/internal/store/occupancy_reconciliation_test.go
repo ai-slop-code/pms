@@ -61,6 +61,96 @@ func TestReconcile_MultiNightAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestReconcile_RawBlocksDualWriteDisabledByDefault(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	if err := st.ReconcileBookingICSSync(ctx, pid, "booking_ics", []DesiredBlock{block("raw-off@booking.com", "2026-07-09", "2026-07-12")}, dt("2026-07-01"), &SyncCounters{}); err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM raw_booking_blocks WHERE property_id = ?`, pid).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("raw blocks written with gate disabled: got %d want 0", got)
+	}
+}
+
+func TestReconcile_RawBlocksDualWriteUpsertsAndRebuildsNights(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	now := dt("2026-07-01")
+	counters := &SyncCounters{RawBlocksDualWrite: true}
+	uid := "raw-upsert@booking.com"
+	if err := st.ReconcileBookingICSSync(ctx, pid, "booking_ics", []DesiredBlock{block(uid, "2026-07-09", "2026-07-12")}, now, counters); err != nil {
+		t.Fatal(err)
+	}
+	if counters.RawBlocksInserted != 1 || counters.RawBlocksUpdated != 0 || counters.RawBlocksUnchanged != 0 {
+		t.Fatalf("initial counters inserted/updated/unchanged=%d/%d/%d want 1/0/0", counters.RawBlocksInserted, counters.RawBlocksUpdated, counters.RawBlocksUnchanged)
+	}
+	var blockID int64
+	var activeNights int
+	if err := st.DB.QueryRowContext(ctx, `SELECT id FROM raw_booking_blocks WHERE property_id = ? AND source_event_uid = ? AND status = 'active'`, pid, uid).Scan(&blockID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM raw_booking_block_nights WHERE raw_booking_block_id = ? AND active = 1`, blockID).Scan(&activeNights); err != nil {
+		t.Fatal(err)
+	}
+	if activeNights != 3 {
+		t.Fatalf("active raw nights=%d want 3", activeNights)
+	}
+
+	shrunk := block(uid, "2026-07-09", "2026-07-11")
+	counters = &SyncCounters{RawBlocksDualWrite: true}
+	if err := st.ReconcileBookingICSSync(ctx, pid, "booking_ics", []DesiredBlock{shrunk}, now, counters); err != nil {
+		t.Fatal(err)
+	}
+	if counters.RawBlocksUpdated != 1 {
+		t.Fatalf("updated counter=%d want 1", counters.RawBlocksUpdated)
+	}
+	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM raw_booking_block_nights WHERE raw_booking_block_id = ? AND active = 1`, blockID).Scan(&activeNights); err != nil {
+		t.Fatal(err)
+	}
+	if activeNights != 2 {
+		t.Fatalf("active raw nights after shrink=%d want 2", activeNights)
+	}
+}
+
+func TestReconcile_RawBlocksDualWriteMarksDisappearedDeleted(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	now := dt("2026-07-01")
+	uid := "raw-gone@booking.com"
+	if err := st.ReconcileBookingICSSync(ctx, pid, "booking_ics", []DesiredBlock{block(uid, "2026-07-31", "2026-08-01")}, now, &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	counters := &SyncCounters{RawBlocksDualWrite: true}
+	if err := st.ReconcileBookingICSSync(ctx, pid, "booking_ics", nil, now, counters); err != nil {
+		t.Fatal(err)
+	}
+	if counters.RawBlocksDeletedFromSource != 1 {
+		t.Fatalf("deleted raw blocks=%d want 1", counters.RawBlocksDeletedFromSource)
+	}
+	var status string
+	var activeNights int
+	if err := st.DB.QueryRowContext(ctx, `SELECT status FROM raw_booking_blocks WHERE property_id = ? AND source_event_uid = ?`, pid, uid).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusDeletedFromSource {
+		t.Fatalf("raw block status=%s want %s", status, StatusDeletedFromSource)
+	}
+	if err := st.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM raw_booking_block_nights n
+		JOIN raw_booking_blocks b ON b.id = n.raw_booking_block_id
+		WHERE b.property_id = ? AND b.source_event_uid = ? AND n.active = 1`, pid, uid).Scan(&activeNights); err != nil {
+		t.Fatal(err)
+	}
+	if activeNights != 0 {
+		t.Fatalf("active raw nights after disappearance=%d want 0", activeNights)
+	}
+}
+
 // §13.2 / §13.10: a named one-night stay must not duplicate the aggregate.
 func TestReconcile_NamedStayDoesNotDuplicateAggregate(t *testing.T) {
 	st, pid := recTestProperty(t)

@@ -78,7 +78,7 @@ func TestMarkOccupanciesDeletedFromSource_OnlyFuture(t *testing.T) {
 	}
 }
 
-func TestListUpcomingStaysForNuki_IncludesFutureGeneratedDeletedFromSource(t *testing.T) {
+func TestListUpcomingStaysForNuki_UsesNamedStaysAndHidesRawBlocks(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	u, err := st.CreateUser(ctx, "owner-nuki@test.local", "hash", "owner")
@@ -114,9 +114,27 @@ func TestListUpcomingStaysForNuki_IncludesFutureGeneratedDeletedFromSource(t *te
 	if err != nil || saved == nil {
 		t.Fatalf("occupancy err=%v nil=%v", err, saved == nil)
 	}
+	nowText := time.Now().UTC().Format(time.RFC3339)
+	res, err := st.DB.ExecContext(ctx, `
+		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
+		VALUES (?, 'Alexander', 'booking_com', ?, ?, 'active', 1, 'booking_ics', 'deleted-with-code', 'confirmed', 'generated', ?, ?)`,
+		p.ID, start.Format("2006-01-02"), end.Format("2006-01-02"), nowText, nowText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stayID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
+		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, saved.ID, p.ID, stayID, nowText); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.UpsertNukiCode(ctx, &NukiAccessCode{
 		PropertyID:       p.ID,
 		OccupancyID:      saved.ID,
+		NamedStayID:      sql.NullInt64{Int64: stayID, Valid: true},
 		CodeLabel:        "Booking-Alexander",
 		ExternalNukiID:   sql.NullString{String: "ext-alexander", Valid: true},
 		ValidFrom:        start.Add(12 * time.Hour),
@@ -146,7 +164,7 @@ func TestListUpcomingStaysForNuki_IncludesFutureGeneratedDeletedFromSource(t *te
 	if len(rows) != 1 {
 		t.Fatalf("rows=%d want 1", len(rows))
 	}
-	if rows[0].OccupancyID != saved.ID || rows[0].OccupancyStatus != "deleted_from_source" {
+	if rows[0].StayID != stayID || rows[0].OccupancyID != saved.ID || rows[0].OccupancyStatus != "active" {
 		t.Fatalf("unexpected row: %+v", rows[0])
 	}
 	if !rows[0].GeneratedStatus.Valid || rows[0].GeneratedStatus.String != "generated" {

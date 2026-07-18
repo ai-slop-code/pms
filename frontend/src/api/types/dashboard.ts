@@ -6,7 +6,8 @@ export interface SyncStatusWidget {
 }
 
 export interface UpcomingStayWidget {
-  occupancy_id: number
+  stay_id: number
+  occupancy_id?: number
   summary?: string
   start_at: string
   end_at: string

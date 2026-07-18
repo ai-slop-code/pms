@@ -351,6 +351,46 @@ type MessagePlaceholderValues struct {
 	CleaningList     string
 }
 
+type MessageStayOption struct {
+	ID           int64  `json:"id"`
+	DisplayName  string `json:"display_name"`
+	StayType     string `json:"stay_type"`
+	CheckInDate  string `json:"check_in_date"`
+	CheckOutDate string `json:"check_out_date"`
+	NukiStatus   string `json:"nuki_status"`
+}
+
+func (s *Store) ListMessageStayOptions(ctx context.Context, propertyID int64, fromDate string, limit int) ([]MessageStayOption, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT ns.id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date,
+		       COALESCE(nac.status, '')
+		FROM named_stays ns
+		LEFT JOIN nuki_access_codes nac ON nac.property_id = ns.property_id AND nac.named_stay_id = ns.id
+		WHERE ns.property_id = ?
+		  AND ns.status = 'active'
+		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
+		  AND ns.stay_type IN ('booking_com', 'external')
+		  AND ns.check_out_date >= ?
+		ORDER BY ns.check_in_date ASC, ns.id ASC
+		LIMIT ?`, propertyID, fromDate, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]MessageStayOption, 0)
+	for rows.Next() {
+		var row MessageStayOption
+		if err := rows.Scan(&row.ID, &row.DisplayName, &row.StayType, &row.CheckInDate, &row.CheckOutDate, &row.NukiStatus); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func RenderMessageTemplate(templateBody string, vals MessagePlaceholderValues) string {
 	r := strings.NewReplacer(
 		"{{property_name}}", vals.PropertyName,
@@ -409,7 +449,7 @@ func uniqueStrings(input []string) []string {
 	return out
 }
 
-func (s *Store) BuildPlaceholderValues(ctx context.Context, propertyID, occupancyID int64) (*MessagePlaceholderValues, error) {
+func (s *Store) BuildPlaceholderValuesForNamedStay(ctx context.Context, propertyID, stayID int64) (*MessagePlaceholderValues, error) {
 	prop, err := s.GetProperty(ctx, propertyID)
 	if err != nil {
 		return nil, fmt.Errorf("property: %w", err)
@@ -418,9 +458,9 @@ func (s *Store) BuildPlaceholderValues(ctx context.Context, propertyID, occupanc
 	if err != nil {
 		return nil, fmt.Errorf("profile: %w", err)
 	}
-	occ, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+	stay, err := s.GetNamedStay(ctx, propertyID, stayID)
 	if err != nil {
-		return nil, fmt.Errorf("occupancy: %w", err)
+		return nil, fmt.Errorf("named stay: %w", err)
 	}
 
 	loc, err := time.LoadLocation(prop.Timezone)
@@ -441,7 +481,7 @@ func (s *Store) BuildPlaceholderValues(ctx context.Context, propertyID, occupanc
 	}
 
 	nukiCode := "—"
-	code, err := s.GetNukiCodeByOccupancyID(ctx, propertyID, occupancyID)
+	code, err := s.GetNukiCodeByNamedStayID(ctx, propertyID, stayID)
 	if err == nil && code != nil && code.Status == "generated" && code.GeneratedPINPlain.Valid && code.GeneratedPINPlain.String != "" {
 		nukiCode = code.GeneratedPINPlain.String
 	}
@@ -463,6 +503,83 @@ func (s *Store) BuildPlaceholderValues(ctx context.Context, propertyID, occupanc
 		phone = profile.ContactPhone.String
 	}
 
+	stayStart := parsePropertyDate(stay.CheckInDate, loc)
+	stayEnd := parsePropertyDate(stay.CheckOutDate, loc)
+	return &MessagePlaceholderValues{
+		PropertyName:    prop.Name,
+		PropertyAddress: address,
+		StayStart:       stayStart.Format("02/01/2006"),
+		StayEnd:         stayEnd.Format("02/01/2006"),
+		CheckInTime:     profile.DefaultCheckInTime,
+		CheckOutTime:    profile.DefaultCheckOutTime,
+		NukiCode:        nukiCode,
+		WifiName:        wifiName,
+		WifiPassword:    wifiPass,
+		ParkingInfo:     parking,
+		ContactPhone:    phone,
+	}, nil
+}
+
+func (s *Store) BuildPlaceholderValues(ctx context.Context, propertyID, occupancyID int64) (*MessagePlaceholderValues, error) {
+	stayID, err := s.ResolveNamedStayIDForOccupancy(ctx, propertyID, occupancyID)
+	if err == nil && stayID > 0 {
+		return s.BuildPlaceholderValuesForNamedStay(ctx, propertyID, stayID)
+	}
+	if !s.propertyHasNamedStays(ctx, propertyID) {
+		return s.legacyBuildPlaceholderValues(ctx, propertyID, occupancyID)
+	}
+	return nil, fmt.Errorf("named stay mapping: %w", err)
+}
+
+func (s *Store) legacyBuildPlaceholderValues(ctx context.Context, propertyID, occupancyID int64) (*MessagePlaceholderValues, error) {
+	prop, err := s.GetProperty(ctx, propertyID)
+	if err != nil {
+		return nil, fmt.Errorf("property: %w", err)
+	}
+	profile, err := s.GetPropertyProfile(ctx, propertyID)
+	if err != nil {
+		return nil, fmt.Errorf("profile: %w", err)
+	}
+	occ, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
+	if err != nil {
+		return nil, fmt.Errorf("occupancy: %w", err)
+	}
+	loc, err := time.LoadLocation(prop.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	var address string
+	if prop.AddressLine1.Valid {
+		parts := []string{prop.AddressLine1.String}
+		if prop.City.Valid {
+			parts = append(parts, prop.City.String)
+		}
+		if prop.PostalCode.Valid {
+			parts = append(parts, prop.PostalCode.String)
+		}
+		address = strings.Join(parts, ", ")
+	}
+	nukiCode := "—"
+	code, err := s.GetNukiCodeByOccupancyID(ctx, propertyID, occupancyID)
+	if err == nil && code != nil && code.Status == "generated" && code.GeneratedPINPlain.Valid && code.GeneratedPINPlain.String != "" {
+		nukiCode = code.GeneratedPINPlain.String
+	}
+	wifiName := ""
+	if profile.WifiSSID.Valid {
+		wifiName = profile.WifiSSID.String
+	}
+	wifiPass := ""
+	if profile.WifiPassword.Valid {
+		wifiPass = profile.WifiPassword.String
+	}
+	parking := ""
+	if profile.ParkingInstructions.Valid {
+		parking = profile.ParkingInstructions.String
+	}
+	phone := ""
+	if profile.ContactPhone.Valid {
+		phone = profile.ContactPhone.String
+	}
 	return &MessagePlaceholderValues{
 		PropertyName:    prop.Name,
 		PropertyAddress: address,
@@ -510,16 +627,9 @@ func (s *Store) BuildCleaningPlaceholderValues(ctx context.Context, propertyID i
 		horizon = nextMonthStart.AddDate(0, 0, 7)
 	}
 
-	// Widen the SQL window by one day on the lower bound to safely include stays
-	// whose end_at lands on UTC midnight of today (ICS all-day DTEND convention),
-	// regardless of the property's UTC offset. The precise per-day filtering is
-	// done in the loop below using the local checkout date.
-	queryStart := today.AddDate(0, 0, -1).UTC()
-	queryEnd := horizon.UTC()
-
-	stays, err := s.ListOccupanciesBetween(ctx, propertyID, queryStart, queryEnd)
+	stays, err := s.ListMessageCleaningStays(ctx, propertyID, today.Format("2006-01-02"), horizon.Format("2006-01-02"))
 	if err != nil {
-		return nil, 0, fmt.Errorf("occupancies: %w", err)
+		return nil, 0, fmt.Errorf("named stays: %w", err)
 	}
 
 	checkOut := profile.DefaultCheckOutTime
@@ -527,14 +637,8 @@ func (s *Store) BuildCleaningPlaceholderValues(ctx context.Context, propertyID i
 
 	seen := map[string]bool{}
 	var lines []string
-	for _, occ := range stays {
-		if occ.Status == "deleted_from_source" || occ.Status == "cancelled" {
-			continue
-		}
-		if occ.StayOutcome.String == StayOutcomeCancelledNonRefundable || occ.StayOutcome.String == StayOutcomeNoShow {
-			continue
-		}
-		endLocal := occ.EndAt.In(loc)
+	for _, stay := range stays {
+		endLocal := parsePropertyDate(stay.CheckOutDate, loc)
 		// Compare on the local calendar date so stays that check out today are
 		// included even if end_at is stored at UTC midnight.
 		endDay := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day(), 0, 0, 0, 0, loc)
@@ -565,4 +669,30 @@ func (s *Store) BuildCleaningPlaceholderValues(ctx context.Context, propertyID i
 		CleaningFromDate: fmt.Sprintf("%d.%d.", today.Day(), int(today.Month())),
 		CleaningList:     list,
 	}, len(lines), nil
+}
+
+func (s *Store) ListMessageCleaningStays(ctx context.Context, propertyID int64, fromDate, toDate string) ([]MessageStayOption, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT id, display_name, stay_type, check_in_date, check_out_date, ''
+		FROM named_stays
+		WHERE property_id = ?
+		  AND status = 'active'
+		  AND cleaning_required = 1
+		  AND COALESCE(stay_outcome, '') = ''
+		  AND check_out_date >= ?
+		  AND check_out_date < ?
+		ORDER BY check_out_date ASC, id ASC`, propertyID, fromDate, toDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]MessageStayOption, 0)
+	for rows.Next() {
+		var row MessageStayOption
+		if err := rows.Scan(&row.ID, &row.DisplayName, &row.StayType, &row.CheckInDate, &row.CheckOutDate, &row.NukiStatus); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }

@@ -23,6 +23,13 @@ tags:
   - name: Auth
   - name: Users
   - name: Properties
+  - name: Occupancy
+  - name: Nuki
+  - name: Finance
+  - name: Invoices
+  - name: Messages
+  - name: Dashboard
+  - name: Analytics
 
 security:
   - SessionCookie: []
@@ -125,7 +132,6 @@ paths:
               schema: { $ref: "#/components/schemas/User" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
-
   /users/{id}:
     parameters:
       - $ref: "#/components/parameters/IdPath"
@@ -227,7 +233,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Property" }
-        "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [Properties]
       summary: Update property.
@@ -243,6 +248,537 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Property" }
 
+  /properties/{id}/dashboard:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Dashboard]
+      summary: Return permission-filtered dashboard widgets.
+      responses:
+        "200":
+          description: Dashboard widgets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DashboardSummaryResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/messages/stays:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Messages]
+      summary: List message-eligible named stays.
+      responses:
+        "200":
+          description: Message-eligible named stays.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageStaysResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/messages/generate:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Messages]
+      summary: Generate guest messages for a named stay.
+      parameters:
+        - in: query
+          name: stay_id
+          schema: { type: integer, format: int64 }
+          description: Preferred PMS 21 named stay identity.
+        - in: query
+          name: occupancy_id
+          schema: { type: integer, format: int64 }
+          deprecated: true
+          description: Deprecated compatibility identity resolved through occupancy_stay_migration_map.
+      responses:
+        "200":
+          description: Rendered messages.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenerateMessagesResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /properties/{id}/booking-blocks:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - $ref: "#/components/parameters/MonthQuery"
+    get:
+      tags: [Occupancy]
+      summary: List raw Booking.com blocks for a month.
+      responses:
+        "200":
+          description: Raw booking blocks.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [raw_blocks]
+                properties:
+                  raw_blocks:
+                    type: array
+                    items: { $ref: "#/components/schemas/RawBookingBlock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/stays:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Occupancy]
+      summary: List named stays for a month.
+      parameters:
+        - $ref: "#/components/parameters/MonthQuery"
+      responses:
+        "200":
+          description: Named stays.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [named_stays]
+                properties:
+                  named_stays:
+                    type: array
+                    items: { $ref: "#/components/schemas/NamedStay" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Occupancy]
+      summary: Create a named stay.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NamedStayCreateRequest" }
+      responses:
+        "200":
+          description: Named stay created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NamedStayMutationResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /properties/{id}/stays/{stayId}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - $ref: "#/components/parameters/StayIdPath"
+    patch:
+      tags: [Occupancy]
+      summary: Update a named stay.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NamedStayPatchRequest" }
+      responses:
+        "200":
+          description: Named stay updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NamedStayMutationResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /properties/{id}/stays/{stayId}/status:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - $ref: "#/components/parameters/StayIdPath"
+    patch:
+      tags: [Occupancy]
+      summary: Change named stay status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [active, cancelled, archived]
+      responses:
+        "200":
+          description: Named stay status changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NamedStayMutationResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /properties/{id}/booking-blocks/{blockId}/promote:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - in: path
+        name: blockId
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      tags: [Occupancy]
+      summary: Promote a raw Booking.com block range to a named stay.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NamedStayCreateRequest" }
+      responses:
+        "200":
+          description: Named stay created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NamedStayMutationResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /properties/{id}/availability-blocks:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - $ref: "#/components/parameters/MonthQuery"
+    get:
+      tags: [Occupancy]
+      summary: List non-stay availability blocks for a month.
+      responses:
+        "200":
+          description: Availability blocks.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [availability_blocks]
+                properties:
+                  availability_blocks:
+                    type: array
+                    items: { $ref: "#/components/schemas/AvailabilityBlock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Occupancy]
+      summary: Create a non-stay availability block.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AvailabilityBlockRequest" }
+      responses:
+        "200":
+          description: Availability block created.
+          content:
+            application/json:
+              schema:
+                {
+                  $ref: "#/components/schemas/AvailabilityBlockMutationResponse",
+                }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /properties/{id}/availability-blocks/{blockId}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - in: path
+        name: blockId
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    patch:
+      tags: [Occupancy]
+      summary: Update a non-stay availability block.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AvailabilityBlockRequest" }
+      responses:
+        "200":
+          description: Availability block updated.
+          content:
+            application/json:
+              schema:
+                {
+                  $ref: "#/components/schemas/AvailabilityBlockMutationResponse",
+                }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /properties/{id}/occupancy-calendar:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - $ref: "#/components/parameters/MonthQuery"
+    get:
+      tags: [Occupancy]
+      summary: Return combined raw-block, named-stay, and availability calendar model.
+      responses:
+        "200":
+          description: Combined occupancy calendar.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [calendar]
+                properties:
+                  calendar: { $ref: "#/components/schemas/OccupancyCalendar" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/occupancy-export:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Occupancy]
+      summary: Deprecated public occupancy JSON export.
+      deprecated: true
+      security: []
+      description: Public occupancy export is retired by PMS 21. Native Google Calendar cleaning sync is the supported external calendar integration path.
+      responses:
+        "200":
+          description: Legacy export payload when temporarily enabled for compatibility.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeprecatedOccupancyExportResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "410":
+          description: Occupancy export is disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /properties/{id}/occupancy-api-tokens:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Occupancy]
+      summary: Deprecated occupancy export token list.
+      deprecated: true
+      responses:
+        "200":
+          description: Legacy export tokens.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeprecatedOccupancyTokensResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Occupancy]
+      summary: Deprecated occupancy export token creation.
+      deprecated: true
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, nullable: true }
+      responses:
+        "201":
+          description: Legacy export token created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeprecatedOccupancyTokenCreateResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/occupancy-api-tokens/{tokenId}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - in: path
+        name: tokenId
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    delete:
+      tags: [Occupancy]
+      summary: Deprecated occupancy export token revocation.
+      deprecated: true
+      responses:
+        "204": { description: Token revoked. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /properties/{id}/nuki/upcoming-stays:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Nuki]
+      summary: List Nuki-eligible upcoming named stays and generated code state.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 300, default: 120 }
+      responses:
+        "200":
+          description: Nuki upcoming stays.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiUpcomingStaysResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/nuki/upcoming-stays/{stayId}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - $ref: "#/components/parameters/StayIdPath"
+    patch:
+      tags: [Nuki]
+      summary: Update the named stay display name used for Nuki PIN labels.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NukiStayNamePatchRequest" }
+      responses:
+        "200":
+          description: Stay name saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiStayNamePatchResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /properties/{id}/nuki/codes/generate:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    post:
+      tags: [Nuki]
+      summary: Generate Nuki guest codes for all eligible named stays or one named stay.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NukiGenerateRequest" }
+      responses:
+        "200":
+          description: Generation result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/nuki/codes/{codeId}/reveal-pin:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - in: path
+        name: codeId
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      tags: [Nuki]
+      summary: Reveal a generated Nuki PIN with write-level permission and audit logging.
+      responses:
+        "200":
+          description: Plaintext PIN.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pin]
+                properties:
+                  pin: { type: string }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /properties/{id}/finance/booking-payouts:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Finance]
+      summary: List Booking.com finance rows mapped to named stays.
+      parameters:
+        - in: query
+          name: month
+          schema: { type: string, pattern: "^\\d{4}-\\d{2}$" }
+        - in: query
+          name: mapped_only
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Finance booking rows.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceBookingPayoutsResponse" }
+
+  /properties/{id}/finance/stay-candidates:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Finance]
+      summary: List named stays eligible for finance mapping.
+      parameters:
+        - in: query
+          name: month
+          schema: { type: string, pattern: "^\\d{4}-\\d{2}$" }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Named-stay candidates.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceStayCandidatesResponse" }
+
+  /properties/{id}/finance/booking-payouts/{referenceNumber}/map:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - in: path
+        name: referenceNumber
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [Finance]
+      summary: Map or clear a Booking.com finance row to a named stay.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FinanceBookingPayoutMapRequest" }
+      responses:
+        "200":
+          description: Mapping saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceBookingPayoutMapResponse" }
+
+  /properties/{id}/finance/booking-payouts/{referenceNumber}/create-stay:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - in: path
+        name: referenceNumber
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Finance]
+      summary: Explicitly create or link a named stay from a finance row.
+      responses:
+        "200":
+          description: Named stay created or linked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceBookingPayoutCreateStayResponse" }
+
+  /properties/{id}/invoices/occupancy-candidates:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Invoices]
+      summary: List named stays for invoice stay selection.
+      responses:
+        "200":
+          description: Named-stay candidates; deprecated occupancies is empty for compatibility.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvoiceStayCandidatesResponse" }
+
 components:
   securitySchemes:
     SessionCookie:
@@ -256,6 +792,18 @@ components:
       name: id
       required: true
       schema: { type: integer, format: int64, minimum: 1 }
+    StayIdPath:
+      in: path
+      name: stayId
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    MonthQuery:
+      in: query
+      name: month
+      required: true
+      schema:
+        type: string
+        pattern: "^\\d{4}-\\d{2}$"
 
   responses:
     BadRequest:
@@ -275,6 +823,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     NotFound:
       description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Request conflicts with current calendar state.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -303,6 +856,318 @@ components:
         code:
           type: string
           description: Optional machine-readable code.
+
+    DeprecatedOccupancyExportResponse:
+      type: object
+      deprecated: true
+      required: [occupancies]
+      properties:
+        occupancies:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    DeprecatedOccupancyTokenCreateResponse:
+      type: object
+      deprecated: true
+      required: [id, token]
+      properties:
+        id: { type: integer, format: int64 }
+        token: { type: string }
+
+    DeprecatedOccupancyTokensResponse:
+      type: object
+      deprecated: true
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items:
+            type: object
+            required: [id, created_at]
+            properties:
+              id: { type: integer, format: int64 }
+              label: { type: string }
+              created_at: { type: string, format: date-time }
+              last_used_at: { type: string, format: date-time }
+
+    ActionResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        error: { type: string }
+
+    FinanceBookingPayoutsResponse:
+      type: object
+      required: [payouts]
+      properties:
+        month: { type: string }
+        mapped_only: { type: string }
+        payouts:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceBookingPayout" }
+
+    FinanceBookingPayout:
+      type: object
+      required: [id, reference_number, net_cents, payout_date, has_payout_data, has_statement_data]
+      properties:
+        id: { type: integer, format: int64 }
+        reference_number: { type: string }
+        payout_id: { type: string }
+        row_type: { type: string }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+        guest_name: { type: string }
+        reservation_status: { type: string }
+        currency: { type: string }
+        payment_status: { type: string }
+        amount_cents: { type: integer, format: int64 }
+        commission_cents: { type: integer, format: int64 }
+        payment_service_fee_cents: { type: integer, format: int64 }
+        net_cents: { type: integer }
+        payout_date: { type: string, format: date-time }
+        transaction_id: { type: integer, format: int64 }
+        named_stay_id: { type: integer, format: int64 }
+        occupancy_id:
+          type: integer
+          format: int64
+          deprecated: true
+        occupancy_summary: { type: string }
+        named_stay_display_name: { type: string }
+        named_stay_type: { type: string, enum: [booking_com, external, maintenance, personal_use] }
+        named_stay_check_in_date: { type: string, format: date }
+        named_stay_check_out_date: { type: string, format: date }
+        linked_invoice_id: { type: integer, format: int64 }
+        has_payout_data: { type: boolean }
+        has_statement_data: { type: boolean }
+
+    FinanceNamedStayCandidate:
+      type: object
+      required: [id, display_name, stay_type, check_in_date, check_out_date, status, has_finance_data]
+      properties:
+        id: { type: integer, format: int64 }
+        display_name: { type: string }
+        stay_type: { type: string, enum: [booking_com, external, maintenance, personal_use] }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+        status: { type: string, enum: [active, cancelled, archived] }
+        review_status: { type: string, enum: [confirmed, needs_review] }
+        manual_revenue_cents: { type: integer, format: int64 }
+        has_finance_data: { type: boolean }
+
+    FinanceStayCandidatesResponse:
+      type: object
+      required: [stays]
+      properties:
+        stays:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceNamedStayCandidate" }
+
+    FinanceBookingPayoutMapRequest:
+      type: object
+      properties:
+        named_stay_id: { type: integer, format: int64, nullable: true }
+        occupancy_id:
+          type: integer
+          format: int64
+          nullable: true
+          deprecated: true
+
+    FinanceBookingPayoutMapResponse:
+      type: object
+      required: [ok, reference_number]
+      properties:
+        ok: { type: boolean }
+        reference_number: { type: string }
+        named_stay_id: { type: integer, format: int64, nullable: true }
+
+    FinanceBookingPayoutCreateStayResponse:
+      type: object
+      required: [ok, reference_number, named_stay_id, created]
+      properties:
+        ok: { type: boolean }
+        reference_number: { type: string }
+        named_stay_id: { type: integer, format: int64 }
+        occupancy_id:
+          type: integer
+          format: int64
+          deprecated: true
+        created: { type: boolean }
+
+    InvoiceStayCandidatesResponse:
+      type: object
+      required: [stays, occupancies]
+      properties:
+        stays:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceNamedStayCandidate" }
+        occupancies:
+          type: array
+          deprecated: true
+          items: { type: object }
+
+    NukiUpcomingStaysResponse:
+      type: object
+      required: [stays]
+      properties:
+        stays:
+          type: array
+          items: { $ref: "#/components/schemas/NukiUpcomingStay" }
+
+    NukiUpcomingStay:
+      type: object
+      required:
+        [stay_id, occupancy_id, summary, start_at, end_at, occupancy_status]
+      properties:
+        stay_id: { type: integer, format: int64 }
+        legacy_occupancy_id: { type: integer, format: int64 }
+        occupancy_id:
+          type: integer
+          format: int64
+          deprecated: true
+          description: Legacy compatibility ID retained until old Nuki callers are removed.
+        source_event_uid: { type: string }
+        summary: { type: string }
+        saved_pin_name: { type: string }
+        stay_type: { type: string, enum: [booking_com, external] }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        occupancy_status:
+          type: string
+          description: Compatibility field containing the named stay status.
+        generated_code_id: { type: integer, format: int64 }
+        generated_label: { type: string }
+        generated_status:
+          { type: string, enum: [not_generated, generated, revoked] }
+        generated_masked: { type: string }
+        generated_valid_from: { type: string, format: date-time }
+        generated_valid_until: { type: string, format: date-time }
+        generated_error: { type: string }
+        generated_updated_at: { type: string, format: date-time }
+
+    NukiStayNamePatchRequest:
+      type: object
+      required: [pin_name]
+      properties:
+        pin_name:
+          type: string
+          description: New named stay display name used for generated PIN labels.
+
+    NukiStayNamePatchResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        saved_pin_name: { type: string }
+
+    NukiGenerateRequest:
+      type: object
+      properties:
+        stay_id:
+          type: integer
+          format: int64
+          description: Preferred Stage 7 named stay identity for single-stay generation.
+        occupancy_id:
+          type: integer
+          format: int64
+          deprecated: true
+          description: Deprecated compatibility identity resolved through occupancy_stay_migration_map.
+        pin_name: { type: string }
+
+    MessageStaysResponse:
+      type: object
+      required: [stays]
+      properties:
+        stays:
+          type: array
+          items: { $ref: "#/components/schemas/MessageStay" }
+
+    MessageStay:
+      type: object
+      required: [id, display_name, stay_type, check_in_date, check_out_date, nuki_status]
+      properties:
+        id: { type: integer, format: int64, description: Named stay ID. }
+        display_name: { type: string }
+        stay_type: { type: string, enum: [booking_com, external] }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+        nuki_status: { type: string }
+
+    RenderedMessage:
+      type: object
+      required: [language_code, title, body, nuki_available]
+      properties:
+        language_code: { type: string }
+        title: { type: string }
+        body: { type: string }
+        nuki_available: { type: boolean }
+
+    GenerateMessagesResponse:
+      type: object
+      required: [stay_id, messages, nuki_available]
+      properties:
+        stay_id: { type: integer, format: int64 }
+        occupancy_id:
+          type: integer
+          format: int64
+          deprecated: true
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/RenderedMessage" }
+        nuki_available: { type: boolean }
+        placeholders: { type: object, additionalProperties: true }
+
+    DashboardSummaryResponse:
+      type: object
+      required: [property_id, widgets]
+      properties:
+        property_id: { type: integer, format: int64 }
+        widgets: { $ref: "#/components/schemas/DashboardWidgets" }
+
+    DashboardWidgets:
+      type: object
+      properties:
+        sync_status:
+          type: object
+          properties:
+            occupancy: { type: string }
+            nuki: { type: string }
+        upcoming_stays:
+          type: array
+          items: { $ref: "#/components/schemas/DashboardUpcomingStay" }
+        active_nuki_codes:
+          type: array
+          items: { type: object, additionalProperties: true }
+        cleaning_month:
+          type: object
+          properties:
+            counted_days: { type: integer }
+            salary_draft: { type: integer }
+        finance_month:
+          type: object
+          properties:
+            incoming: { type: integer }
+            outgoing: { type: integer }
+            net: { type: integer }
+        recent_invoices:
+          type: array
+          items: { type: object, additionalProperties: true }
+
+    DashboardUpcomingStay:
+      type: object
+      required: [stay_id, summary, start_at, end_at, status]
+      properties:
+        stay_id: { type: integer, format: int64 }
+        occupancy_id:
+          type: integer
+          format: int64
+          deprecated: true
+        summary: { type: string }
+        start_at: { type: string, format: date }
+        end_at: { type: string, format: date }
+        status: { type: string }
 
     LoginRequest:
       type: object
@@ -376,3 +1241,222 @@ components:
         name: { type: string, minLength: 1 }
         address: { type: string, nullable: true }
         timezone: { type: string, nullable: true }
+
+    OccupancyCalendar:
+      type: object
+      required:
+        [property_id, month, raw_blocks, named_stays, availability_blocks]
+      properties:
+        property_id: { type: integer, format: int64 }
+        month: { type: string, pattern: "^\\d{4}-\\d{2}$" }
+        raw_blocks:
+          type: array
+          items: { $ref: "#/components/schemas/RawBookingBlock" }
+        named_stays:
+          type: array
+          items: { $ref: "#/components/schemas/NamedStay" }
+        availability_blocks:
+          type: array
+          items: { $ref: "#/components/schemas/AvailabilityBlock" }
+
+    RawBookingBlock:
+      type: object
+      required:
+        [
+          id,
+          property_id,
+          source_type,
+          source_event_uid,
+          check_in_date,
+          check_out_date,
+          status,
+          covered_nights,
+          cleaning_events,
+        ]
+      properties:
+        id: { type: integer, format: int64 }
+        property_id: { type: integer, format: int64 }
+        source_type: { type: string, enum: [booking_ics] }
+        source_event_uid: { type: string }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+        status: { type: string, enum: [active, deleted_from_source, conflict] }
+        raw_summary: { type: string }
+        source_dtstamp: { type: string }
+        last_sync_run_id: { type: integer, format: int64 }
+        conflict_reason: { type: string }
+        covered_nights:
+          type: array
+          items: { type: string, format: date }
+        legacy_occupancy_id: { type: integer, format: int64 }
+        cleaning_events:
+          type: array
+          items: { $ref: "#/components/schemas/CalendarCleaningEvent" }
+
+    NamedStay:
+      type: object
+      required:
+        [
+          id,
+          property_id,
+          display_name,
+          stay_type,
+          check_in_date,
+          check_out_date,
+          status,
+          cleaning_required,
+          review_status,
+          nuki_generation_status,
+          covered_nights,
+          source_links,
+          cleaning_events,
+        ]
+      properties:
+        id: { type: integer, format: int64 }
+        property_id: { type: integer, format: int64 }
+        display_name: { type: string }
+        stay_type:
+          {
+            type: string,
+            enum: [booking_com, external, maintenance, personal_use],
+          }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+        status: { type: string, enum: [active, cancelled, archived] }
+        cleaning_required: { type: boolean }
+        review_status: { type: string, enum: [confirmed, needs_review] }
+        nuki_generation_status:
+          { type: string, enum: [not_applicable, pending, generated, error] }
+        nuki_generation_error: { type: string }
+        covered_nights:
+          type: array
+          items: { type: string, format: date }
+        legacy_occupancy_id: { type: integer, format: int64 }
+        source_links:
+          type: array
+          items: { $ref: "#/components/schemas/StaySourceLink" }
+        cleaning_events:
+          type: array
+          items: { $ref: "#/components/schemas/CalendarCleaningEvent" }
+
+    CalendarCleaningEvent:
+      type: object
+      required: [id, checkout_date, cleaning_kind, title, status]
+      properties:
+        id: { type: integer, format: int64 }
+        checkout_date: { type: string, format: date }
+        cleaning_kind: { type: string, enum: [provisional_block, named_stay] }
+        title: { type: string }
+        status: { type: string, enum: [pending, synced, error, removed] }
+        google_event_id: { type: string }
+        error_message: { type: string }
+        warning_message: { type: string }
+
+    StaySourceLink:
+      type: object
+      required:
+        [
+          id,
+          source_type,
+          linked_check_in_date,
+          linked_check_out_date,
+          link_status,
+        ]
+      properties:
+        id: { type: integer, format: int64 }
+        raw_booking_block_id: { type: integer, format: int64 }
+        source_type: { type: string }
+        source_event_uid: { type: string }
+        linked_check_in_date: { type: string, format: date }
+        linked_check_out_date: { type: string, format: date }
+        link_status:
+          {
+            type: string,
+            enum: [active, source_deleted, conflict, manual_unlinked],
+          }
+        conflict_reason: { type: string }
+
+    AvailabilityBlock:
+      type: object
+      required:
+        [
+          id,
+          property_id,
+          block_type,
+          start_date,
+          end_date,
+          status,
+          covered_nights,
+        ]
+      properties:
+        id: { type: integer, format: int64 }
+        property_id: { type: integer, format: int64 }
+        block_type: { type: string, enum: [closed, off_market] }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        reason: { type: string }
+        status: { type: string, enum: [active, archived] }
+        covered_nights:
+          type: array
+          items: { type: string, format: date }
+
+    NamedStayCreateRequest:
+      type: object
+      required: [display_name, check_in, check_out, stay_type]
+      properties:
+        display_name: { type: string, minLength: 1 }
+        guest_display_name:
+          type: string
+          deprecated: true
+          description: Legacy alias accepted during the compatibility window.
+        check_in: { type: string, format: date }
+        check_out: { type: string, format: date }
+        stay_type:
+          {
+            type: string,
+            enum: [booking_com, external, maintenance, personal_use],
+          }
+        cleaning_required: { type: boolean }
+
+    AvailabilityBlockRequest:
+      type: object
+      required: [block_type, start_date, end_date]
+      properties:
+        block_type: { type: string, enum: [closed, off_market] }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        reason: { type: string }
+
+    AvailabilityBlockMutationResponse:
+      type: object
+      required: [ok, availability_block]
+      properties:
+        ok: { type: boolean }
+        availability_block: { $ref: "#/components/schemas/AvailabilityBlock" }
+
+    NamedStayPatchRequest:
+      type: object
+      properties:
+        display_name: { type: string, minLength: 1 }
+        guest_display_name:
+          type: string
+          deprecated: true
+        check_in: { type: string, format: date }
+        check_out: { type: string, format: date }
+        stay_type:
+          {
+            type: string,
+            enum: [booking_com, external, maintenance, personal_use],
+          }
+        cleaning_required: { type: boolean }
+
+    NamedStayMutationResponse:
+      type: object
+      required: [ok, named_stay_id, nuki_generation_status]
+      properties:
+        ok: { type: boolean }
+        named_stay_id: { type: integer, format: int64 }
+        legacy_occupancy_id: { type: integer, format: int64 }
+        nuki_generation_status:
+          { type: string, enum: [not_applicable, pending, generated, error] }
+        nuki_generation_error: { type: string }

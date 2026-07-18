@@ -47,7 +47,7 @@ type financePreviewPlanEntry struct {
 	Result          statements.CanonicalBooking
 	StatusChanged   bool
 	ChangedFields   []string
-	OccupancyMatch  *store.Occupancy // populated for payout inserts
+	NamedStayMatch  *store.NamedStay // populated for payout inserts
 	BookingIncomeID int64            // resolved booking_income category for payouts
 	NetCents        int              // payout net (used to upsert finance_transactions)
 	PayoutDate      time.Time
@@ -278,10 +278,8 @@ func (s *Server) postFinanceImportPreview(w http.ResponseWriter, r *http.Request
 			entry.NetCents = row.NetCents
 			entry.PayoutDate = row.PayoutDate
 			entry.PayoutID = row.PayoutID
-			if existingID == 0 {
-				occ, _ := s.Store.FindOccupancyForStayDates(r.Context(), pid, row.CheckInDate, row.CheckOutDate, loc)
-				entry.OccupancyMatch = occ
-			}
+			stay, _ := s.Store.FindNamedStayForFinanceStayDates(r.Context(), pid, row.ReferenceNumber, row.CheckInDate, row.CheckOutDate, row.GuestName)
+			entry.NamedStayMatch = stay
 		}
 		preview.Plan = append(preview.Plan, entry)
 	}
@@ -423,7 +421,7 @@ func (s *Server) postFinanceImportCommit(w http.ResponseWriter, r *http.Request)
 			imp.RowCountUnchanged++
 		}
 		if entry.StatusChanged && strings.EqualFold(strDeref(entry.Result.Status), "CANCELLED") {
-			_, _ = s.Store.CancelOccupancyForBooking(r.Context(), bookingID)
+			_ = s.Store.MarkNamedStayFinanceReviewForBooking(r.Context(), pid, bookingID, "finance_status_cancelled")
 		}
 		if entry.Action != statements.ActionUnchanged && len(entry.ChangedFields) > 0 {
 			fieldsJSON, _ := json.Marshal(entry.ChangedFields)
@@ -465,12 +463,11 @@ func (s *Server) postFinanceImportCommit(w http.ResponseWriter, r *http.Request)
 // a finance_transactions row plus an occupancy mapping. The booking
 // row itself was already written by UpsertFinanceBookingFromCanonical.
 func (s *Server) commitPayoutBookingSideEffects(ctx context.Context, propertyID, bookingID int64, entry financePreviewPlanEntry, loc *time.Location) {
-	// Resolve / create occupancy mapping for new payouts.
-	if entry.Action == statements.ActionInsert {
-		occ := entry.OccupancyMatch
-		if occ != nil {
-			_ = s.Store.LinkBookingToOccupancy(ctx, propertyID, entry.Reference, occ.ID, bookingID)
-		}
+	// Resolve named-stay mapping for new payouts. Finance imports must not
+	// silently create stay-like legacy occupancies or named stays.
+	stay := entry.NamedStayMatch
+	if stay != nil {
+		_ = s.Store.LinkBookingToNamedStay(ctx, propertyID, bookingID, stay.ID)
 	}
 	// Upsert the linked finance_transactions row.
 	if entry.NetCents != 0 && entry.BookingIncomeID > 0 {
@@ -489,15 +486,11 @@ func (s *Server) commitStatementBookingSideEffects(ctx context.Context, property
 	checkIn := strDeref(entry.Result.CheckInDate)
 	checkOut := strDeref(entry.Result.CheckOutDate)
 	guest := strDeref(entry.Result.GuestName)
-	occ, err := s.Store.FindOrCreateOccupancyForStatementStayDates(ctx, propertyID, entry.Reference, checkIn, checkOut, guest, loc)
-	if err != nil || occ == nil {
+	stay, err := s.Store.FindNamedStayForFinanceStayDates(ctx, propertyID, entry.Reference, checkIn, checkOut, guest)
+	if err != nil || stay == nil {
 		return
 	}
-	if strings.TrimSpace(guest) != "" {
-		_ = s.Store.UpdateOccupancyGuestDisplayName(ctx, propertyID, occ.ID, &guest)
-	}
-	_ = s.Store.LinkBookingToOccupancy(ctx, propertyID, entry.Reference, occ.ID, bookingID)
-	_ = s.Store.SupersedeGenericICSBlocksForFinanceStayDates(ctx, propertyID, checkIn, checkOut, loc, occ.ID)
+	_ = s.Store.LinkBookingToNamedStay(ctx, propertyID, bookingID, stay.ID)
 }
 
 // ---- imports list ----------------------------------------------------------

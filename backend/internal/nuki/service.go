@@ -128,10 +128,18 @@ func (s *Service) GenerateCodes(ctx context.Context, propertyID int64, trigger s
 }
 
 func (s *Service) GenerateCodeForOccupancy(ctx context.Context, propertyID, occupancyID int64, trigger string, pinName string) error {
-	return s.generateCodesInternal(ctx, propertyID, trigger, &occupancyID, &pinName)
+	stayID, err := s.Store.ResolveNamedStayIDForOccupancy(ctx, propertyID, occupancyID)
+	if err != nil {
+		return err
+	}
+	return s.generateCodesInternal(ctx, propertyID, trigger, &stayID, &pinName)
 }
 
-func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, trigger string, onlyOccupancyID *int64, pinName *string) error {
+func (s *Service) GenerateCodeForNamedStay(ctx context.Context, propertyID, stayID int64, trigger string, pinName string) error {
+	return s.generateCodesInternal(ctx, propertyID, trigger, &stayID, &pinName)
+}
+
+func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, trigger string, onlyStayID *int64, pinName *string) error {
 	if s.Client == nil {
 		s.Client = NewClient(Config{})
 	}
@@ -150,7 +158,30 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 	accountUserID := s.discoverAccountUserID(ctx, propertyID)
 	keypadCodes, _ := s.Store.ListNukiKeypadCodes(ctx, propertyID)
 
-	// 1) Revoke codes for cancelled/deleted occupancies.
+	// 1) Revoke codes for named stays that are no longer Nuki-eligible.
+	revokeStays, err := s.Store.ListNamedStaysForNukiRevocation(ctx, propertyID)
+	if err != nil {
+		msg := "list_revoke_named_stays_failed"
+		_ = s.finishRun(ctx, propertyID, runID, "partial", &msg, stats)
+		return err
+	}
+	for _, stay := range revokeStays {
+		code, err := s.Store.GetNukiCodeByNamedStayID(ctx, propertyID, stay.NamedStayID)
+		if err != nil || code == nil {
+			continue
+		}
+		if code.Status == "revoked" {
+			continue
+		}
+		stats.processed++
+		if err := s.revokeCode(ctx, cred, runID, code, "named_stay_"+stay.Status); err != nil {
+			stats.failedN++
+			continue
+		}
+		stats.revokedN++
+	}
+
+	// Compatibility cleanup for active legacy codes that have not been relinked yet.
 	revokeOccs, err := s.Store.ListOccupanciesForNukiRevocation(ctx, propertyID)
 	if err != nil {
 		msg := "list_revoke_occupancies_failed"
@@ -173,34 +204,52 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 		stats.revokedN++
 	}
 
-	// 2) Create/update codes for active/updated occupancies.
-	occs, err := s.Store.ListOccupanciesForNukiSync(ctx, propertyID)
+	// 2) Create/update codes for active confirmed named stays.
+	stays, err := s.Store.ListNamedStaysForNukiSync(ctx, propertyID)
 	if err != nil {
-		msg := "list_sync_occupancies_failed"
+		msg := "list_sync_named_stays_failed"
 		_ = s.finishRun(ctx, propertyID, runID, "partial", &msg, stats)
 		return err
 	}
-	for _, o := range occs {
-		if onlyOccupancyID != nil && o.ID != *onlyOccupancyID {
+	for _, stay := range stays {
+		if onlyStayID != nil && stay.NamedStayID != *onlyStayID {
 			continue
 		}
-		from, until := occupancyWindow(o, loc, inH, inM, outH, outM)
-		label := buildGuestCodeLabel(o)
-		if pinName != nil && onlyOccupancyID != nil && o.ID == *onlyOccupancyID {
+		if !stay.LegacyOccupancyID.Valid || stay.LegacyOccupancyID.Int64 <= 0 {
+			stats.failedN++
+			stats.processed++
+			_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationError, "legacy_occupancy_missing")
+			continue
+		}
+		from, until := namedStayWindow(stay, loc, inH, inM, outH, outM)
+		label := buildGuestCodeLabelFromName(stay.DisplayName)
+		if pinName != nil && onlyStayID != nil && stay.NamedStayID == *onlyStayID {
 			label = buildGuestCodeLabelFromName(*pinName)
 		}
-		code, err := s.Store.GetNukiCodeByOccupancyID(ctx, propertyID, o.ID)
+		code, err := s.Store.GetNukiCodeByNamedStayID(ctx, propertyID, stay.NamedStayID)
 		if err != nil {
 			stats.failedN++
 			stats.processed++
 			continue
+		}
+		if code == nil {
+			code, err = s.Store.GetNukiCodeByOccupancyID(ctx, propertyID, stay.LegacyOccupancyID.Int64)
+			if err != nil {
+				stats.failedN++
+				stats.processed++
+				continue
+			}
+			if code != nil {
+				code.NamedStayID = sql.NullInt64{Int64: stay.NamedStayID, Valid: true}
+			}
 		}
 		stats.processed++
 		if code == nil {
 			if ext, masked := findMatchingKeypadEntry(label, from, until, keypadCodes); ext != "" {
 				linked := &store.NukiAccessCode{
 					PropertyID:       propertyID,
-					OccupancyID:      o.ID,
+					OccupancyID:      stay.LegacyOccupancyID.Int64,
+					NamedStayID:      sql.NullInt64{Int64: stay.NamedStayID, Valid: true},
 					CodeLabel:        label,
 					AccessCodeMasked: maskCode(masked),
 					ExternalNukiID:   sql.NullString{String: ext, Valid: true},
@@ -210,6 +259,7 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 					LastSyncRunID:    sql.NullInt64{Int64: runID, Valid: true},
 				}
 				if err := s.Store.UpsertNukiCode(ctx, linked); err == nil {
+					_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationGenerated, "")
 					stats.updatedN++
 					continue
 				}
@@ -225,7 +275,7 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 			res, err := s.Client.CreateAccess(ctx, cred, req)
 			if err != nil {
 				stats.failedN++
-				_ = s.upsertFailure(ctx, propertyID, o.ID, runID, label, from, until, err)
+				_ = s.upsertFailure(ctx, propertyID, stay.LegacyOccupancyID.Int64, stay.NamedStayID, runID, label, from, until, err)
 				continue
 			}
 			pinForMask := strings.TrimSpace(res.AccessCode)
@@ -234,7 +284,8 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 			}
 			newCode := &store.NukiAccessCode{
 				PropertyID:        propertyID,
-				OccupancyID:       o.ID,
+				OccupancyID:       stay.LegacyOccupancyID.Int64,
+				NamedStayID:       sql.NullInt64{Int64: stay.NamedStayID, Valid: true},
 				CodeLabel:         label,
 				AccessCodeMasked:  maskCode(pinForMask),
 				GeneratedPINPlain: sql.NullString{String: pinForMask, Valid: strings.TrimSpace(pinForMask) != ""},
@@ -248,9 +299,12 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 				stats.failedN++
 				continue
 			}
+			_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationGenerated, "")
 			stats.createdN++
 			continue
 		}
+		code.NamedStayID = sql.NullInt64{Int64: stay.NamedStayID, Valid: true}
+		code.OccupancyID = stay.LegacyOccupancyID.Int64
 		if !code.ExternalNukiID.Valid || strings.TrimSpace(code.ExternalNukiID.String) == "" {
 			if ext, masked := findMatchingKeypadEntry(label, from, until, keypadCodes); ext != "" {
 				code.ExternalNukiID = sql.NullString{String: ext, Valid: true}
@@ -261,6 +315,7 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 				code.ErrorMessage = sql.NullString{}
 				code.LastSyncRunID = sql.NullInt64{Int64: runID, Valid: true}
 				if err := s.Store.UpsertNukiCode(ctx, code); err == nil {
+					_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationGenerated, "")
 					stats.updatedN++
 					continue
 				}
@@ -272,11 +327,6 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 				code.ExternalNukiID = sql.NullString{}
 			}
 		}
-		if shouldPreserveGeneratedWindow(o, code, from, until) {
-			from = code.ValidFrom.UTC()
-			until = code.ValidUntil.UTC()
-		}
-
 		needsUpdate := code.ValidFrom.UTC().Format(time.RFC3339) != from.UTC().Format(time.RFC3339) ||
 			code.ValidUntil.UTC().Format(time.RFC3339) != until.UTC().Format(time.RFC3339) ||
 			code.Status != "generated" ||
@@ -287,6 +337,7 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 			code.LastSyncRunID = sql.NullInt64{Int64: runID, Valid: true}
 			code.ErrorMessage = sql.NullString{}
 			_ = s.Store.UpsertNukiCode(ctx, code)
+			_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationGenerated, "")
 			continue
 		}
 
@@ -302,7 +353,7 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 		}
 		if err != nil {
 			stats.failedN++
-			_ = s.upsertFailure(ctx, propertyID, o.ID, runID, label, from, until, err)
+			_ = s.upsertFailure(ctx, propertyID, stay.LegacyOccupancyID.Int64, stay.NamedStayID, runID, label, from, until, err)
 			continue
 		}
 		code.CodeLabel = label
@@ -326,10 +377,11 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 			stats.failedN++
 			continue
 		}
+		_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationGenerated, "")
 		stats.updatedN++
 	}
-	if onlyOccupancyID != nil && stats.processed == 0 {
-		msg := "occupancy_not_found_or_not_upcoming"
+	if onlyStayID != nil && stats.processed == 0 {
+		msg := "named_stay_not_found_or_not_upcoming"
 		_ = s.finishRun(ctx, propertyID, runID, "failure", &msg, stats)
 		return errors.New(msg)
 	}
@@ -564,12 +616,12 @@ func (s *Service) ReconcileGuestDailyEntriesSince(ctx context.Context, propertyI
 	if err != nil {
 		return stats, err
 	}
-	occupancyByAuth, err := s.Store.ListGeneratedNukiAccessCodesByExternalID(ctx, propertyID)
+	stayByAuth, err := s.Store.ListGeneratedNukiAccessCodesByExternalID(ctx, propertyID)
 	if err != nil {
 		return stats, err
 	}
-	stats.OccupancyKeyCount = len(occupancyByAuth)
-	if len(occupancyByAuth) == 0 {
+	stats.OccupancyKeyCount = len(stayByAuth)
+	if len(stayByAuth) == 0 {
 		return stats, nil
 	}
 	cleanerAuth := ""
@@ -592,6 +644,7 @@ func (s *Service) ReconcileGuestDailyEntriesSince(ctx context.Context, propertyI
 
 	type bucketKey struct {
 		occupancyID int64
+		namedStayID int64
 		day         string
 	}
 	firstByKey := map[bucketKey]SmartlockEvent{}
@@ -605,12 +658,15 @@ func (s *Service) ReconcileGuestDailyEntriesSince(ctx context.Context, propertyI
 		if authID == "" {
 			continue
 		}
-		occID, ok := occupancyByAuth[authID]
+		ident, ok := stayByAuth[authID]
 		if !ok {
 			continue
 		}
+		if !ident.NamedStayID.Valid || ident.NamedStayID.Int64 <= 0 {
+			continue
+		}
 		stats.AuthMatchedEvents++
-		key := bucketKey{occupancyID: occID, day: ev.OccurredAt.In(loc).Format("2006-01-02")}
+		key := bucketKey{occupancyID: ident.OccupancyID, namedStayID: ident.NamedStayID.Int64, day: ev.OccurredAt.In(loc).Format("2006-01-02")}
 		if anyExisting, anyOK := anyByKey[key]; !anyOK || ev.OccurredAt.Before(anyExisting.OccurredAt) {
 			anyByKey[key] = ev
 		}
@@ -631,6 +687,7 @@ func (s *Service) ReconcileGuestDailyEntriesSince(ctx context.Context, propertyI
 		if err := s.Store.UpsertNukiGuestDailyEntry(ctx, &store.NukiGuestDailyEntry{
 			PropertyID:         propertyID,
 			OccupancyID:        key.occupancyID,
+			NamedStayID:        sql.NullInt64{Int64: key.namedStayID, Valid: true},
 			DayDate:            key.day,
 			FirstEntryAt:       ev.OccurredAt.UTC(),
 			NukiEventReference: sql.NullString{String: ref, Valid: ref != ""},
@@ -850,17 +907,21 @@ func (s *Service) revokeCode(ctx context.Context, cred Credentials, runID int64,
 	return nil
 }
 
-func (s *Service) upsertFailure(ctx context.Context, propertyID, occupancyID, runID int64, label string, from, until time.Time, err error) error {
+func (s *Service) upsertFailure(ctx context.Context, propertyID, occupancyID, stayID, runID int64, label string, from, until time.Time, err error) error {
 	m := truncateErr(err.Error())
 	c := &store.NukiAccessCode{
 		PropertyID:    propertyID,
 		OccupancyID:   occupancyID,
+		NamedStayID:   sql.NullInt64{Int64: stayID, Valid: stayID > 0},
 		CodeLabel:     label,
 		ValidFrom:     from,
 		ValidUntil:    until,
 		Status:        "not_generated",
 		ErrorMessage:  sql.NullString{String: m, Valid: true},
 		LastSyncRunID: sql.NullInt64{Int64: runID, Valid: true},
+	}
+	if stayID > 0 {
+		_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stayID, store.NukiGenerationError, m)
 	}
 	return s.Store.UpsertNukiCode(ctx, c)
 }
@@ -904,6 +965,23 @@ func occupancyWindow(o store.Occupancy, loc *time.Location, inH, inM, outH, outM
 	endLocal := o.EndAt.In(loc)
 	validFrom := time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), inH, inM, 0, 0, loc).UTC()
 	validUntil := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day(), outH, outM, 0, 0, loc).UTC()
+	if !validUntil.After(validFrom) {
+		validUntil = validFrom.Add(2 * time.Hour)
+	}
+	return validFrom, validUntil
+}
+
+func namedStayWindow(stay store.NukiStay, loc *time.Location, inH, inM, outH, outM int) (time.Time, time.Time) {
+	ci, err := time.ParseInLocation("2006-01-02", stay.CheckInDate, loc)
+	if err != nil {
+		ci = time.Now().In(loc)
+	}
+	co, err := time.ParseInLocation("2006-01-02", stay.CheckOutDate, loc)
+	if err != nil {
+		co = ci.AddDate(0, 0, 1)
+	}
+	validFrom := time.Date(ci.Year(), ci.Month(), ci.Day(), inH, inM, 0, 0, loc).UTC()
+	validUntil := time.Date(co.Year(), co.Month(), co.Day(), outH, outM, 0, 0, loc).UTC()
 	if !validUntil.After(validFrom) {
 		validUntil = validFrom.Add(2 * time.Hour)
 	}

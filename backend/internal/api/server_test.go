@@ -188,6 +188,23 @@ func TestDashboardSummary_IncludesOnlyAuthorizedWidgets(t *testing.T) {
 	if err != nil || occ == nil {
 		t.Fatalf("expected occupancy, err=%v", err)
 	}
+	nowText := time.Now().UTC().Format(time.RFC3339)
+	res, err := st.DB.ExecContext(ctx, `
+		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
+		VALUES (?, 'Guest One', 'booking_com', ?, ?, 'active', 1, 'booking_ics', 'dashboard-occ-1', 'confirmed', 'generated', ?, ?)`,
+		prop.ID, start.UTC().Format("2006-01-02"), end.UTC().Format("2006-01-02"), nowText, nowText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stayID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
+		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, occ.ID, prop.ID, stayID, nowText); err != nil {
+		t.Fatal(err)
+	}
 	nukiRunID, err := st.StartNukiSyncRun(ctx, prop.ID, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -195,6 +212,7 @@ func TestDashboardSummary_IncludesOnlyAuthorizedWidgets(t *testing.T) {
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:        prop.ID,
 		OccupancyID:       occ.ID,
+		NamedStayID:       sql.NullInt64{Int64: stayID, Valid: true},
 		CodeLabel:         "booking-guest-one",
 		AccessCodeMasked:  sql.NullString{String: "12**", Valid: true},
 		GeneratedPINPlain: sql.NullString{String: "1234", Valid: true},
@@ -836,6 +854,23 @@ func TestSaveNukiStayName_PersistsAndReflectsInOccupancyList(t *testing.T) {
 	if err != nil || savedOcc == nil {
 		t.Fatalf("occupancy save failed err=%v", err)
 	}
+	nowText := time.Now().UTC().Format(time.RFC3339)
+	namedRes, err := st.DB.ExecContext(ctx, `
+		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
+		VALUES (?, 'ICS Guest', 'booking_com', ?, ?, 'active', 1, 'booking_ics', 'uid-stay-name-1', 'confirmed', 'pending', ?, ?)`,
+		prop.ID, occ.StartAt.UTC().Format("2006-01-02"), occ.EndAt.UTC().Format("2006-01-02"), nowText, nowText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stayID, err := namedRes.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
+		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, savedOcc.ID, prop.ID, stayID, nowText); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := &Server{Store: st, SessionTTL: time.Hour}
 	ts := httptest.NewServer(srv.Routes())
@@ -857,7 +892,7 @@ func TestSaveNukiStayName_PersistsAndReflectsInOccupancyList(t *testing.T) {
 	patchBody := strings.NewReader(`{"pin_name":"Lubos"}`)
 	patchReq, _ := http.NewRequest(
 		http.MethodPatch,
-		ts.URL+"/api/properties/"+strconv.FormatInt(prop.ID, 10)+"/nuki/upcoming-stays/"+strconv.FormatInt(savedOcc.ID, 10),
+		ts.URL+"/api/properties/"+strconv.FormatInt(prop.ID, 10)+"/nuki/upcoming-stays/"+strconv.FormatInt(stayID, 10),
 		patchBody,
 	)
 	patchReq.Header.Set("Content-Type", "application/json")
@@ -883,36 +918,16 @@ func TestSaveNukiStayName_PersistsAndReflectsInOccupancyList(t *testing.T) {
 		t.Fatalf("expected ok=true in patch response")
 	}
 
-	listReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/properties/"+strconv.FormatInt(prop.ID, 10)+"/occupancies?limit=10", nil)
-	for _, c := range loginRes.Cookies() {
-		listReq.AddCookie(c)
-	}
-	listRes, err := client.Do(listReq)
+	updated, err := st.GetNamedStay(ctx, prop.ID, stayID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listRes.Body.Close()
-	if listRes.StatusCode != http.StatusOK {
-		t.Fatalf("list status=%d want 200", listRes.StatusCode)
-	}
-	var listPayload struct {
-		Occupancies []struct {
-			RawSummary string `json:"raw_summary"`
-		} `json:"occupancies"`
-	}
-	rawList, _ := io.ReadAll(listRes.Body)
-	if err := json.Unmarshal(rawList, &listPayload); err != nil {
-		t.Fatal(err)
-	}
-	if len(listPayload.Occupancies) != 1 {
-		t.Fatalf("occupancies len=%d want 1", len(listPayload.Occupancies))
-	}
-	if got := listPayload.Occupancies[0].RawSummary; got != "Lubos" {
-		t.Fatalf("raw_summary=%q want Lubos", got)
+	if updated.DisplayName != "Lubos" {
+		t.Fatalf("display_name=%q want Lubos", updated.DisplayName)
 	}
 }
 
-func TestCreateFinanceBookingPayoutStay_CreatesAndMapsOccupancy(t *testing.T) {
+func TestCreateFinanceBookingPayoutStay_CreatesAndMapsNamedStay(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
 	hash := testPasswordHash(t, "secret123")
@@ -980,6 +995,7 @@ func TestCreateFinanceBookingPayoutStay_CreatesAndMapsOccupancy(t *testing.T) {
 	}
 	var payload struct {
 		OK          bool  `json:"ok"`
+		NamedStayID int64 `json:"named_stay_id"`
 		OccupancyID int64 `json:"occupancy_id"`
 		Created     bool  `json:"created"`
 	}
@@ -987,7 +1003,7 @@ func TestCreateFinanceBookingPayoutStay_CreatesAndMapsOccupancy(t *testing.T) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if !payload.OK || payload.OccupancyID <= 0 || !payload.Created {
+	if !payload.OK || payload.NamedStayID <= 0 || payload.OccupancyID <= 0 || !payload.Created {
 		t.Fatalf("unexpected response: %+v", payload)
 	}
 
@@ -995,15 +1011,25 @@ func TestCreateFinanceBookingPayoutStay_CreatesAndMapsOccupancy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !payout.NamedStayID.Valid || payout.NamedStayID.Int64 != payload.NamedStayID {
+		t.Fatalf("payout named_stay_id=%v want %d", payout.NamedStayID, payload.NamedStayID)
+	}
 	if !payout.OccupancyID.Valid || payout.OccupancyID.Int64 != payload.OccupancyID {
-		t.Fatalf("payout occupancy=%v want %d", payout.OccupancyID, payload.OccupancyID)
+		t.Fatalf("payout legacy occupancy=%v want %d", payout.OccupancyID, payload.OccupancyID)
+	}
+	stay, err := st.GetNamedStay(ctx, prop.ID, payload.NamedStayID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stay.SourceReference.String != "REF-CREATE-1" || stay.StayType != store.StayTypeBookingCom {
+		t.Fatalf("unexpected named stay: %+v", stay)
 	}
 	occ, err := st.GetOccupancyByID(ctx, prop.ID, payload.OccupancyID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if occ.SourceType != "booking_payout" {
-		t.Fatalf("source_type=%q want booking_payout", occ.SourceType)
+	if occ.SourceType != "manual" {
+		t.Fatalf("legacy source_type=%q want manual", occ.SourceType)
 	}
 
 	// Second call should keep mapping and report created=false.
@@ -1027,6 +1053,7 @@ func TestCreateFinanceBookingPayoutStay_CreatesAndMapsOccupancy(t *testing.T) {
 	}
 	var payload2 struct {
 		OK          bool  `json:"ok"`
+		NamedStayID int64 `json:"named_stay_id"`
 		OccupancyID int64 `json:"occupancy_id"`
 		Created     bool  `json:"created"`
 	}
@@ -1034,7 +1061,7 @@ func TestCreateFinanceBookingPayoutStay_CreatesAndMapsOccupancy(t *testing.T) {
 	if err := json.Unmarshal(raw2, &payload2); err != nil {
 		t.Fatal(err)
 	}
-	if !payload2.OK || payload2.OccupancyID != payload.OccupancyID || payload2.Created {
+	if !payload2.OK || payload2.NamedStayID != payload.NamedStayID || payload2.OccupancyID != payload.OccupancyID || payload2.Created {
 		t.Fatalf("unexpected second response: %+v", payload2)
 	}
 }

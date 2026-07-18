@@ -177,18 +177,84 @@ func (s *Store) CoveredNightsForOccupancies(ctx context.Context, ids []int64) (m
 	return out, rows.Err()
 }
 
-// OccupancyMetricNights returns availability and guest night counts for
-// [fromDate, toDate) (YYYY-MM-DD, half-open) from occupancy_nights truth
-// (PMS_19 §10.3.1):
-//   - availability = active nights whose owner is not closed.
-//   - guest       = active nights owned by a named stay or external sale.
+// OccupancyMetricNights returns PMS 21 night-level counts for [fromDate,
+// toDate) (YYYY-MM-DD, half-open): availability-blocking named/availability
+// nights and sold guest named-stay nights. Raw booking blocks are intentionally
+// excluded.
 func (s *Store) OccupancyMetricNights(ctx context.Context, propertyID int64, fromDate, toDate string) (availability, guest int, err error) {
+	if !s.propertyHasNamedStays(ctx, propertyID) {
+		return s.legacyOccupancyMetricNights(ctx, propertyID, fromDate, toDate)
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT ns.stay_type,
+		       COALESCE(ns.review_status, 'confirmed'),
+		       CASE WHEN ns.manual_revenue_cents IS NOT NULL OR EXISTS (
+		         SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id
+		       ) THEN 1 ELSE 0 END,
+		       COALESCE(ns.stay_outcome, '')
+		FROM named_stay_nights n
+		JOIN named_stays ns ON ns.id = n.named_stay_id
+		WHERE n.property_id = ? AND n.active = 1 AND n.local_night_date >= ? AND n.local_night_date < ?
+		  AND ns.status = 'active'`,
+		propertyID, fromDate, toDate)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var stayType, reviewStatus, stayOutcome string
+		var hasRevenue int
+		if err := rows.Scan(&stayType, &reviewStatus, &hasRevenue, &stayOutcome); err != nil {
+			return 0, 0, err
+		}
+		availability++
+		if reviewStatus == "confirmed" && stayOutcome == "" && (stayType == "booking_com" || (stayType == "external" && hasRevenue == 1)) {
+			guest++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+
+	blockRows, err := s.DB.QueryContext(ctx, `
+		SELECT start_date, end_date
+		FROM property_availability_blocks
+		WHERE property_id = ? AND status = 'active' AND start_date < ? AND end_date > ?`, propertyID, toDate, fromDate)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer blockRows.Close()
+	from, _ := time.Parse("2006-01-02", fromDate)
+	to, _ := time.Parse("2006-01-02", toDate)
+	for blockRows.Next() {
+		var start, end string
+		if err := blockRows.Scan(&start, &end); err != nil {
+			return 0, 0, err
+		}
+		bs, err1 := time.Parse("2006-01-02", start)
+		be, err2 := time.Parse("2006-01-02", end)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		if bs.Before(from) {
+			bs = from
+		}
+		if be.After(to) {
+			be = to
+		}
+		if be.After(bs) {
+			availability += int(be.Sub(bs).Hours()/24 + 0.5)
+		}
+	}
+	return availability, guest, blockRows.Err()
+}
+
+func (s *Store) legacyOccupancyMetricNights(ctx context.Context, propertyID int64, fromDate, toDate string) (availability, guest int, err error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT COALESCE(o.closure_state, ''), COALESCE(o.representation_kind, '')
 		FROM occupancy_nights n
 		JOIN occupancies o ON o.id = n.occupancy_id
-		WHERE n.property_id = ? AND n.active = 1 AND n.local_night_date >= ? AND n.local_night_date < ?`,
-		propertyID, fromDate, toDate)
+		WHERE n.property_id = ? AND n.active = 1 AND n.local_night_date >= ? AND n.local_night_date < ?`, propertyID, fromDate, toDate)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -199,7 +265,7 @@ func (s *Store) OccupancyMetricNights(ctx context.Context, propertyID int64, fro
 			return 0, 0, err
 		}
 		if closure == ClosureStateClosed {
-			continue // closed nights excluded from both metrics
+			continue
 		}
 		availability++
 		if kind == RepresentationNamedStay || closure == ClosureStateExternalSale {

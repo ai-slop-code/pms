@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { X } from 'lucide-vue-next'
-import type { MessagesOccupancy as Occupancy } from '@/api/types/messages'
+import type { MessagesStay as Occupancy } from '@/api/types/messages'
 import { occLabel, fmtDate } from './helpers'
 
 const props = defineProps<{
@@ -151,8 +151,8 @@ function onKey(event: KeyboardEvent) {
           :class="{ active: idx === activeIndex, selected: occ.id === selectedId }"
           @mousedown.prevent="selectOption(occ)"
         >
-          <span class="occ-name">{{ occ.guest_display_name || occ.raw_summary || `#${occ.id}` }}</span>
-          <span class="occ-dates">{{ fmtDate(occ.start_at) }} → {{ fmtDate(occ.end_at) }}</span>
+          <span class="occ-name">{{ occ.display_name || `#${occ.id}` }}</span>
+          <span class="occ-dates">{{ fmtDate(occ.check_in_date) }} → {{ fmtDate(occ.check_out_date) }}</span>
         </li>
       </ul>
       <div v-if="open && search && !filtered.length" class="occ-list occ-empty">

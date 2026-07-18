@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -161,19 +162,40 @@ func (s *Server) generateMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	occIDStr := r.URL.Query().Get("occupancy_id")
-	if occIDStr == "" {
-		WriteError(w, http.StatusBadRequest, "occupancy_id required")
+	stayIDStr := strings.TrimSpace(r.URL.Query().Get("stay_id"))
+	occIDStr := strings.TrimSpace(r.URL.Query().Get("occupancy_id"))
+	if stayIDStr == "" && occIDStr == "" {
+		WriteError(w, http.StatusBadRequest, "stay_id required")
 		return
 	}
-	occID, err := strconv.ParseInt(occIDStr, 10, 64)
-	if err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid occupancy_id")
-		return
+	var stayID int64
+	var legacyOccID int64
+	var err error
+	if stayIDStr != "" {
+		stayID, err = strconv.ParseInt(stayIDStr, 10, 64)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid stay_id")
+			return
+		}
+	} else {
+		legacyOccID, err = strconv.ParseInt(occIDStr, 10, 64)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid occupancy_id")
+			return
+		}
+		stayID, err = s.Store.ResolveNamedStayIDForOccupancy(r.Context(), pid, legacyOccID)
+		if err != nil {
+			stayID = 0
+		}
 	}
-	vals, err := s.Store.BuildPlaceholderValues(r.Context(), pid, occID)
+	var vals *store.MessagePlaceholderValues
+	if stayID > 0 {
+		vals, err = s.Store.BuildPlaceholderValuesForNamedStay(r.Context(), pid, stayID)
+	} else {
+		vals, err = s.Store.BuildPlaceholderValues(r.Context(), pid, legacyOccID)
+	}
 	if err != nil {
-		WriteError(w, http.StatusNotFound, "occupancy not found or data incomplete")
+		WriteError(w, http.StatusNotFound, "stay not found or data incomplete")
 		return
 	}
 
@@ -211,11 +233,28 @@ func (s *Server) generateMessage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"occupancy_id":   occID,
+		"stay_id":        stayID,
+		"occupancy_id":   legacyOccID,
 		"messages":       out,
 		"nuki_available": nukiAvailable,
 		"placeholders":   vals,
 	})
+}
+
+func (s *Server) listMessageStays(w http.ResponseWriter, r *http.Request) {
+	_, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Messages, permissions.LevelRead)
+	if !ok {
+		return
+	}
+	loc := s.analyticsLocation(r, pid)
+	now := time.Now().In(loc)
+	from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).Format("2006-01-02")
+	stays, err := s.Store.ListMessageStayOptions(r.Context(), pid, from, 200)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]interface{}{"stays": stays})
 }
 
 func (s *Server) generateCleaningMessage(w http.ResponseWriter, r *http.Request) {

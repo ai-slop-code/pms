@@ -93,7 +93,7 @@ const emit = defineEmits<{
             {{ occupancyOptionLabel(o) }}
           </option>
         </UiSelect>
-        <UiInput v-model="form.occupancy_id" label="Occupancy ID" inputmode="numeric" placeholder="or type id" />
+        <UiInput v-model="form.occupancy_id" label="Named stay ID" inputmode="numeric" placeholder="or type id" />
         <UiSelect
           :model-value="form.booking_payout_id"
           label="Mapped Booking.com payout (optional)"

@@ -74,7 +74,7 @@ func main() {
 	if err := relocateLegacyFinanceAttachments(db, cfg.DataDir); err != nil {
 		log.Printf("attachment migration: %v", err)
 	}
-	st := &store.Store{DB: db}
+	st := &store.Store{DB: db, OccupancyLegacyWriteDisabled: cfg.OccupancyLegacyWriteDisabled}
 	if err := st.BackfillUpstreamOwnership(context.Background()); err != nil {
 		log.Printf("occupancy upstream-ownership backfill: %v", err)
 	}
@@ -103,7 +103,7 @@ func main() {
 		}
 		log.Printf("created first super_admin user %s (must change password on first login)", cfg.FirstSuperadmin.Email)
 	}
-	occSvc := &occupancy.Service{Store: st}
+	occSvc := &occupancy.Service{Store: st, RawBlocksDualWrite: cfg.RawBlocksDualWrite}
 	var googleCalendarClient cleaningcalendar.CalendarClient
 	if raw := os.Getenv("PMS_GOOGLE_SERVICE_ACCOUNT_JSON"); raw != "" {
 		client, err := cleaningcalendar.NewServiceAccountClient([]byte(raw), nil)
@@ -159,6 +159,7 @@ func main() {
 		TOTPDevBypass:           cfg.TOTPDevBypass,
 		AllowedOrigins:          cfg.CORSOrigins,
 		TrustedProxy:            cfg.TrustedProxy,
+		OccupancyExportDisabled: cfg.OccupancyExportDisabled,
 	}
 	instanceID := generateInstanceID()
 	log.Printf("scheduler instance id: %s", instanceID)

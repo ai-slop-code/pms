@@ -24,7 +24,7 @@ import type {
 const { pid } = useCurrentProperty()
 const loading = ref(false)
 const syncing = ref(false)
-const generatingOccupancyId = ref<number | null>(null)
+const generatingStayId = ref<number | null>(null)
 const error = ref('')
 const success = ref('')
 const keypadCodes = ref<KeypadCode[]>([])
@@ -103,18 +103,18 @@ async function loadAll(clearMessages = false) {
     runsHasMore.value = !!runsRes.has_more
     const next: Record<number, string> = {}
     for (const s of staysRes.stays) {
-      const existing = pinNames.value[s.occupancy_id]
+      const existing = pinNames.value[s.stay_id]
       if (existing && existing.trim() !== '') {
-        next[s.occupancy_id] = existing
+        next[s.stay_id] = existing
         continue
       }
       if (s.saved_pin_name && s.saved_pin_name.trim() !== '') {
-        next[s.occupancy_id] = s.saved_pin_name.trim()
+        next[s.stay_id] = s.saved_pin_name.trim()
         continue
       }
       const label = s.generated_label || ''
       if (label.toLowerCase().startsWith('booking-')) {
-        next[s.occupancy_id] = label.slice(8)
+        next[s.stay_id] = label.slice(8)
       }
     }
     pinNames.value = next
@@ -125,27 +125,27 @@ async function loadAll(clearMessages = false) {
   }
 }
 
-async function saveStayNameForOccupancy(occupancyId: number) {
+async function saveStayName(stayId: number) {
   if (!pid.value) return
-  const raw = pinNames.value[occupancyId] || ''
+  const raw = pinNames.value[stayId] || ''
   const pinName = raw.trim()
-  savingStayName.value[occupancyId] = true
+  savingStayName.value[stayId] = true
   error.value = ''
   try {
     const r = await api<{ ok: boolean; saved_pin_name?: string }>(
-      `/api/properties/${pid.value}/nuki/upcoming-stays/${occupancyId}`,
+      `/api/properties/${pid.value}/nuki/upcoming-stays/${stayId}`,
       { method: 'PATCH', json: { pin_name: pinName } },
     )
     if (!r.ok) {
       error.value = 'Failed to save stay name.'
       return
     }
-    pinNames.value[occupancyId] = r.saved_pin_name || ''
+    pinNames.value[stayId] = r.saved_pin_name || ''
     success.value = 'Stay name saved.'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to save stay name.'
   } finally {
-    savingStayName.value[occupancyId] = false
+    savingStayName.value[stayId] = false
   }
 }
 
@@ -189,12 +189,12 @@ async function syncCodesQuietly() {
   }
 }
 
-async function refreshAfterGenerate(occupancyId: number) {
+async function refreshAfterGenerate(stayId: number) {
   const attempts = 5
   for (let i = 0; i < attempts; i++) {
     await syncCodesQuietly()
     await loadAll()
-    const row = upcomingStays.value.find((s) => s.occupancy_id === occupancyId)
+    const row = upcomingStays.value.find((s) => s.stay_id === stayId)
     if (row && row.generated_status === 'generated') return true
     await sleep(1200)
   }
@@ -227,7 +227,7 @@ async function revealPin(codeId: number, options: { stayName?: string; label?: s
 function revealStayPin(stay: UpcomingStay) {
   if (!stay.generated_code_id) return
   revealPin(stay.generated_code_id, {
-    stayName: stay.summary || pinNames.value[stay.occupancy_id] || stay.source_event_uid,
+    stayName: stay.summary || pinNames.value[stay.stay_id] || stay.source_event_uid,
     label: stay.generated_label,
   }).catch(() => {})
 }
@@ -236,29 +236,29 @@ function revealCode(code: KeypadCode) {
   revealPin(code.id, { stayName: code.name, label: code.name || code.external_nuki_id }).catch(() => {})
 }
 
-async function generateForStay(occupancyId: number) {
+async function generateForStay(stayId: number) {
   if (!pid.value) return
-  const pinName = (pinNames.value[occupancyId] || '').trim()
+  const pinName = (pinNames.value[stayId] || '').trim()
   if (!pinName) {
     error.value = 'Enter a stay name before generating a PIN.'
     return
   }
-  generatingOccupancyId.value = occupancyId
+  generatingStayId.value = stayId
   error.value = ''
   success.value = ''
   try {
     const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/nuki/codes/generate`, {
       method: 'POST',
-      json: { occupancy_id: occupancyId, pin_name: pinName },
+      json: { stay_id: stayId, pin_name: pinName },
     })
     if (!r.ok) error.value = r.error || 'PIN generation failed.'
     else {
-      const settled = await refreshAfterGenerate(occupancyId)
+      const settled = await refreshAfterGenerate(stayId)
       if (!settled) await loadAll()
-      const row = upcomingStays.value.find((s) => s.occupancy_id === occupancyId)
+      const row = upcomingStays.value.find((s) => s.stay_id === stayId)
       if (row && row.generated_code_id) {
         await revealPin(row.generated_code_id, {
-          stayName: row.summary || pinNames.value[row.occupancy_id] || row.source_event_uid,
+          stayName: row.summary || pinNames.value[row.stay_id] || row.source_event_uid,
           label: row.generated_label,
         })
       }
@@ -267,7 +267,7 @@ async function generateForStay(occupancyId: number) {
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to generate guest PIN.'
   } finally {
-    generatingOccupancyId.value = null
+    generatingStayId.value = null
   }
 }
 
@@ -296,8 +296,8 @@ async function deleteKeypadCode(externalId: string) {
 
 const enabledCodes = computed(() => keypadCodes.value.filter((c) => c.enabled))
 
-function onUpdatePinName(occupancyId: number, value: string) {
-  pinNames.value[occupancyId] = value
+function onUpdatePinName(stayId: number, value: string) {
+  pinNames.value[stayId] = value
 }
 
 watch(
@@ -337,10 +337,10 @@ watch(
         :stays="upcomingStays"
         :pin-names="pinNames"
         :saving-stay-name="savingStayName"
-        :generating-occupancy-id="generatingOccupancyId"
+        :generating-stay-id="generatingStayId"
         :revealing-code-id="revealingCodeId"
         @update:pin-name="onUpdatePinName"
-        @save-pin-name="saveStayNameForOccupancy"
+        @save-pin-name="saveStayName"
         @generate="generateForStay"
         @reveal="revealStayPin"
       />

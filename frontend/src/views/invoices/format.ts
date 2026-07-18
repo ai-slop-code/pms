@@ -21,9 +21,8 @@ export function fmtDay(ts?: string): string {
 }
 
 export function occupancyOptionLabel(o: OccupancyOption): string {
-  const g = o.guest_display_name || o.summary || 'Stay'
-  const payout = o.has_payout_data ? ' · payout' : ''
-  return `#${o.id} ${g}${payout} (${fmtDay(o.start_at)}–${fmtDay(o.end_at)})`
+  const payout = o.has_finance_data ? ' · finance' : ''
+  return `#${o.id} ${o.display_name}${payout} (${o.check_in_date}–${o.check_out_date})`
 }
 
 export function payoutBillableCents(p: BookingPayoutOption): number {

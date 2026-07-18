@@ -33,9 +33,12 @@ import {
 } from '@/views/occupancy/closure'
 import { monthKey, parseMonthKey } from '@/utils/month'
 import type {
+  CalendarAvailabilityBlock,
+  CalendarNamedStay,
+  CalendarRawBookingBlock,
   Occupancy as Occ,
+  OccupancyCalendarView,
   OccupancySyncRun as Run,
-  OccupancyApiToken as TokenRow,
   OccupancyRepairReport,
 } from '@/api/types/occupancy'
 
@@ -52,12 +55,10 @@ const success = ref('')
 const month = ref(monthKey(new Date()))
 const statusFilter = ref('')
 const occupancies = ref<Occ[]>([])
+const occupancyCalendar = ref<OccupancyCalendarView | null>(null)
 const runs = ref<Run[]>([])
-const tokens = ref<TokenRow[]>([])
 const source = ref<{ active: boolean; source_type: string } | null>(null)
-const newTokenPlain = ref('')
 const syncing = ref(false)
-const copiedExport = ref('')
 const repairBusy = ref(false)
 const repairReport = ref<OccupancyRepairReport | null>(null)
 
@@ -133,7 +134,12 @@ function isProvisionalBlock(o: Occ) {
   return o.representation_kind === 'unnamed_block' || o.representation_kind === 'legacy_generated_night'
 }
 function canEditNamedStay(o: Occ) {
-  return !o.superseded && o.representation_kind === 'named_stay' && o.status !== 'deleted_from_source' && o.status !== 'cancelled'
+  return (
+    !o.superseded &&
+    o.representation_kind === 'named_stay' &&
+    o.status !== 'deleted_from_source' &&
+    o.status !== 'cancelled'
+  )
 }
 function openNameStayDialog(o: Occ, night = '') {
   nameStayMode.value = 'create'
@@ -171,7 +177,11 @@ async function submitNameStayDialog() {
     nameStayError.value = 'Enter a guest / stay name.'
     return
   }
-  if (!isISODate(nameStayCheckIn.value) || !isISODate(nameStayCheckOut.value) || nameStayCheckOut.value <= nameStayCheckIn.value) {
+  if (
+    !isISODate(nameStayCheckIn.value) ||
+    !isISODate(nameStayCheckOut.value) ||
+    nameStayCheckOut.value <= nameStayCheckIn.value
+  ) {
     nameStayError.value = 'Choose a valid check-in and later check-out.'
     return
   }
@@ -194,7 +204,8 @@ async function submitNameStayDialog() {
     })
     if (!r.ok) throw new Error(r.error || 'Failed to save named stay')
     nameStayDialogOpen.value = false
-    success.value = nameStayMode.value === 'edit' ? `Named stay “${guest}” updated.` : `Named stay “${guest}” created.`
+    success.value =
+      nameStayMode.value === 'edit' ? `Named stay “${guest}” updated.` : `Named stay “${guest}” created.`
     await reloadCurrentOccupancyView()
   } catch (e) {
     nameStayError.value = e instanceof Error ? e.message : 'Failed to save named stay'
@@ -207,14 +218,18 @@ async function deleteNamedStay(o: Occ) {
   dayDialogOpen.value = false
   const ok = await confirm({
     title: 'Delete named stay',
-    message: 'Remove this named guest stay and return its source-covered nights to unnamed Booking block coverage?',
+    message:
+      'Remove this named guest stay and return its source-covered nights to unnamed Booking block coverage?',
     confirmLabel: 'Delete named stay',
   })
   if (!ok) return
   error.value = ''
   success.value = ''
   try {
-    const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/occupancies/${o.id}/named-stay`, { method: 'DELETE' })
+    const r = await api<{ ok: boolean; error?: string }>(
+      `/api/properties/${pid.value}/occupancies/${o.id}/named-stay`,
+      { method: 'DELETE' },
+    )
     if (!r.ok) throw new Error(r.error || 'Failed to delete named stay')
     success.value = 'Named stay deleted.'
     await reloadCurrentOccupancyView()
@@ -257,12 +272,362 @@ const cleaningDialogStayLabel = computed(() => {
 const dayDialogOpen = ref(false)
 const dayDialogDate = ref('')
 const dayDialogStays = ref<Occ[]>([])
+const calendarDayDialogOpen = ref(false)
+const calendarDayDialogDate = ref('')
+const calendarDayRawBlocks = ref<CalendarRawBookingBlock[]>([])
+const calendarDayNamedStays = ref<CalendarNamedStay[]>([])
+const calendarDayAvailabilityBlocks = ref<CalendarAvailabilityBlock[]>([])
+const promoteDialogOpen = ref(false)
+const promoteBusy = ref(false)
+const promoteError = ref('')
+const promoteRawBlock = ref<CalendarRawBookingBlock | null>(null)
+const promoteCheckIn = ref('')
+const promoteCheckOut = ref('')
+const promoteDisplayName = ref('')
+const promoteStayType = ref('booking_com')
+const promoteCleaningRequired = ref(true)
+const promoteCleaningManuallyChanged = ref(false)
+const manualStayDialogOpen = ref(false)
+const manualStayBusy = ref(false)
+const manualStayError = ref('')
+const manualStayDisplayName = ref('')
+const manualStayType = ref('external')
+const manualStayCheckIn = ref('')
+const manualStayCheckOut = ref('')
+const manualStayCleaningRequired = ref(true)
+const manualStayCleaningManuallyChanged = ref(false)
+const availabilityDialogOpen = ref(false)
+const availabilityBusy = ref(false)
+const availabilityError = ref('')
+const availabilityEditingID = ref<number | null>(null)
+const availabilityBlockType = ref('closed')
+const availabilityStart = ref('')
+const availabilityEnd = ref('')
+const availabilityReason = ref('')
+const editStayDialogOpen = ref(false)
+const editStayBusy = ref(false)
+const editStayError = ref('')
+const editStayTarget = ref<CalendarNamedStay | null>(null)
+const editStayDisplayName = ref('')
+const editStayType = ref('external')
+const editStayCheckIn = ref('')
+const editStayCheckOut = ref('')
+const editStayCleaningRequired = ref(true)
+const stayStatusBusyID = ref<number | null>(null)
 
 function onCalendarCellClick(payload: { dateKey: string; stays: Occ[] }) {
   if (!payload.stays.length) return
   dayDialogDate.value = payload.dateKey
   dayDialogStays.value = payload.stays
   dayDialogOpen.value = true
+}
+
+function onCalendarV2CellClick(payload: {
+  dateKey: string
+  rawBlocks: CalendarRawBookingBlock[]
+  namedStays: CalendarNamedStay[]
+  availabilityBlocks: CalendarAvailabilityBlock[]
+}) {
+  calendarDayDialogDate.value = payload.dateKey
+  calendarDayRawBlocks.value = payload.rawBlocks
+  calendarDayNamedStays.value = payload.namedStays
+  calendarDayAvailabilityBlocks.value = payload.availabilityBlocks
+  calendarDayDialogOpen.value = true
+}
+
+function defaultCleaningRequiredForStayType(stayType: string) {
+  return stayType === 'booking_com' || stayType === 'external'
+}
+
+function openPromoteRawBlockDialog(block: CalendarRawBookingBlock) {
+  promoteRawBlock.value = block
+  const clicked = calendarDayDialogDate.value || block.check_in_date
+  promoteCheckIn.value =
+    clicked < block.check_in_date || clicked >= block.check_out_date ? block.check_in_date : clicked
+  promoteCheckOut.value = addISODate(promoteCheckIn.value, 1)
+  if (promoteCheckOut.value > block.check_out_date) promoteCheckOut.value = block.check_out_date
+  promoteDisplayName.value = ''
+  promoteStayType.value = 'booking_com'
+  promoteCleaningRequired.value = defaultCleaningRequiredForStayType(promoteStayType.value)
+  promoteCleaningManuallyChanged.value = false
+  promoteError.value = ''
+  calendarDayDialogOpen.value = false
+  promoteDialogOpen.value = true
+}
+
+function openManualStayDialog(dateKey = calendarDayDialogDate.value) {
+  manualStayDisplayName.value = ''
+  manualStayType.value = 'external'
+  manualStayCheckIn.value = dateKey || month.value + '-01'
+  manualStayCheckOut.value = addISODate(manualStayCheckIn.value, 1)
+  manualStayCleaningRequired.value = defaultCleaningRequiredForStayType(manualStayType.value)
+  manualStayCleaningManuallyChanged.value = false
+  manualStayError.value = ''
+  calendarDayDialogOpen.value = false
+  manualStayDialogOpen.value = true
+}
+
+watch(promoteStayType, (stayType) => {
+  if (!promoteCleaningManuallyChanged.value) {
+    promoteCleaningRequired.value = defaultCleaningRequiredForStayType(stayType)
+  }
+})
+
+watch(manualStayType, (stayType) => {
+  if (!manualStayCleaningManuallyChanged.value) {
+    manualStayCleaningRequired.value = defaultCleaningRequiredForStayType(stayType)
+  }
+})
+
+async function submitManualStay() {
+  if (!pid.value) return
+  const name = manualStayDisplayName.value.trim()
+  if (!name) {
+    manualStayError.value = 'Enter a stay name.'
+    return
+  }
+  if (
+    !isISODate(manualStayCheckIn.value) ||
+    !isISODate(manualStayCheckOut.value) ||
+    manualStayCheckOut.value <= manualStayCheckIn.value
+  ) {
+    manualStayError.value = 'Choose a valid check-in and later check-out.'
+    return
+  }
+  manualStayBusy.value = true
+  manualStayError.value = ''
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok: boolean; error?: string; nuki_generation_status?: string }>(
+      `/api/properties/${pid.value}/stays`,
+      {
+        method: 'POST',
+        json: {
+          display_name: name,
+          check_in: manualStayCheckIn.value,
+          check_out: manualStayCheckOut.value,
+          stay_type: manualStayType.value,
+          cleaning_required: manualStayCleaningRequired.value,
+        },
+      },
+    )
+    if (!r.ok) throw new Error(r.error || 'Failed to create stay')
+    manualStayDialogOpen.value = false
+    success.value =
+      r.nuki_generation_status === 'error'
+        ? `Named stay “${name}” created. Nuki generation needs attention.`
+        : `Named stay “${name}” created.`
+    await loadCalendar()
+  } catch (e) {
+    manualStayError.value = e instanceof Error ? e.message : 'Failed to create stay'
+  } finally {
+    manualStayBusy.value = false
+  }
+}
+
+function openAvailabilityDialog(block?: CalendarAvailabilityBlock) {
+  availabilityEditingID.value = block?.id ?? null
+  availabilityBlockType.value = block?.block_type || 'closed'
+  availabilityStart.value = block?.start_date || calendarDayDialogDate.value || month.value + '-01'
+  availabilityEnd.value = block?.end_date || addISODate(availabilityStart.value, 1)
+  availabilityReason.value = block?.reason || ''
+  availabilityError.value = ''
+  calendarDayDialogOpen.value = false
+  availabilityDialogOpen.value = true
+}
+
+async function submitAvailabilityBlock() {
+  if (!pid.value) return
+  if (
+    !isISODate(availabilityStart.value) ||
+    !isISODate(availabilityEnd.value) ||
+    availabilityEnd.value <= availabilityStart.value
+  ) {
+    availabilityError.value = 'Choose a valid start and later end date.'
+    return
+  }
+  availabilityBusy.value = true
+  availabilityError.value = ''
+  error.value = ''
+  success.value = ''
+  try {
+    const path = availabilityEditingID.value
+      ? `/api/properties/${pid.value}/availability-blocks/${availabilityEditingID.value}`
+      : `/api/properties/${pid.value}/availability-blocks`
+    const r = await api<{ ok: boolean; error?: string }>(path, {
+      method: availabilityEditingID.value ? 'PATCH' : 'POST',
+      json: {
+        block_type: availabilityBlockType.value,
+        start_date: availabilityStart.value,
+        end_date: availabilityEnd.value,
+        reason: availabilityReason.value.trim(),
+      },
+    })
+    if (!r.ok) throw new Error(r.error || 'Failed to save availability block')
+    availabilityDialogOpen.value = false
+    success.value = availabilityEditingID.value
+      ? 'Availability block updated.'
+      : 'Availability block created.'
+    await loadCalendar()
+  } catch (e) {
+    availabilityError.value = e instanceof Error ? e.message : 'Failed to save availability block'
+  } finally {
+    availabilityBusy.value = false
+  }
+}
+
+function openEditStayDialog(stay: CalendarNamedStay) {
+  editStayTarget.value = stay
+  editStayDisplayName.value = stay.display_name
+  editStayType.value = stay.stay_type
+  editStayCheckIn.value = stay.check_in_date
+  editStayCheckOut.value = stay.check_out_date
+  editStayCleaningRequired.value = stay.cleaning_required
+  editStayError.value = ''
+  calendarDayDialogOpen.value = false
+  editStayDialogOpen.value = true
+}
+
+async function submitEditStay() {
+  if (!pid.value || !editStayTarget.value) return
+  const name = editStayDisplayName.value.trim()
+  if (!name) {
+    editStayError.value = 'Enter a stay name.'
+    return
+  }
+  if (
+    !isISODate(editStayCheckIn.value) ||
+    !isISODate(editStayCheckOut.value) ||
+    editStayCheckOut.value <= editStayCheckIn.value
+  ) {
+    editStayError.value = 'Choose a valid check-in and later check-out.'
+    return
+  }
+  editStayBusy.value = true
+  editStayError.value = ''
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok?: boolean; error?: string }>(
+      `/api/properties/${pid.value}/stays/${editStayTarget.value.id}`,
+      {
+        method: 'PATCH',
+        json: {
+          display_name: name,
+          check_in: editStayCheckIn.value,
+          check_out: editStayCheckOut.value,
+          stay_type: editStayType.value,
+          cleaning_required: editStayCleaningRequired.value,
+        },
+      },
+    )
+    if (r.ok === false) throw new Error(r.error || 'Failed to update stay')
+    editStayDialogOpen.value = false
+    success.value = `Named stay “${name}” updated.`
+    await loadCalendar()
+  } catch (e) {
+    editStayError.value = e instanceof Error ? e.message : 'Failed to update stay'
+  } finally {
+    editStayBusy.value = false
+  }
+}
+
+async function updateNamedStayStatus(stay: CalendarNamedStay, status: 'active' | 'cancelled' | 'archived') {
+  if (!pid.value) return
+  stayStatusBusyID.value = stay.id
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{ ok?: boolean; error?: string }>(
+      `/api/properties/${pid.value}/stays/${stay.id}/status`,
+      { method: 'PATCH', json: { status } },
+    )
+    if (r.ok === false) throw new Error(r.error || 'Failed to update stay status')
+    success.value = status === 'active' ? 'Named stay reactivated.' : `Named stay ${status}.`
+    await loadCalendar()
+    calendarDayDialogOpen.value = false
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to update stay status'
+  } finally {
+    stayStatusBusyID.value = null
+  }
+}
+
+async function submitPromoteRawBlock() {
+  if (!pid.value || !promoteRawBlock.value) return
+  const name = promoteDisplayName.value.trim()
+  if (!name) {
+    promoteError.value = 'Enter a guest / stay name.'
+    return
+  }
+  if (
+    !isISODate(promoteCheckIn.value) ||
+    !isISODate(promoteCheckOut.value) ||
+    promoteCheckOut.value <= promoteCheckIn.value
+  ) {
+    promoteError.value = 'Choose a valid check-in and later check-out.'
+    return
+  }
+  if (
+    promoteCheckIn.value < promoteRawBlock.value.check_in_date ||
+    promoteCheckOut.value > promoteRawBlock.value.check_out_date
+  ) {
+    promoteError.value = `Stay must stay within ${promoteRawBlock.value.check_in_date} → ${promoteRawBlock.value.check_out_date}.`
+    return
+  }
+  promoteBusy.value = true
+  promoteError.value = ''
+  error.value = ''
+  success.value = ''
+  try {
+    const r = await api<{
+      ok: boolean
+      error?: string
+      nuki_generation_status?: string
+      nuki_generation_error?: string
+    }>(`/api/properties/${pid.value}/booking-blocks/${promoteRawBlock.value.id}/promote`, {
+      method: 'POST',
+      json: {
+        display_name: name,
+        check_in: promoteCheckIn.value,
+        check_out: promoteCheckOut.value,
+        stay_type: promoteStayType.value,
+        cleaning_required: promoteCleaningRequired.value,
+      },
+    })
+    if (!r.ok) throw new Error(r.error || 'Failed to promote raw block')
+    promoteDialogOpen.value = false
+    success.value =
+      r.nuki_generation_status === 'error'
+        ? `Named stay “${name}” created. Nuki generation needs attention.`
+        : `Named stay “${name}” created.`
+    await loadCalendar()
+  } catch (e) {
+    promoteError.value = e instanceof Error ? e.message : 'Failed to promote raw block'
+  } finally {
+    promoteBusy.value = false
+  }
+}
+
+function stayTypeLabel(type: string) {
+  return type === 'booking_com'
+    ? 'Booking.com'
+    : type === 'external'
+      ? 'External'
+      : type === 'maintenance'
+        ? 'Maintenance'
+        : type === 'personal_use'
+          ? 'Personal use'
+          : type
+}
+
+function cleaningSummary(events: { status: string; cleaning_kind: string }[]) {
+  if (!events.length) return 'Cleaning: not generated'
+  if (events.some((e) => e.status === 'error')) return 'Cleaning: error'
+  if (events.some((e) => e.status === 'synced')) return 'Cleaning: synced'
+  if (events.some((e) => e.status === 'pending')) return 'Cleaning: pending'
+  return 'Cleaning: tracked'
 }
 
 function stayLabel(o: Occ) {
@@ -346,18 +711,19 @@ async function submitOutcomeDialog() {
   }
   const occID = outcomeDialogTarget.value.id
   const slug =
-    outcomeDialogOutcome.value === 'cancelled_non_refundable'
-      ? 'cancelled-non-refundable'
-      : 'no-show'
+    outcomeDialogOutcome.value === 'cancelled_non_refundable' ? 'cancelled-non-refundable' : 'no-show'
   outcomeDialogBusy.value = true
   outcomeDialogError.value = ''
   error.value = ''
   success.value = ''
   try {
-    const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/occupancies/${occID}/outcome/${slug}`, {
-      method: 'POST',
-      json: { reason },
-    })
+    const r = await api<{ ok: boolean; error?: string }>(
+      `/api/properties/${pid.value}/occupancies/${occID}/outcome/${slug}`,
+      {
+        method: 'POST',
+        json: { reason },
+      },
+    )
     if (!r.ok) throw new Error(r.error || 'Failed to mark outcome')
     outcomeDialogOpen.value = false
     success.value = `${stayOutcomeLabel(outcomeDialogOutcome.value)} marked.`
@@ -374,14 +740,18 @@ async function clearOutcome(o: Occ) {
   if (!pid.value) return
   const ok = await confirm({
     title: 'Clear outcome',
-    message: 'Clear the stay outcome override and let normal occupancy, cleaning, and finance rules apply again?',
+    message:
+      'Clear the stay outcome override and let normal occupancy, cleaning, and finance rules apply again?',
     confirmLabel: 'Clear outcome',
   })
   if (!ok) return
   error.value = ''
   success.value = ''
   try {
-    const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/occupancies/${o.id}/outcome/clear`, { method: 'POST' })
+    const r = await api<{ ok: boolean; error?: string }>(
+      `/api/properties/${pid.value}/occupancies/${o.id}/outcome/clear`,
+      { method: 'POST' },
+    )
     if (!r.ok) throw new Error(r.error || 'Failed to clear outcome')
     success.value = 'Stay outcome cleared.'
     if (tab.value === 'list') await loadList()
@@ -432,7 +802,8 @@ async function includeCleaningCalendar(o: Occ) {
   if (!pid.value) return
   const ok = await confirm({
     title: 'Mark as cleaned by cleaning lady',
-    message: 'This restores the default behavior. PMS will create the cleaning calendar event again if the stay is still eligible.',
+    message:
+      'This restores the default behavior. PMS will create the cleaning calendar event again if the stay is still eligible.',
     confirmLabel: 'Send cleaning event',
   })
   if (!ok) return
@@ -610,10 +981,11 @@ async function loadCalendar() {
   if (!pid.value) return
   error.value = ''
   try {
-    const r = await api<{ occupancies: Occ[] }>(
-      `/api/properties/${pid.value}/occupancies/calendar?month=${encodeURIComponent(month.value)}`,
+    const r = await api<{ calendar: OccupancyCalendarView }>(
+      `/api/properties/${pid.value}/occupancy-calendar?month=${encodeURIComponent(month.value)}`,
     )
-    occupancies.value = r.occupancies
+    occupancyCalendar.value = r.calendar
+    occupancies.value = []
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load occupancy calendar'
   }
@@ -627,7 +999,8 @@ async function loadList() {
     if (month.value) q += `&month=${encodeURIComponent(month.value)}`
     // 'superseded' is a client-side (audit) view, not a DB status, so we fetch
     // all rows and let the list component filter (PMS_19 §8).
-    if (statusFilter.value && statusFilter.value !== 'superseded') q += `&status=${encodeURIComponent(statusFilter.value)}`
+    if (statusFilter.value && statusFilter.value !== 'superseded')
+      q += `&status=${encodeURIComponent(statusFilter.value)}`
     const r = await api<{ occupancies: Occ[] }>(q)
     occupancies.value = r.occupancies
   } catch (e) {
@@ -639,18 +1012,16 @@ async function loadSyncPanel() {
   if (!pid.value) return
   error.value = ''
   try {
-    const [r1, r2, r3] = await Promise.all([
+    const [r1, r2] = await Promise.all([
       api<{ runs: Run[] }>(`/api/properties/${pid.value}/occupancy-sync/runs`),
-      api<{ tokens: TokenRow[] }>(`/api/properties/${pid.value}/occupancy-api-tokens`),
       api<{ source: { active: boolean; source_type: string } }>(
         `/api/properties/${pid.value}/occupancy-source`,
       ),
     ])
     runs.value = r1.runs
-    tokens.value = r2.tokens
-    source.value = r3.source
+    source.value = r2.source
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load sync and export settings'
+    error.value = e instanceof Error ? e.message : 'Failed to load sync settings'
   }
 }
 
@@ -697,7 +1068,8 @@ async function applyRepair() {
   if (!pid.value) return
   const ok = await confirm({
     title: 'Apply ICS repair',
-    message: 'Apply the dry-run repair plan now? This never hard-deletes occupancy rows, but it may supersede duplicates and mark disappeared rows deleted from source.',
+    message:
+      'Apply the dry-run repair plan now? This never hard-deletes occupancy rows, but it may supersede duplicates and mark disappeared rows deleted from source.',
     confirmLabel: 'Apply repair',
   })
   if (!ok) return
@@ -733,61 +1105,6 @@ async function toggleSourceActive() {
     success.value = source.value?.active ? 'ICS sync enabled.' : 'ICS sync paused.'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to update ICS sync state'
-  }
-}
-
-async function createToken() {
-  if (!pid.value) return
-  error.value = ''
-  success.value = ''
-  newTokenPlain.value = ''
-  try {
-    const r = await api<{ id: number; token: string }>(`/api/properties/${pid.value}/occupancy-api-tokens`, {
-      method: 'POST',
-      json: {},
-    })
-    newTokenPlain.value = r.token
-    await loadSyncPanel()
-    success.value = 'Export token created. Save it now; it will not be shown again.'
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to create export token'
-  }
-}
-
-async function removeToken(id: number) {
-  if (!pid.value) return
-  const ok = await confirm({
-    title: 'Revoke export token',
-    message: 'Revoke this export token? Any integration using it will stop working.',
-    confirmLabel: 'Revoke',
-    tone: 'danger',
-  })
-  if (!ok) return
-  error.value = ''
-  success.value = ''
-  try {
-    await api(`/api/properties/${pid.value}/occupancy-api-tokens/${id}`, { method: 'DELETE' })
-    await loadSyncPanel()
-    success.value = 'Export token revoked.'
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to revoke export token'
-  }
-}
-
-function exportUrl() {
-  const base = typeof window !== 'undefined' ? window.location.origin : ''
-  return `${base}/api/properties/${pid.value}/occupancy-export`
-}
-
-async function copyExportCurl() {
-  if (!newTokenPlain.value || !pid.value) return
-  const cmd = `curl -H "Authorization: Bearer ${newTokenPlain.value}" ${exportUrl()}`
-  try {
-    await navigator.clipboard.writeText(cmd)
-    copiedExport.value = 'curl command copied.'
-    setTimeout(() => (copiedExport.value = ''), 3000)
-  } catch {
-    copiedExport.value = cmd
   }
 }
 
@@ -827,11 +1144,13 @@ watch(
             v-if="active === 'calendar'"
             :month="month"
             :occupancies="occupancies"
+            :calendar="occupancyCalendar"
             @update:month="month = $event"
             @prev="prevMonth"
             @next="nextMonth"
             @current="goToCurrentMonth"
             @cell-click="onCalendarCellClick"
+            @calendar-cell-click="onCalendarV2CellClick"
           />
           <OccupancyStayList
             v-else-if="active === 'list'"
@@ -856,19 +1175,13 @@ watch(
             v-else
             :source="source"
             :runs="runs"
-            :tokens="tokens"
             :syncing="syncing"
             :repair-busy="repairBusy"
             :repair-report="repairReport"
-            :new-token-plain="newTokenPlain"
-            :copied-export="copiedExport"
             @toggle-source="toggleSourceActive"
             @run-sync="runManualSync"
             @repair-dry-run="dryRunRepair"
             @repair-apply="applyRepair"
-            @create-token="createToken"
-            @remove-token="removeToken"
-            @copy-curl="copyExportCurl"
           />
         </template>
       </UiTabs>
@@ -946,7 +1259,9 @@ watch(
       <UiDialog v-model:open="cleaningDialogOpen" title="Do not send cleaning event" size="sm">
         <form class="cleaning-dialog" @submit.prevent="submitCleaningExcludeDialog">
           <p class="cleaning-dialog__copy">
-            This removes the PMS-created Google Calendar cleaning event for this checkout. The stay will remain a normal occupied guest stay, so occupancy, finance, Nuki access codes, and guest messaging are not changed.
+            This removes the PMS-created Google Calendar cleaning event for this checkout. The stay will
+            remain a normal occupied guest stay, so occupancy, finance, Nuki access codes, and guest messaging
+            are not changed.
           </p>
           <p class="cleaning-dialog__stay">{{ cleaningDialogStayLabel }}</p>
           <UiInput
@@ -972,7 +1287,8 @@ watch(
         <form class="split-dialog" @submit.prevent="submitNameStayDialog">
           <p class="split-dialog__copy">
             {{ nameStayMode === 'edit' ? 'Update' : 'Create' }} a named guest stay inside {{ nameStayLabel }}.
-            Dates must remain inside this Booking.com block. A named stay is required before Nuki code generation.
+            Dates must remain inside this Booking.com block. A named stay is required before Nuki code
+            generation.
           </p>
           <UiInput
             v-model="nameStayGuest"
@@ -982,14 +1298,373 @@ watch(
             placeholder="e.g. Koilpitchai"
           />
           <div class="split-dialog__grid">
-            <UiInput v-model="nameStayCheckIn" type="date" label="Check-in" required :disabled="nameStayBusy" :min="nameStayBlockStart" :max="nameStayCheckInMax" />
-            <UiInput v-model="nameStayCheckOut" type="date" label="Check-out" required :disabled="nameStayBusy" :min="nameStayCheckIn" :max="nameStayBlockEnd" />
+            <UiInput
+              v-model="nameStayCheckIn"
+              type="date"
+              label="Check-in"
+              required
+              :disabled="nameStayBusy"
+              :min="nameStayBlockStart"
+              :max="nameStayCheckInMax"
+            />
+            <UiInput
+              v-model="nameStayCheckOut"
+              type="date"
+              label="Check-out"
+              required
+              :disabled="nameStayBusy"
+              :min="nameStayCheckIn"
+              :max="nameStayBlockEnd"
+            />
           </div>
           <p v-if="nameStayError" class="split-dialog__error">{{ nameStayError }}</p>
         </form>
         <template #footer>
-          <UiButton variant="ghost" :disabled="nameStayBusy" @click="nameStayDialogOpen = false">Cancel</UiButton>
-          <UiButton variant="primary" :loading="nameStayBusy" @click="submitNameStayDialog">{{ nameStaySubmitLabel }}</UiButton>
+          <UiButton variant="ghost" :disabled="nameStayBusy" @click="nameStayDialogOpen = false"
+            >Cancel</UiButton
+          >
+          <UiButton variant="primary" :loading="nameStayBusy" @click="submitNameStayDialog">{{
+            nameStaySubmitLabel
+          }}</UiButton>
+        </template>
+      </UiDialog>
+
+      <UiDialog
+        v-model:open="calendarDayDialogOpen"
+        :title="calendarDayDialogDate ? `Calendar details for ${calendarDayDialogDate}` : 'Calendar details'"
+        size="md"
+      >
+        <div class="day-dialog__list">
+          <div class="calendar-detail__actions">
+            <UiButton size="sm" variant="primary" @click="openManualStayDialog()">Create stay</UiButton>
+            <UiButton size="sm" variant="ghost" @click="openAvailabilityDialog()"
+              >Block availability</UiButton
+            >
+          </div>
+          <section v-if="calendarDayRawBlocks.length" class="calendar-detail">
+            <h3>Raw Booking.com blocks</h3>
+            <article v-for="b in calendarDayRawBlocks" :key="b.id" class="day-dialog__item">
+              <div class="day-dialog__row">
+                <div class="day-dialog__meta">
+                  <div class="day-dialog__title">{{ b.check_in_date }} → {{ b.check_out_date }}</div>
+                  <div class="day-dialog__sub">
+                    <UiBadge tone="warning">Raw block</UiBadge>
+                    <span>{{ b.raw_summary || b.source_event_uid }}</span>
+                    <UiBadge
+                      :tone="b.cleaning_events.some((e) => e.status === 'error') ? 'danger' : 'neutral'"
+                    >
+                      {{ cleaningSummary(b.cleaning_events) }}
+                    </UiBadge>
+                  </div>
+                </div>
+                <UiButton size="sm" variant="primary" @click="openPromoteRawBlockDialog(b)"
+                  >Promote to stay</UiButton
+                >
+              </div>
+            </article>
+          </section>
+          <section v-if="calendarDayNamedStays.length" class="calendar-detail">
+            <h3>Named stays</h3>
+            <article v-for="s in calendarDayNamedStays" :key="s.id" class="day-dialog__item">
+              <div class="day-dialog__row">
+                <div class="day-dialog__meta">
+                  <div class="day-dialog__title">{{ s.display_name }}</div>
+                  <div class="day-dialog__sub">
+                    <UiBadge tone="success">{{ stayTypeLabel(s.stay_type) }}</UiBadge>
+                    <UiBadge tone="neutral">{{ s.check_in_date }} → {{ s.check_out_date }}</UiBadge>
+                    <UiBadge :tone="s.cleaning_required ? 'success' : 'neutral'">
+                      {{ s.cleaning_required ? 'Cleaning required' : 'No cleaning' }}
+                    </UiBadge>
+                    <UiBadge v-if="s.nuki_generation_status === 'error'" tone="danger">Nuki error</UiBadge>
+                    <UiBadge
+                      v-if="
+                        s.source_links.some(
+                          (l) => l.link_status === 'conflict' || l.link_status === 'source_deleted',
+                        )
+                      "
+                      tone="warning"
+                      >Raw source issue</UiBadge
+                    >
+                    <UiBadge :tone="s.cleaning_events.some((e) => e.status === 'error') ? 'danger' : 'neutral'">
+                      {{ cleaningSummary(s.cleaning_events) }}
+                    </UiBadge>
+                  </div>
+                  <p v-if="s.nuki_generation_error" class="calendar-detail__warning">
+                    Nuki: {{ s.nuki_generation_error }}
+                  </p>
+                  <p
+                    v-for="link in s.source_links.filter((l) => l.link_status === 'conflict' || l.link_status === 'source_deleted')"
+                    :key="link.id"
+                    class="calendar-detail__warning"
+                  >
+                    Raw source {{ link.link_status }}{{ link.conflict_reason ? `: ${link.conflict_reason}` : '' }}
+                  </p>
+                </div>
+                <div class="calendar-detail__row-actions">
+                  <UiButton size="sm" variant="ghost" @click="openEditStayDialog(s)">Edit</UiButton>
+                  <UiButton
+                    v-if="s.status !== 'cancelled'"
+                    size="sm"
+                    variant="ghost"
+                    :loading="stayStatusBusyID === s.id"
+                    @click="updateNamedStayStatus(s, 'cancelled')"
+                    >Cancel</UiButton
+                  >
+                  <UiButton
+                    v-if="s.status !== 'archived'"
+                    size="sm"
+                    variant="ghost"
+                    :loading="stayStatusBusyID === s.id"
+                    @click="updateNamedStayStatus(s, 'archived')"
+                    >Archive</UiButton
+                  >
+                  <UiButton
+                    v-if="s.status !== 'active'"
+                    size="sm"
+                    variant="primary"
+                    :loading="stayStatusBusyID === s.id"
+                    @click="updateNamedStayStatus(s, 'active')"
+                    >Reactivate</UiButton
+                  >
+                </div>
+              </div>
+            </article>
+          </section>
+          <section v-if="calendarDayAvailabilityBlocks.length" class="calendar-detail">
+            <h3>Availability blocks</h3>
+            <article v-for="b in calendarDayAvailabilityBlocks" :key="b.id" class="day-dialog__item">
+              <div class="day-dialog__title">{{ b.start_date }} → {{ b.end_date }}</div>
+              <div class="day-dialog__sub">
+                <UiBadge tone="neutral">{{ b.block_type }}</UiBadge>
+                <span v-if="b.reason">{{ b.reason }}</span>
+                <UiButton size="sm" variant="ghost" @click="openAvailabilityDialog(b)">Edit</UiButton>
+              </div>
+            </article>
+          </section>
+        </div>
+        <template #footer>
+          <UiButton variant="ghost" @click="calendarDayDialogOpen = false">Close</UiButton>
+        </template>
+      </UiDialog>
+
+      <UiDialog v-model:open="promoteDialogOpen" title="Promote raw block to named stay" size="sm">
+        <form class="split-dialog" @submit.prevent="submitPromoteRawBlock">
+          <p v-if="promoteRawBlock" class="split-dialog__copy">
+            Create a named stay inside {{ promoteRawBlock.check_in_date }} →
+            {{ promoteRawBlock.check_out_date }}. Leftover raw dates remain visible.
+          </p>
+          <UiInput
+            v-model="promoteDisplayName"
+            label="Guest / stay name"
+            required
+            :disabled="promoteBusy"
+            placeholder="e.g. Koilpitchai"
+          />
+          <label class="split-dialog__field">
+            <span>Stay type</span>
+            <select v-model="promoteStayType" :disabled="promoteBusy">
+              <option value="booking_com">Booking.com</option>
+              <option value="external">External</option>
+              <option value="maintenance">Maintenance</option>
+              <option value="personal_use">Personal use</option>
+            </select>
+          </label>
+          <div class="split-dialog__grid">
+            <UiInput
+              v-model="promoteCheckIn"
+              type="date"
+              label="Check-in"
+              required
+              :disabled="promoteBusy"
+              :min="promoteRawBlock?.check_in_date"
+              :max="promoteRawBlock ? addISODate(promoteRawBlock.check_out_date, -1) : ''"
+            />
+            <UiInput
+              v-model="promoteCheckOut"
+              type="date"
+              label="Check-out"
+              required
+              :disabled="promoteBusy"
+              :min="promoteCheckIn"
+              :max="promoteRawBlock?.check_out_date"
+            />
+          </div>
+          <label class="split-dialog__checkbox">
+            <input
+              v-model="promoteCleaningRequired"
+              type="checkbox"
+              :disabled="promoteBusy"
+              @change="promoteCleaningManuallyChanged = true"
+            />
+            <span>Cleaning required</span>
+          </label>
+          <p v-if="promoteError" class="split-dialog__error">{{ promoteError }}</p>
+        </form>
+        <template #footer>
+          <UiButton variant="ghost" :disabled="promoteBusy" @click="promoteDialogOpen = false"
+            >Cancel</UiButton
+          >
+          <UiButton variant="primary" :loading="promoteBusy" @click="submitPromoteRawBlock"
+            >Create named stay</UiButton
+          >
+        </template>
+      </UiDialog>
+
+      <UiDialog v-model:open="manualStayDialogOpen" title="Create named stay" size="sm">
+        <form class="split-dialog" @submit.prevent="submitManualStay">
+          <p class="split-dialog__copy">
+            Create an external, maintenance, personal-use, or manually confirmed Booking.com stay.
+          </p>
+          <UiInput
+            v-model="manualStayDisplayName"
+            label="Guest / stay name"
+            required
+            :disabled="manualStayBusy"
+            placeholder="e.g. Direct guest"
+          />
+          <label class="split-dialog__field">
+            <span>Stay type</span>
+            <select v-model="manualStayType" :disabled="manualStayBusy">
+              <option value="booking_com">Booking.com</option>
+              <option value="external">External</option>
+              <option value="maintenance">Maintenance</option>
+              <option value="personal_use">Personal use</option>
+            </select>
+          </label>
+          <div class="split-dialog__grid">
+            <UiInput
+              v-model="manualStayCheckIn"
+              type="date"
+              label="Check-in"
+              required
+              :disabled="manualStayBusy"
+            />
+            <UiInput
+              v-model="manualStayCheckOut"
+              type="date"
+              label="Check-out"
+              required
+              :disabled="manualStayBusy"
+              :min="manualStayCheckIn"
+            />
+          </div>
+          <label class="split-dialog__checkbox">
+            <input
+              v-model="manualStayCleaningRequired"
+              type="checkbox"
+              :disabled="manualStayBusy"
+              @change="manualStayCleaningManuallyChanged = true"
+            />
+            <span>Cleaning required</span>
+          </label>
+          <p v-if="manualStayError" class="split-dialog__error">{{ manualStayError }}</p>
+        </form>
+        <template #footer>
+          <UiButton variant="ghost" :disabled="manualStayBusy" @click="manualStayDialogOpen = false"
+            >Cancel</UiButton
+          >
+          <UiButton variant="primary" :loading="manualStayBusy" @click="submitManualStay"
+            >Create stay</UiButton
+          >
+        </template>
+      </UiDialog>
+
+      <UiDialog v-model:open="editStayDialogOpen" title="Edit named stay" size="sm">
+        <form class="split-dialog" @submit.prevent="submitEditStay">
+          <UiInput
+            v-model="editStayDisplayName"
+            label="Guest / stay name"
+            required
+            :disabled="editStayBusy"
+          />
+          <label class="split-dialog__field">
+            <span>Stay type</span>
+            <select v-model="editStayType" :disabled="editStayBusy">
+              <option value="booking_com">Booking.com</option>
+              <option value="external">External</option>
+              <option value="maintenance">Maintenance</option>
+              <option value="personal_use">Personal use</option>
+            </select>
+          </label>
+          <div class="split-dialog__grid">
+            <UiInput
+              v-model="editStayCheckIn"
+              type="date"
+              label="Check-in"
+              required
+              :disabled="editStayBusy"
+            />
+            <UiInput
+              v-model="editStayCheckOut"
+              type="date"
+              label="Check-out"
+              required
+              :disabled="editStayBusy"
+              :min="editStayCheckIn"
+            />
+          </div>
+          <label class="split-dialog__checkbox">
+            <input v-model="editStayCleaningRequired" type="checkbox" :disabled="editStayBusy" />
+            <span>Cleaning required</span>
+          </label>
+          <p v-if="editStayError" class="split-dialog__error">{{ editStayError }}</p>
+        </form>
+        <template #footer>
+          <UiButton variant="ghost" :disabled="editStayBusy" @click="editStayDialogOpen = false"
+            >Cancel</UiButton
+          >
+          <UiButton variant="primary" :loading="editStayBusy" @click="submitEditStay">Save stay</UiButton>
+        </template>
+      </UiDialog>
+
+      <UiDialog
+        v-model:open="availabilityDialogOpen"
+        :title="availabilityEditingID ? 'Edit availability block' : 'Block availability'"
+        size="sm"
+      >
+        <form class="split-dialog" @submit.prevent="submitAvailabilityBlock">
+          <p class="split-dialog__copy">
+            Create a non-stay blocked period that reduces bookable availability.
+          </p>
+          <label class="split-dialog__field">
+            <span>Block type</span>
+            <select v-model="availabilityBlockType" :disabled="availabilityBusy">
+              <option value="closed">Closed</option>
+              <option value="off_market">Off market</option>
+            </select>
+          </label>
+          <div class="split-dialog__grid">
+            <UiInput
+              v-model="availabilityStart"
+              type="date"
+              label="Start date"
+              required
+              :disabled="availabilityBusy"
+            />
+            <UiInput
+              v-model="availabilityEnd"
+              type="date"
+              label="End date"
+              required
+              :disabled="availabilityBusy"
+              :min="availabilityStart"
+            />
+          </div>
+          <UiInput
+            v-model="availabilityReason"
+            label="Reason"
+            :disabled="availabilityBusy"
+            placeholder="Owner repair"
+          />
+          <p v-if="availabilityError" class="split-dialog__error">{{ availabilityError }}</p>
+        </form>
+        <template #footer>
+          <UiButton variant="ghost" :disabled="availabilityBusy" @click="availabilityDialogOpen = false"
+            >Cancel</UiButton
+          >
+          <UiButton variant="primary" :loading="availabilityBusy" @click="submitAvailabilityBlock"
+            >Save block</UiButton
+          >
         </template>
       </UiDialog>
 
@@ -1189,6 +1864,27 @@ watch(
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
+.split-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+.split-dialog__field select {
+  min-height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.split-dialog__checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
 .split-dialog__error {
   margin: 0;
   color: var(--danger-fg);
@@ -1270,9 +1966,35 @@ watch(
   gap: var(--space-1);
   flex-shrink: 0;
 }
+.calendar-detail__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.calendar-detail h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.calendar-detail__row-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.calendar-detail__warning {
+  margin: var(--space-2) 0 0;
+  color: var(--warning-fg);
+  font-size: var(--font-size-sm);
+}
 @media (max-width: 767.98px) {
   .split-dialog__grid {
     grid-template-columns: 1fr;
+  }
+  .calendar-detail__row-actions {
+    justify-content: flex-start;
   }
 }
 </style>

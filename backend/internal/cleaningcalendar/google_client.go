@@ -78,6 +78,69 @@ func (c *ServiceAccountClient) UpsertEvent(ctx context.Context, event CalendarEv
 	return c.insertEvent(ctx, event)
 }
 
+func (c *ServiceAccountClient) ListEvents(ctx context.Context, calendarID string, timeMin, timeMax time.Time) ([]GoogleCalendarEvent, error) {
+	token, err := c.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("timeMin", timeMin.Format(time.RFC3339))
+	q.Set("timeMax", timeMax.Format(time.RFC3339))
+	q.Set("singleEvents", "true")
+	q.Set("showDeleted", "false")
+	endpoint := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?%s", url.PathEscape(calendarID), q.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, googleAPIError(res)
+	}
+	var out struct {
+		Items []struct {
+			ID          string `json:"id"`
+			Summary     string `json:"summary"`
+			Description string `json:"description"`
+			Status      string `json:"status"`
+			Start       struct {
+				DateTime string `json:"dateTime"`
+				Date     string `json:"date"`
+			} `json:"start"`
+			End struct {
+				DateTime string `json:"dateTime"`
+				Date     string `json:"date"`
+			} `json:"end"`
+			ExtendedProperties struct {
+				Private map[string]string `json:"private"`
+			} `json:"extendedProperties"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	events := make([]GoogleCalendarEvent, 0, len(out.Items))
+	for _, item := range out.Items {
+		start, _ := parseGoogleEventTime(item.Start.DateTime, item.Start.Date)
+		end, _ := parseGoogleEventTime(item.End.DateTime, item.End.Date)
+		events = append(events, GoogleCalendarEvent{
+			ID:                item.ID,
+			Summary:           item.Summary,
+			Description:       item.Description,
+			Status:            item.Status,
+			Start:             start,
+			End:               end,
+			PrivateProperties: item.ExtendedProperties.Private,
+		})
+	}
+	return events, nil
+}
+
 func (c *ServiceAccountClient) DeleteEvent(ctx context.Context, calendarID, googleEventID string) error {
 	token, err := c.token(ctx)
 	if err != nil {
@@ -113,6 +176,21 @@ func (c *ServiceAccountClient) writeEvent(ctx context.Context, method, endpoint 
 	if err != nil {
 		return "", err
 	}
+	private := map[string]string{
+		"pms_property_id":           fmt.Sprintf("%d", event.PropertyID),
+		"pms_occupancy_id":          fmt.Sprintf("%d", event.OccupancyID),
+		"pms_cleaning_event_id":     fmt.Sprintf("%d", event.LocalEventID),
+		"pms_managed_event_version": "1",
+	}
+	if event.NamedStayID > 0 {
+		private["pms_named_stay_id"] = fmt.Sprintf("%d", event.NamedStayID)
+	}
+	if event.RawBlockID > 0 {
+		private["pms_raw_booking_block_id"] = fmt.Sprintf("%d", event.RawBlockID)
+	}
+	if strings.TrimSpace(event.Identity) != "" {
+		private["pms_cleaning_identity"] = strings.TrimSpace(event.Identity)
+	}
 	body := map[string]interface{}{
 		"summary":     event.Summary,
 		"description": event.Description,
@@ -125,12 +203,7 @@ func (c *ServiceAccountClient) writeEvent(ctx context.Context, method, endpoint 
 			"timeZone": event.TimeZone,
 		},
 		"extendedProperties": map[string]interface{}{
-			"private": map[string]string{
-				"pms_property_id":           fmt.Sprintf("%d", event.PropertyID),
-				"pms_occupancy_id":          fmt.Sprintf("%d", event.OccupancyID),
-				"pms_cleaning_event_id":     fmt.Sprintf("%d", event.LocalEventID),
-				"pms_managed_event_version": "1",
-			},
+			"private": private,
 		},
 	}
 	payload, _ := json.Marshal(body)
@@ -161,6 +234,16 @@ func (c *ServiceAccountClient) writeEvent(ctx context.Context, method, endpoint 
 		return "", errors.New("google calendar response missing event id")
 	}
 	return out.ID, nil
+}
+
+func parseGoogleEventTime(dateTimeValue, dateValue string) (time.Time, error) {
+	if strings.TrimSpace(dateTimeValue) != "" {
+		return time.Parse(time.RFC3339, strings.TrimSpace(dateTimeValue))
+	}
+	if strings.TrimSpace(dateValue) != "" {
+		return time.Parse("2006-01-02", strings.TrimSpace(dateValue))
+	}
+	return time.Time{}, nil
 }
 
 func (c *ServiceAccountClient) token(ctx context.Context) (string, error) {

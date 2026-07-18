@@ -6,15 +6,14 @@ import (
 	"time"
 )
 
-// NukiGuestDailyEntry is the persisted "first guest unlock per (occupancy,
+// NukiGuestDailyEntry is the persisted "first guest unlock per (named stay,
 // calendar day)" row that powers the Analytics → Performance guest
-// check-in heatmap (PMS_12 task 3). Mirrors CleaningDailyLog but is keyed
-// by (property_id, occupancy_id, day_date) so multiple stays on the same
-// calendar day each contribute their own first-entry timestamp.
+// check-in heatmap. OccupancyID is retained as a legacy compatibility link.
 type NukiGuestDailyEntry struct {
 	ID                 int64
 	PropertyID         int64
 	OccupancyID        int64
+	NamedStayID        sql.NullInt64
 	DayDate            string
 	FirstEntryAt       time.Time
 	NukiEventReference sql.NullString
@@ -32,13 +31,28 @@ func (s *Store) UpsertNukiGuestDailyEntry(ctx context.Context, row *NukiGuestDai
 	if row.NukiEventReference.Valid {
 		ref = row.NukiEventReference.String
 	}
+	var stayID interface{}
+	if row.NamedStayID.Valid {
+		stayID = row.NamedStayID.Int64
+	} else if row.OccupancyID > 0 {
+		var resolved int64
+		if err := s.DB.QueryRowContext(ctx, `
+			SELECT named_stay_id
+			FROM occupancy_stay_migration_map
+			WHERE property_id = ? AND old_occupancy_id = ? AND named_stay_id IS NOT NULL
+			LIMIT 1`, row.PropertyID, row.OccupancyID).Scan(&resolved); err == nil {
+			stayID = resolved
+			row.NamedStayID = sql.NullInt64{Int64: resolved, Valid: true}
+		}
+	}
 	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO nuki_guest_daily_entries (property_id, occupancy_id, day_date, first_entry_at, nuki_event_reference, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO nuki_guest_daily_entries (property_id, occupancy_id, named_stay_id, day_date, first_entry_at, nuki_event_reference, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(property_id, occupancy_id, day_date) DO UPDATE SET
+			named_stay_id = COALESCE(excluded.named_stay_id, nuki_guest_daily_entries.named_stay_id),
 			first_entry_at = excluded.first_entry_at,
 			nuki_event_reference = excluded.nuki_event_reference`,
-		row.PropertyID, row.OccupancyID, row.DayDate, first, ref, now)
+		row.PropertyID, row.OccupancyID, stayID, row.DayDate, first, ref, now)
 	return err
 }
 
@@ -54,14 +68,15 @@ func (s *Store) UpsertNukiGuestDailyEntry(ctx context.Context, row *NukiGuestDai
 // analytics queries.
 func (s *Store) ListNukiGuestDailyEntriesInRange(ctx context.Context, propertyID int64, fromDate, toDate string) ([]NukiGuestDailyEntry, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT g.id, g.property_id, g.occupancy_id, g.day_date, g.first_entry_at, g.nuki_event_reference, g.created_at
+		SELECT g.id, g.property_id, g.occupancy_id, g.named_stay_id, g.day_date, g.first_entry_at, g.nuki_event_reference, g.created_at
 		FROM nuki_guest_daily_entries g
-		JOIN occupancies o ON o.id = g.occupancy_id
+		JOIN named_stays ns ON ns.id = g.named_stay_id
 		WHERE g.property_id = ?
 		  AND g.day_date >= ? AND g.day_date <= ?
-		  AND o.status NOT IN ('cancelled', 'deleted_from_source')
-		  AND (o.closure_state IS NULL OR o.closure_state <> 'closed')
-		  AND (o.stay_outcome IS NULL OR o.stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
+		  AND ns.status = 'active'
+		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
+		  AND ns.stay_type IN ('booking_com', 'external')
+		  AND (ns.stay_outcome IS NULL OR ns.stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
 		ORDER BY g.first_entry_at ASC, g.id ASC`,
 		propertyID, fromDate, toDate)
 	if err != nil {
@@ -72,7 +87,7 @@ func (s *Store) ListNukiGuestDailyEntriesInRange(ctx context.Context, propertyID
 	for rows.Next() {
 		var r NukiGuestDailyEntry
 		var first, created string
-		if err := rows.Scan(&r.ID, &r.PropertyID, &r.OccupancyID, &r.DayDate, &first, &r.NukiEventReference, &created); err != nil {
+		if err := rows.Scan(&r.ID, &r.PropertyID, &r.OccupancyID, &r.NamedStayID, &r.DayDate, &first, &r.NukiEventReference, &created); err != nil {
 			return nil, err
 		}
 		r.FirstEntryAt, _ = time.Parse(time.RFC3339, first)
@@ -90,24 +105,29 @@ func (s *Store) ListNukiGuestDailyEntriesInRange(ctx context.Context, propertyID
 // Revoked codes are intentionally included: we still want to credit unlocks
 // that happened while the code was live to the original stay, even if the
 // operator has since revoked the PIN.
-func (s *Store) ListGeneratedNukiAccessCodesByExternalID(ctx context.Context, propertyID int64) (map[string]int64, error) {
+type NukiAccessCodeIdentity struct {
+	OccupancyID int64
+	NamedStayID sql.NullInt64
+}
+
+func (s *Store) ListGeneratedNukiAccessCodesByExternalID(ctx context.Context, propertyID int64) (map[string]NukiAccessCodeIdentity, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT external_nuki_id, occupancy_id
+		SELECT external_nuki_id, occupancy_id, named_stay_id
 		FROM nuki_access_codes
-		WHERE property_id = ? AND external_nuki_id IS NOT NULL AND external_nuki_id <> ''`,
+		WHERE property_id = ? AND external_nuki_id IS NOT NULL AND external_nuki_id <> '' AND named_stay_id IS NOT NULL`,
 		propertyID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]int64{}
+	out := map[string]NukiAccessCodeIdentity{}
 	for rows.Next() {
 		var ext string
-		var occ int64
-		if err := rows.Scan(&ext, &occ); err != nil {
+		var ident NukiAccessCodeIdentity
+		if err := rows.Scan(&ext, &ident.OccupancyID, &ident.NamedStayID); err != nil {
 			return nil, err
 		}
-		out[ext] = occ
+		out[ext] = ident
 	}
 	return out, rows.Err()
 }

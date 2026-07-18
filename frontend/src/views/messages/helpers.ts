@@ -1,4 +1,4 @@
-import type { MessagesOccupancy as Occupancy } from '@/api/types/messages'
+import type { MessagesStay as Stay } from '@/api/types/messages'
 
 export const TEMPLATE_TYPE_LABELS: Record<string, string> = {
   check_in: 'Check-in',
@@ -39,9 +39,9 @@ export function fmtDateTime(iso: string): string {
   }
 }
 
-export function occLabel(occ: Occupancy): string {
-  const name = occ.guest_display_name || occ.raw_summary || `#${occ.id}`
-  const start = fmtDate(occ.start_at)
-  const end = fmtDate(occ.end_at)
+export function occLabel(occ: Stay): string {
+  const name = occ.display_name || `#${occ.id}`
+  const start = fmtDate(occ.check_in_date)
+  const end = fmtDate(occ.check_out_date)
   return `${name} (${start} → ${end})`
 }

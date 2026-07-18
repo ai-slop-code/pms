@@ -51,11 +51,11 @@ func (s *Store) cancellationCohort(ctx context.Context, propertyID int64, fromUT
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT fb.`+dateCol+` AS d,
 		       UPPER(COALESCE(fb.status, '')) AS st,
-		       COALESCE(fb.outcome_override, occ.stay_outcome, '') AS outcome
+		       COALESCE(fb.outcome_override, ns.stay_outcome, '') AS outcome
 		  FROM finance_bookings fb
-		  LEFT JOIN occupancies occ
-		    ON occ.property_id = fb.property_id
-		   AND (occ.id = fb.occupancy_id OR occ.finance_booking_id = fb.id)
+		  LEFT JOIN named_stays ns
+		    ON ns.property_id = fb.property_id
+		   AND ns.id = fb.named_stay_id
 		 WHERE fb.property_id = ?
 		   AND fb.has_statement_data = 1
 		   AND fb.`+dateCol+` IS NOT NULL`, propertyID)

@@ -13,10 +13,13 @@ export interface NukiKeypadCode {
 }
 
 export interface NukiUpcomingStay {
+  stay_id: number
+  legacy_occupancy_id?: number
   occupancy_id: number
   source_event_uid: string
   summary?: string
   saved_pin_name?: string
+  stay_type: string
   start_at: string
   end_at: string
   occupancy_status: string

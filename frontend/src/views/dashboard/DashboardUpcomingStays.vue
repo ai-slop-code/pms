@@ -29,7 +29,7 @@ const fmtDay = formatShortDate
       description="Nothing scheduled for this property."
     />
     <ul v-else class="dashboard-list-rows">
-      <li v-for="stay in stays" :key="stay.occupancy_id" class="dashboard-list-row">
+      <li v-for="stay in stays" :key="stay.stay_id" class="dashboard-list-row">
         <div>
           <div class="dashboard-list-row__title">{{ stay.summary || 'Unnamed stay' }}</div>
           <div class="dashboard-list-row__meta">

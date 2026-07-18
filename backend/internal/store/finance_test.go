@@ -702,6 +702,34 @@ func TestFindOrCreateOccupancyForPayoutStayDates_CreatesHistoricalStay(t *testin
 	}
 }
 
+func TestFindOrCreateOccupancyForPayoutStayDates_LegacyWriteDisabledDoesNotCreateSyntheticStay(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t), OccupancyLegacyWriteDisabled: true}
+	pid := setupFinanceProperty(t, st)
+
+	occ, err := st.FindOrCreateOccupancyForPayoutStayDates(
+		context.Background(),
+		pid,
+		"BP-1002",
+		"2025-01-13",
+		"2025-01-15",
+		"No Legacy Guest",
+		time.UTC,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if occ != nil {
+		t.Fatalf("expected no legacy occupancy, got %#v", occ)
+	}
+	var count int
+	if err := st.DB.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM occupancies WHERE property_id = ? AND source_type = 'booking_payout'`, pid).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("synthetic payout occupancies=%d want 0", count)
+	}
+}
+
 func TestFindOrCreateOccupancyForPayoutStayDates_ReusesExistingStay(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := setupFinanceProperty(t, st)

@@ -1,0 +1,2 @@
+-- Backfill-only migration. Do not clear named_stay_id links automatically;
+-- rollback keeps additive links for audit and compatibility.

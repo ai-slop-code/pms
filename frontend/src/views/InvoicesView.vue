@@ -78,7 +78,7 @@ function resetForm() {
 
 function applyInvoiceToForm(invoice: Invoice) {
   form.value = {
-    occupancy_id: invoice.occupancy_id ? String(invoice.occupancy_id) : '',
+    occupancy_id: invoice.named_stay_id ? String(invoice.named_stay_id) : '',
     booking_payout_id: invoice.booking_payout_id ? String(invoice.booking_payout_id) : '',
     language: invoice.language,
     issue_date: invoice.issue_date.slice(0, 10),
@@ -117,16 +117,16 @@ async function loadList() {
       api<InvoicePreview>(
         `/api/properties/${pid.value}/invoice-sequence/next-preview?year=${form.value.issue_date.slice(0, 4)}`,
       ),
-      api<{ occupancies: OccupancyOption[] }>(
+      api<{ stays: OccupancyOption[]; occupancies?: OccupancyOption[] }>(
         `/api/properties/${pid.value}/invoices/occupancy-candidates?limit=120`,
-      ).catch(() => ({ occupancies: [] as OccupancyOption[] })),
+      ).catch(() => ({ stays: [] as OccupancyOption[], occupancies: [] as OccupancyOption[] })),
       api<{ payouts: BookingPayoutOption[] }>(
         `/api/properties/${pid.value}/invoices/payout-link-candidates`,
       ).catch(() => ({ payouts: [] as BookingPayoutOption[] })),
     ])
     invoices.value = list.invoices
     preview.value = nextPreview
-    occupancyOptions.value = occRes.occupancies ?? []
+    occupancyOptions.value = occRes.stays ?? occRes.occupancies ?? []
     payoutOptions.value = payRes.payouts ?? []
     if (selectedId.value) {
       await loadInvoice(selectedId.value)
@@ -192,7 +192,7 @@ function onPayoutSelect(value: string) {
   const cout = row.check_out_date?.slice(0, 10)
   if (cin) form.value.stay_start_date = cin
   if (cout) form.value.stay_end_date = cout
-  if (row.occupancy_id) form.value.occupancy_id = String(row.occupancy_id)
+  if (row.named_stay_id) form.value.occupancy_id = String(row.named_stay_id)
   const gn = row.guest_name?.trim()
   if (gn && !form.value.customer.name.trim()) form.value.customer.name = gn
 }
@@ -227,8 +227,8 @@ function invoicePayload() {
     },
   }
   const oid = form.value.occupancy_id.trim()
-  if (oid) p.occupancy_id = Number(oid)
-  else if (selectedId.value && selectedInvoice.value?.occupancy_id) p.occupancy_id = 0
+  if (oid) p.named_stay_id = Number(oid)
+  else if (selectedId.value && selectedInvoice.value?.named_stay_id) p.named_stay_id = 0
   const bid = form.value.booking_payout_id.trim()
   if (bid) p.booking_payout_id = Number(bid)
   else if (selectedId.value && selectedInvoice.value?.booking_payout_id) p.booking_payout_id = 0

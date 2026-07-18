@@ -94,9 +94,12 @@ func (s *Store) ResetFinanceRecords(ctx context.Context, propertyID int64, actor
 		WHERE invoice_id IN (
 			SELECT i.id
 			FROM invoices i
-			JOIN finance_bookings fb ON fb.id = i.finance_booking_payout_id
-			WHERE fb.property_id = ?
-		)`, propertyID); err != nil {
+			WHERE i.property_id = ?
+			  AND (
+			    i.finance_booking_payout_id IN (SELECT id FROM finance_bookings WHERE property_id = ?)
+			    OR i.named_stay_id IN (SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND named_stay_id IS NOT NULL)
+			  )
+		)`, propertyID, propertyID, propertyID); err != nil {
 		return nil, nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -104,9 +107,12 @@ func (s *Store) ResetFinanceRecords(ctx context.Context, propertyID int64, actor
 		WHERE id IN (
 			SELECT i.id
 			FROM invoices i
-			JOIN finance_bookings fb ON fb.id = i.finance_booking_payout_id
-			WHERE fb.property_id = ?
-		)`, propertyID); err != nil {
+			WHERE i.property_id = ?
+			  AND (
+			    i.finance_booking_payout_id IN (SELECT id FROM finance_bookings WHERE property_id = ?)
+			    OR i.named_stay_id IN (SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND named_stay_id IS NOT NULL)
+			  )
+		)`, propertyID, propertyID, propertyID); err != nil {
 		return nil, nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM finance_transactions WHERE property_id = ? AND source_type <> 'cleaning_salary'`, propertyID); err != nil {
@@ -224,8 +230,8 @@ func (s *Store) fillFinanceResetDeleteCounts(ctx context.Context, q financeReset
 				WHERE property_id = ?
 			  )`, []interface{}{propertyID, propertyID, propertyID, propertyID}},
 		{&counts.FinanceAttachmentFiles, `SELECT COUNT(DISTINCT attachment_path) FROM finance_transactions WHERE property_id = ? AND source_type <> 'cleaning_salary' AND attachment_path IS NOT NULL AND attachment_path <> ''`, []interface{}{propertyID}},
-		{&counts.Invoices, `SELECT COUNT(*) FROM invoices i JOIN finance_bookings fb ON fb.id = i.finance_booking_payout_id WHERE fb.property_id = ?`, []interface{}{propertyID}},
-		{&counts.InvoiceFiles, `SELECT COUNT(*) FROM invoice_files f JOIN invoices i ON i.id = f.invoice_id JOIN finance_bookings fb ON fb.id = i.finance_booking_payout_id WHERE fb.property_id = ?`, []interface{}{propertyID}},
+		{&counts.Invoices, `SELECT COUNT(*) FROM invoices i WHERE i.property_id = ? AND (i.finance_booking_payout_id IN (SELECT id FROM finance_bookings WHERE property_id = ?) OR i.named_stay_id IN (SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND named_stay_id IS NOT NULL))`, []interface{}{propertyID, propertyID, propertyID}},
+		{&counts.InvoiceFiles, `SELECT COUNT(*) FROM invoice_files f JOIN invoices i ON i.id = f.invoice_id WHERE i.property_id = ? AND (i.finance_booking_payout_id IN (SELECT id FROM finance_bookings WHERE property_id = ?) OR i.named_stay_id IN (SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND named_stay_id IS NOT NULL))`, []interface{}{propertyID, propertyID, propertyID}},
 	}
 	for _, query := range queries {
 		if err := q.QueryRowContext(ctx, query.sql, query.args...).Scan(query.dest); err != nil {
@@ -259,12 +265,15 @@ func (s *Store) fillFinanceResetPreserveCounts(ctx context.Context, q financeRes
 
 func financeResetFilePaths(ctx context.Context, tx *sql.Tx, propertyID int64) ([]string, error) {
 	paths := map[string]struct{}{}
-	queries := []string{
-		`SELECT attachment_path FROM finance_transactions WHERE property_id = ? AND source_type <> 'cleaning_salary' AND attachment_path IS NOT NULL AND attachment_path <> ''`,
-		`SELECT f.file_path FROM invoice_files f JOIN invoices i ON i.id = f.invoice_id JOIN finance_bookings fb ON fb.id = i.finance_booking_payout_id WHERE fb.property_id = ?`,
+	queries := []struct {
+		sql  string
+		args []interface{}
+	}{
+		{`SELECT attachment_path FROM finance_transactions WHERE property_id = ? AND source_type <> 'cleaning_salary' AND attachment_path IS NOT NULL AND attachment_path <> ''`, []interface{}{propertyID}},
+		{`SELECT f.file_path FROM invoice_files f JOIN invoices i ON i.id = f.invoice_id WHERE i.property_id = ? AND (i.finance_booking_payout_id IN (SELECT id FROM finance_bookings WHERE property_id = ?) OR i.named_stay_id IN (SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND named_stay_id IS NOT NULL))`, []interface{}{propertyID, propertyID, propertyID}},
 	}
 	for _, query := range queries {
-		rows, err := tx.QueryContext(ctx, query, propertyID)
+		rows, err := tx.QueryContext(ctx, query.sql, query.args...)
 		if err != nil {
 			return nil, err
 		}

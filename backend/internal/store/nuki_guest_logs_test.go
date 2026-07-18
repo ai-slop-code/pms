@@ -29,6 +29,23 @@ func seedNukiGuestEntryOccupancy(t *testing.T, st *Store, propertyID int64, runI
 	if err != nil || row == nil {
 		t.Fatalf("get after upsert (uid=%s): %v", uid, err)
 	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := st.DB.ExecContext(ctx, `
+		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
+		VALUES (?, ?, 'booking_com', ?, ?, 'active', 1, 'booking_ics', ?, 'confirmed', 'pending', ?, ?)`,
+		propertyID, "Guest "+uid, start.Format("2006-01-02"), end.Format("2006-01-02"), uid, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stayID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
+		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, row.ID, propertyID, stayID, now); err != nil {
+		t.Fatal(err)
+	}
 	return row.ID
 }
 
@@ -107,8 +124,22 @@ func TestListNukiGuestDailyEntriesInRange_FiltersClosedAndCancelled(t *testing.T
 	if err := st.CloseOccupancy(ctx, p.ID, closedID, u.ID, "owner stay", "owner_stay"); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+	closedStayID, err := st.ResolveNamedStayIDForOccupancy(ctx, p.ID, closedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `UPDATE named_stays SET stay_type = 'maintenance' WHERE id = ?`, closedStayID); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.MarkOccupancyExternalSale(ctx, p.ID, externalID, u.ID, 12000, "EUR", "direct", ""); err != nil {
 		t.Fatalf("external_sale: %v", err)
+	}
+	externalStayID, err := st.ResolveNamedStayIDForOccupancy(ctx, p.ID, externalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `UPDATE named_stays SET stay_type = 'external' WHERE id = ?`, externalStayID); err != nil {
+		t.Fatal(err)
 	}
 
 	insert := func(occID int64, day string, hour int) {

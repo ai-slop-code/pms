@@ -163,7 +163,7 @@ func (s *Store) ListFinanceTransactions(ctx context.Context, propertyID int64, m
 		SELECT ft.id, ft.property_id, ft.transaction_date, ft.direction, ft.amount_cents, ft.category_id,
 			ft.note, ft.source_type, ft.source_reference_id, ft.is_auto_generated, ft.attachment_path, ft.created_at, ft.updated_at,
 			fc.code, fc.title, COALESCE(fc.counts_toward_property_income, 0),
-			COALESCE(CASE WHEN fbp.occupancy_id IS NOT NULL THEN 1 ELSE 0 END, 0)
+			COALESCE(CASE WHEN COALESCE(fbp.named_stay_id, fbp.occupancy_id) IS NOT NULL THEN 1 ELSE 0 END, 0)
 		FROM finance_transactions ft
 		LEFT JOIN finance_categories fc ON fc.id = ft.category_id
 		LEFT JOIN finance_bookings fbp
@@ -213,7 +213,7 @@ func (s *Store) GetFinanceTransactionByID(ctx context.Context, propertyID, id in
 		SELECT ft.id, ft.property_id, ft.transaction_date, ft.direction, ft.amount_cents, ft.category_id,
 			ft.note, ft.source_type, ft.source_reference_id, ft.is_auto_generated, ft.attachment_path, ft.created_at, ft.updated_at,
 			fc.code, fc.title, COALESCE(fc.counts_toward_property_income, 0),
-			COALESCE(CASE WHEN fbp.occupancy_id IS NOT NULL THEN 1 ELSE 0 END, 0)
+			COALESCE(CASE WHEN COALESCE(fbp.named_stay_id, fbp.occupancy_id) IS NOT NULL THEN 1 ELSE 0 END, 0)
 		FROM finance_transactions ft
 		LEFT JOIN finance_categories fc ON fc.id = ft.category_id
 		LEFT JOIN finance_bookings fbp

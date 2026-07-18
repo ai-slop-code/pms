@@ -23,6 +23,7 @@ export interface InvoiceFile {
 export interface Invoice {
   id: number
   occupancy_id?: number
+  named_stay_id?: number
   booking_payout_id?: number
   invoice_number: string
   sequence_year: number
@@ -60,15 +61,19 @@ export interface InvoicePreview {
  * Different shape from {@link ./bookingPayouts.OccupancyOption} and
  * {@link ./occupancy.Occupancy} — kept distinct on purpose.
  */
-export interface InvoiceOccupancyOption {
+export interface InvoiceNamedStayOption {
   id: number
-  start_at: string
-  end_at: string
+  display_name: string
+  stay_type: 'booking_com' | 'external' | 'maintenance' | 'personal_use'
+  check_in_date: string
+  check_out_date: string
   status: string
-  summary: string
-  guest_display_name?: string
-  has_payout_data: boolean
+  review_status?: string
+  manual_revenue_cents?: number
+  has_finance_data: boolean
 }
+
+export type InvoiceOccupancyOption = InvoiceNamedStayOption
 
 export interface InvoiceBookingPayoutOption {
   id: number
@@ -81,6 +86,7 @@ export interface InvoiceBookingPayoutOption {
   host_name?: string | null
   payout_summary?: string | null
   occupancy_id?: number | null
+  named_stay_id?: number | null
   occupancy_summary?: string | null
   linked_invoice_id?: number | null
 }

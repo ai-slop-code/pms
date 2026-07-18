@@ -111,7 +111,8 @@ type syncStatusWidget struct {
 }
 
 type dashboardUpcomingStayRow struct {
-	OccupancyID int64   `json:"occupancy_id"`
+	StayID      int64   `json:"stay_id"`
+	OccupancyID int64   `json:"occupancy_id,omitempty"`
 	Summary     *string `json:"summary"`
 	StartAt     string  `json:"start_at"`
 	EndAt       string  `json:"end_at"`

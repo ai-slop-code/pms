@@ -20,7 +20,7 @@ import UiEmptyState from '@/components/ui/UiEmptyState.vue'
 import type {
   MessageTemplate,
   CleaningMessageResponse,
-  MessagesOccupancy as Occupancy,
+  MessagesStay as Stay,
   RenderedMessage,
   GenerateMessagesResponse as GenerateResponse,
 } from '@/api/types/messages'
@@ -54,8 +54,8 @@ const templates = ref<MessageTemplate[]>([])
 const supportedLanguages = ref<string[]>([])
 const supportedPlaceholders = ref<string[]>([])
 
-const occupancies = ref<Occupancy[]>([])
-const selectedOccupancyId = ref<number | null>(null)
+const stays = ref<Stay[]>([])
+const selectedStayId = ref<number | null>(null)
 const generating = ref(false)
 const generatedMessages = ref<RenderedMessage[]>([])
 const nukiAvailable = ref(true)
@@ -70,19 +70,19 @@ const { copied: cleaningCopied, flash: flashCleaning } = useCopyFeedback(2000)
 
 const occSearch = ref('')
 const occDropdownOpen = ref(false)
-const filteredOccupancies = computed(() => {
+const filteredStays = computed(() => {
   const q = occSearch.value.toLowerCase().trim()
-  if (!q) return occupancies.value
-  return occupancies.value.filter((o) => occLabel(o).toLowerCase().includes(q))
+  if (!q) return stays.value
+  return stays.value.filter((o) => stayLabel(o).toLowerCase().includes(q))
 })
 const selectedOccLabel = computed(() => {
-  if (!selectedOccupancyId.value) return ''
-  const occ = occupancies.value.find((o) => o.id === selectedOccupancyId.value)
-  return occ ? occLabel(occ) : ''
+  if (!selectedStayId.value) return ''
+  const stay = stays.value.find((o) => o.id === selectedStayId.value)
+  return stay ? stayLabel(stay) : ''
 })
 
-function selectOccupancy(occ: Occupancy) {
-  selectedOccupancyId.value = occ.id
+function selectStay(stay: Stay) {
+  selectedStayId.value = stay.id
   occSearch.value = ''
   occDropdownOpen.value = false
 }
@@ -101,7 +101,7 @@ function onOccBlur() {
 }
 
 function clearSelection() {
-  selectedOccupancyId.value = null
+  selectedStayId.value = null
   occSearch.value = ''
   generatedMessages.value = []
 }
@@ -121,23 +121,19 @@ async function loadData() {
   loading.value = true
   error.value = ''
   try {
-    const [tplRes, occRes] = await Promise.all([
+    const [tplRes, staysRes] = await Promise.all([
       api<{
         templates: MessageTemplate[]
         supported_languages: string[]
         supported_placeholders: string[]
       }>(`/api/properties/${pid.value}/message-templates`),
-      api<{ occupancies: Occupancy[] }>(
-        `/api/properties/${pid.value}/occupancies?limit=200&status=active`
-      ).catch(() => ({ occupancies: [] as Occupancy[] })),
+      api<{ stays: Stay[] }>(`/api/properties/${pid.value}/messages/stays`).catch(() => ({ stays: [] as Stay[] })),
     ])
     templates.value = tplRes.templates
     supportedLanguages.value = tplRes.supported_languages
     supportedPlaceholders.value = tplRes.supported_placeholders
-    const now = new Date()
-    occupancies.value = (occRes.occupancies ?? [])
-      .filter((o) => new Date(o.end_at) >= now)
-      .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime())
+    stays.value = (staysRes.stays ?? [])
+      .sort((a, b) => a.check_in_date.localeCompare(b.check_in_date))
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load data'
   } finally {
@@ -147,10 +143,10 @@ async function loadData() {
 
 watch(pid, loadData, { immediate: true })
 
-function occLabel(occ: Occupancy) {
-  const name = occ.guest_display_name || occ.raw_summary || `#${occ.id}`
-  const start = fmtDate(occ.start_at)
-  const end = fmtDate(occ.end_at)
+function stayLabel(stay: Stay) {
+  const name = stay.display_name || `#${stay.id}`
+  const start = fmtDate(stay.check_in_date)
+  const end = fmtDate(stay.check_out_date)
   return `${name} (${start} → ${end})`
 }
 
@@ -169,13 +165,13 @@ function fmtDateTime(iso: string) {
 }
 
 async function generateMessages() {
-  if (!pid.value || !selectedOccupancyId.value) return
+  if (!pid.value || !selectedStayId.value) return
   generating.value = true
   error.value = ''
   generatedMessages.value = []
   try {
     const res = await api<GenerateResponse>(
-      `/api/properties/${pid.value}/messages/generate?occupancy_id=${selectedOccupancyId.value}`
+      `/api/properties/${pid.value}/messages/generate?stay_id=${selectedStayId.value}`
     )
     generatedMessages.value = res.messages
     nukiAvailable.value = res.nuki_available
@@ -334,34 +330,34 @@ async function deleteTemplate(t: MessageTemplate) {
                       <input
                         id="occ-picker"
                         class="occ-search"
-                        :placeholder="selectedOccLabel || (occupancies.length ? 'Search stays…' : 'No upcoming stays')"
+                        :placeholder="selectedOccLabel || (stays.length ? 'Search stays…' : 'No upcoming stays')"
                         :value="occDropdownOpen ? occSearch : selectedOccLabel"
-                        :disabled="generating || !occupancies.length"
+                        :disabled="generating || !stays.length"
                         @focus="onOccSearchFocus"
                         @blur="onOccBlur"
                         @input="occSearch = ($event.target as HTMLInputElement).value"
                       />
                       <button
-                        v-if="selectedOccupancyId && !occDropdownOpen"
+                        v-if="selectedStayId && !occDropdownOpen"
                         type="button"
                         class="occ-clear"
                         aria-label="Clear selection"
                         @mousedown.prevent="clearSelection"
                       ><X :size="14" aria-hidden="true" /></button>
                     </div>
-                    <ul v-if="occDropdownOpen && filteredOccupancies.length" class="occ-list">
+                    <ul v-if="occDropdownOpen && filteredStays.length" class="occ-list">
                       <li
-                        v-for="occ in filteredOccupancies"
-                        :key="occ.id"
+                        v-for="stay in filteredStays"
+                        :key="stay.id"
                         class="occ-option"
-                        :class="{ selected: occ.id === selectedOccupancyId }"
-                        @mousedown.prevent="selectOccupancy(occ)"
+                        :class="{ selected: stay.id === selectedStayId }"
+                        @mousedown.prevent="selectStay(stay)"
                       >
-                        <span class="occ-name">{{ occ.guest_display_name || occ.raw_summary || `#${occ.id}` }}</span>
-                        <span class="occ-dates">{{ fmtDate(occ.start_at) }} → {{ fmtDate(occ.end_at) }}</span>
+                        <span class="occ-name">{{ stay.display_name || `#${stay.id}` }}</span>
+                        <span class="occ-dates">{{ fmtDate(stay.check_in_date) }} → {{ fmtDate(stay.check_out_date) }}</span>
                       </li>
                     </ul>
-                    <div v-if="occDropdownOpen && occSearch && !filteredOccupancies.length" class="occ-list occ-empty">
+                    <div v-if="occDropdownOpen && occSearch && !filteredStays.length" class="occ-list occ-empty">
                       No stays matching "{{ occSearch }}"
                     </div>
                   </div>
@@ -369,7 +365,7 @@ async function deleteTemplate(t: MessageTemplate) {
                 <div class="actions">
                   <UiButton
                     variant="primary"
-                    :disabled="!selectedOccupancyId"
+                    :disabled="!selectedStayId"
                     :loading="generating"
                     @click="generateMessages"
                   >Generate messages</UiButton>

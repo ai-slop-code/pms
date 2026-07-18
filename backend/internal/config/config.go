@@ -9,32 +9,35 @@ import (
 )
 
 type Config struct {
-	HTTPAddr                  string
-	DatabaseURL               string
-	CORSOrigins               []string
-	SessionTTL                time.Duration
-	FirstSuperadmin           FirstSuperadmin
-	DataDir                   string
-	Env                       string
-	CookieSecure              bool
-	CookieSameSite            string
-	OccupancySyncInterval     time.Duration
-	NukiCleanupInterval       time.Duration
-	CleaningReconcileInterval time.Duration
-	NukiMockMode              bool
-	NukiAPIBaseURL            string
-	NukiHTTPTimeoutSeconds    int
-	NukiLogFetchLimit         int
-	NukiLogMaxPages           int
-	MetricsToken              string
-	MetricsBind               string
-	MasterKey                 string
-	BackupDir                 string
-	BackupInterval            time.Duration
-	AuditRetentionDays        int
-	TOTPIssuer                string
-	TOTPDevBypass             bool
-	TrustedProxy              bool
+	HTTPAddr                     string
+	DatabaseURL                  string
+	CORSOrigins                  []string
+	SessionTTL                   time.Duration
+	FirstSuperadmin              FirstSuperadmin
+	DataDir                      string
+	Env                          string
+	CookieSecure                 bool
+	CookieSameSite               string
+	OccupancySyncInterval        time.Duration
+	NukiCleanupInterval          time.Duration
+	CleaningReconcileInterval    time.Duration
+	NukiMockMode                 bool
+	NukiAPIBaseURL               string
+	NukiHTTPTimeoutSeconds       int
+	NukiLogFetchLimit            int
+	NukiLogMaxPages              int
+	MetricsToken                 string
+	MetricsBind                  string
+	MasterKey                    string
+	BackupDir                    string
+	BackupInterval               time.Duration
+	AuditRetentionDays           int
+	TOTPIssuer                   string
+	TOTPDevBypass                bool
+	TrustedProxy                 bool
+	RawBlocksDualWrite           bool
+	OccupancyExportDisabled      bool
+	OccupancyLegacyWriteDisabled bool
 }
 
 type FirstSuperadmin struct {
@@ -197,6 +200,18 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(strings.ToLower(os.Getenv("PMS_TRUSTED_PROXY"))); v == "1" || v == "true" || v == "yes" {
 		trustedProxy = true
 	}
+	rawBlocksDualWrite := false
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("PMS21_RAW_BLOCKS_DUAL_WRITE"))); v == "1" || v == "true" || v == "yes" {
+		rawBlocksDualWrite = true
+	}
+	occupancyExportDisabled := false
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("PMS21_OCCUPANCY_EXPORT_DISABLED"))); v == "1" || v == "true" || v == "yes" {
+		occupancyExportDisabled = true
+	}
+	occupancyLegacyWriteDisabled := false
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("PMS21_OCCUPANCY_LEGACY_WRITE_DISABLED"))); v == "1" || v == "true" || v == "yes" {
+		occupancyLegacyWriteDisabled = true
+	}
 	return &Config{
 		HTTPAddr:                  getenv("HTTP_ADDR", ":8080"),
 		DatabaseURL:               "sqlite://" + dbPath + "?_pragma=foreign_keys(1)",
@@ -214,19 +229,22 @@ func Load() (*Config, error) {
 			Email:    strings.TrimSpace(os.Getenv("FIRST_SUPERADMIN_EMAIL")),
 			Password: os.Getenv("FIRST_SUPERADMIN_PASSWORD"),
 		},
-		DataDir:        dataDir,
-		Env:            env,
-		CookieSecure:   cookieSecure,
-		CookieSameSite: cookieSameSite,
-		MetricsToken:   metricsToken,
-		MetricsBind:    metricsBind,
-		MasterKey:      masterKey,
-		BackupDir:      backupDir,
-		BackupInterval: time.Duration(backupMin) * time.Minute,
-		AuditRetentionDays: auditRetention,
-		TOTPIssuer:         totpIssuer,
-		TOTPDevBypass:      totpBypass,
-		TrustedProxy:       trustedProxy,
+		DataDir:                      dataDir,
+		Env:                          env,
+		CookieSecure:                 cookieSecure,
+		CookieSameSite:               cookieSameSite,
+		MetricsToken:                 metricsToken,
+		MetricsBind:                  metricsBind,
+		MasterKey:                    masterKey,
+		BackupDir:                    backupDir,
+		BackupInterval:               time.Duration(backupMin) * time.Minute,
+		AuditRetentionDays:           auditRetention,
+		TOTPIssuer:                   totpIssuer,
+		TOTPDevBypass:                totpBypass,
+		TrustedProxy:                 trustedProxy,
+		RawBlocksDualWrite:           rawBlocksDualWrite,
+		OccupancyExportDisabled:      occupancyExportDisabled,
+		OccupancyLegacyWriteDisabled: occupancyLegacyWriteDisabled,
 	}, nil
 }
 

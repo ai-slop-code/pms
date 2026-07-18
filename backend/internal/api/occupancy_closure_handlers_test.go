@@ -21,6 +21,10 @@ type failingCleaningCalendarClient struct{}
 
 func (f failingCleaningCalendarClient) Configured() bool { return true }
 
+func (f failingCleaningCalendarClient) ListEvents(ctx context.Context, calendarID string, timeMin, timeMax time.Time) ([]cleaningcalendar.GoogleCalendarEvent, error) {
+	return nil, nil
+}
+
 func (f failingCleaningCalendarClient) UpsertEvent(ctx context.Context, event cleaningcalendar.CalendarEventPayload, googleEventID string) (string, error) {
 	return "", errors.New("unexpected upsert")
 }

@@ -671,7 +671,8 @@ func (s *Server) computePerformanceKPIs(r *http.Request, pid int64, from, to tim
 		return nil, err
 	}
 	nights := store.NightsSoldInRange(stays, from, to)
-	avail := store.AvailableNightsInRange(from, to)
+	closedStays, _ := s.Store.ListClosedOccupanciesInDateRange(r.Context(), pid, from, to)
+	avail := store.BookableNightsInRange(closedStays, from, to)
 	gross, net, commission, fees, matchedIDs, err := s.Store.SumPayoutGrossNetForStays(r.Context(), pid, from, to)
 	if err != nil {
 		return nil, err
@@ -704,7 +705,6 @@ func (s *Server) computePerformanceKPIs(r *http.Request, pid int64, from, to tim
 	fromDate := from.In(loc).Format("2006-01-02")
 	toDate := to.In(loc).Format("2006-01-02")
 	availabilityNights, guestNights, _ := s.Store.OccupancyMetricNights(r.Context(), pid, fromDate, toDate)
-	closedStays, _ := s.Store.ListClosedOccupanciesInDateRange(r.Context(), pid, from, to)
 	bookable := store.BookableNightsInRange(closedStays, from, to)
 	return &analyticsPerformanceKPIs{
 		NightsSold: nights, AvailableNights: avail,

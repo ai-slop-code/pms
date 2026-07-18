@@ -83,9 +83,14 @@ type financeBookingPayoutRow struct {
 	PayoutDate              string  `json:"payout_date"`
 	TransactionID           *int64  `json:"transaction_id"`
 	OccupancyID             *int64  `json:"occupancy_id"`
+	NamedStayID             *int64  `json:"named_stay_id"`
 	OccupancyStartAt        *string `json:"occupancy_start_at"`
 	OccupancyEndAt          *string `json:"occupancy_end_at"`
 	OccupancySummary        *string `json:"occupancy_summary"`
+	NamedStayDisplayName    *string `json:"named_stay_display_name"`
+	NamedStayType           *string `json:"named_stay_type"`
+	NamedStayCheckInDate    *string `json:"named_stay_check_in_date"`
+	NamedStayCheckOutDate   *string `json:"named_stay_check_out_date"`
 	OutcomeOverride         *string `json:"outcome_override"`
 	OutcomeOverrideMarkedAt *string `json:"outcome_override_marked_at"`
 	LinkedInvoiceID         *int64  `json:"linked_invoice_id"`
@@ -97,6 +102,10 @@ type financeBookingPayoutsResponse struct {
 	Month      string                    `json:"month"`
 	MappedOnly string                    `json:"mapped_only"`
 	Payouts    []financeBookingPayoutRow `json:"payouts"`
+}
+
+type financeStayCandidatesResponse struct {
+	Stays []invoiceNamedStayCandidate `json:"stays"`
 }
 
 type financeRecurringRuleRow struct {
@@ -383,9 +392,14 @@ func (s *Server) listFinanceBookingPayouts(w http.ResponseWriter, r *http.Reques
 			PayoutDate:              rr.PayoutDate.UTC().Format(time.RFC3339),
 			TransactionID:           nullInt64Ptr(rr.TransactionID),
 			OccupancyID:             nullInt64Ptr(rr.OccupancyID),
+			NamedStayID:             nullInt64Ptr(rr.NamedStayID),
 			OccupancyStartAt:        nullTimePtr(rr.OccupancyStartAt),
 			OccupancyEndAt:          nullTimePtr(rr.OccupancyEndAt),
 			OccupancySummary:        fixCSVMojibakePtr(nullStringPtr(rr.OccupancySummary)),
+			NamedStayDisplayName:    nullStringPtr(rr.NamedStayDisplayName),
+			NamedStayType:           nullStringPtr(rr.NamedStayType),
+			NamedStayCheckInDate:    nullStringPtr(rr.NamedStayCheckInDate),
+			NamedStayCheckOutDate:   nullStringPtr(rr.NamedStayCheckOutDate),
 			OutcomeOverride:         nullStringPtr(rr.OutcomeOverride),
 			OutcomeOverrideMarkedAt: nullTimePtr(rr.OutcomeOverrideMarkedAt),
 			LinkedInvoiceID:         nullInt64Ptr(rr.LinkedInvoiceID),
@@ -394,6 +408,35 @@ func (s *Server) listFinanceBookingPayouts(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	WriteJSON(w, http.StatusOK, financeBookingPayoutsResponse{Month: month, MappedOnly: mappedOnlyRaw, Payouts: out})
+}
+
+func (s *Server) listFinanceStayCandidates(w http.ResponseWriter, r *http.Request) {
+	_, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Finance, permissions.LevelRead)
+	if !ok {
+		return
+	}
+	month := strings.TrimSpace(r.URL.Query().Get("month"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	rows, err := s.Store.ListNamedStayFinanceCandidates(r.Context(), pid, month, limit, 0)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	out := make([]invoiceNamedStayCandidate, 0, len(rows))
+	for _, st := range rows {
+		out = append(out, invoiceNamedStayCandidate{
+			ID:                 st.ID,
+			DisplayName:        st.DisplayName,
+			StayType:           st.StayType,
+			CheckInDate:        st.CheckInDate,
+			CheckOutDate:       st.CheckOutDate,
+			Status:             st.Status,
+			ReviewStatus:       nullStringPtr(st.ReviewStatus),
+			ManualRevenueCents: nullInt64Ptr(st.ManualRevenueCents),
+			HasFinanceData:     st.HasFinanceData,
+		})
+	}
+	WriteJSON(w, http.StatusOK, financeStayCandidatesResponse{Stays: out})
 }
 
 func (s *Server) postFinanceTransaction(w http.ResponseWriter, r *http.Request) {
@@ -1065,21 +1108,12 @@ type bookingPayoutRematchResponse struct {
 	Failed        int  `json:"failed"`
 }
 
-func (s *Server) resolveBookingPayoutOccupancy(
+func (s *Server) resolveBookingPayoutNamedStay(
 	ctx context.Context,
 	pid int64,
 	referenceNumber, checkInDate, checkOutDate, guestName string,
-	loc *time.Location,
-) (*store.Occupancy, error) {
-	return s.Store.FindOrCreateOccupancyForPayoutStayDates(
-		ctx,
-		pid,
-		referenceNumber,
-		checkInDate,
-		checkOutDate,
-		guestName,
-		loc,
-	)
+) (*store.NamedStay, error) {
+	return s.Store.FindNamedStayForFinanceStayDates(ctx, pid, referenceNumber, checkInDate, checkOutDate, guestName)
 }
 
 func (s *Server) importFinanceBookingPayouts(w http.ResponseWriter, r *http.Request) {
@@ -1140,23 +1174,22 @@ func (s *Server) importFinanceBookingPayouts(w http.ResponseWriter, r *http.Requ
 				}
 				resp.Backfilled++
 			}
-			if !existing.OccupancyID.Valid {
-				occ, matchErr := s.resolveBookingPayoutOccupancy(
+			if !existing.NamedStayID.Valid {
+				stay, matchErr := s.resolveBookingPayoutNamedStay(
 					r.Context(),
 					pid,
 					row.ReferenceNumber,
 					row.CheckInDate,
 					row.CheckOutDate,
 					row.GuestName,
-					loc,
 				)
 				if matchErr != nil {
 					resp.Failed++
 					continue
 				}
-				if occ != nil {
-					occID := occ.ID
-					_ = s.Store.UpdateBookingPayoutMapping(r.Context(), pid, row.ReferenceNumber, &occID)
+				if stay != nil {
+					stayID := stay.ID
+					_ = s.Store.UpdateBookingPayoutNamedStayMapping(r.Context(), pid, row.ReferenceNumber, &stayID)
 					resp.Mapped++
 				}
 			}
@@ -1170,22 +1203,21 @@ func (s *Server) importFinanceBookingPayouts(w http.ResponseWriter, r *http.Requ
 		if tx, err := s.Store.FinanceTransactionBySourceReference(r.Context(), pid, "booking_payout", row.ReferenceNumber); err == nil && tx != nil {
 			existingTxID = tx.ID
 		}
-		var occupancyID sql.NullInt64
-		occ, matchErr := s.resolveBookingPayoutOccupancy(
+		var namedStayID sql.NullInt64
+		stay, matchErr := s.resolveBookingPayoutNamedStay(
 			r.Context(),
 			pid,
 			row.ReferenceNumber,
 			row.CheckInDate,
 			row.CheckOutDate,
 			row.GuestName,
-			loc,
 		)
 		if matchErr != nil {
 			resp.Failed++
 			continue
 		}
-		if occ != nil {
-			occupancyID = sql.NullInt64{Int64: occ.ID, Valid: true}
+		if stay != nil {
+			namedStayID = sql.NullInt64{Int64: stay.ID, Valid: true}
 		}
 		txInput := &store.FinanceTransaction{
 			PropertyID:      pid,
@@ -1214,14 +1246,14 @@ func (s *Server) importFinanceBookingPayouts(w http.ResponseWriter, r *http.Requ
 			PaymentServiceFeeCents: sql.NullInt64{Int64: int64(row.PaymentFeeCents), Valid: true},
 			NetCents:               row.NetCents,
 			PayoutDate:             row.PayoutDate,
-			OccupancyID:            occupancyID,
+			NamedStayID:            namedStayID,
 			RawRowJSON:             sql.NullString{String: row.RawJSON, Valid: row.RawJSON != ""},
 		}
 		if _, err := s.Store.ImportBookingPayoutRow(r.Context(), txInput, payout, existingTxID); err != nil {
 			resp.Failed++
 			continue
 		}
-		if occupancyID.Valid {
+		if namedStayID.Valid {
 			resp.Mapped++
 		}
 		resp.Imported++
@@ -1234,15 +1266,6 @@ func (s *Server) rematchFinanceBookingPayouts(w http.ResponseWriter, r *http.Req
 	actor, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Finance, permissions.LevelWrite)
 	if !ok {
 		return
-	}
-	prop, err := s.Store.GetProperty(r.Context(), pid)
-	if err != nil {
-		WriteError(w, http.StatusNotFound, "property not found")
-		return
-	}
-	loc, err := time.LoadLocation(prop.Timezone)
-	if err != nil {
-		loc = time.UTC
 	}
 	month := strings.TrimSpace(r.URL.Query().Get("month"))
 	if month != "" {
@@ -1264,29 +1287,28 @@ func (s *Server) rematchFinanceBookingPayouts(w http.ResponseWriter, r *http.Req
 	resp := bookingPayoutRematchResponse{OK: true}
 	for _, row := range rows {
 		resp.Scanned++
-		if onlyUnmapped && row.OccupancyID.Valid {
+		if onlyUnmapped && (row.NamedStayID.Valid || row.OccupancyID.Valid) {
 			resp.AlreadyMapped++
 			continue
 		}
-		occ, err := s.resolveBookingPayoutOccupancy(
+		stay, err := s.resolveBookingPayoutNamedStay(
 			r.Context(),
 			pid,
 			row.ReferenceNumber,
 			strings.TrimSpace(row.CheckInDate.String),
 			strings.TrimSpace(row.CheckOutDate.String),
 			fixCSVMojibake(strings.TrimSpace(row.GuestName.String)),
-			loc,
 		)
 		if err != nil {
 			resp.Failed++
 			continue
 		}
-		if occ == nil {
+		if stay == nil {
 			continue
 		}
 		resp.Matched++
-		occID := occ.ID
-		if err := s.Store.UpdateBookingPayoutMapping(r.Context(), pid, row.ReferenceNumber, &occID); err != nil {
+		stayID := stay.ID
+		if err := s.Store.UpdateBookingPayoutNamedStayMapping(r.Context(), pid, row.ReferenceNumber, &stayID); err != nil {
 			resp.Failed++
 			continue
 		}
@@ -1308,6 +1330,7 @@ func (s *Server) mapFinanceBookingPayout(w http.ResponseWriter, r *http.Request)
 	}
 	var body struct {
 		OccupancyID *int64 `json:"occupancy_id"`
+		NamedStayID *int64 `json:"named_stay_id"`
 	}
 	if err := ReadJSON(r, &body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid json")
@@ -1318,14 +1341,21 @@ func (s *Server) mapFinanceBookingPayout(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var targetID *int64
-	if body.OccupancyID != nil && *body.OccupancyID > 0 {
-		if _, err := s.Store.GetOccupancyByID(r.Context(), pid, *body.OccupancyID); err != nil {
+	if body.NamedStayID != nil && *body.NamedStayID > 0 {
+		if _, err := s.Store.GetNamedStay(r.Context(), pid, *body.NamedStayID); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid named_stay_id")
+			return
+		}
+		targetID = body.NamedStayID
+	} else if body.OccupancyID != nil && *body.OccupancyID > 0 {
+		stayID, err := s.Store.ResolveNamedStayIDForOccupancy(r.Context(), pid, *body.OccupancyID)
+		if err != nil || stayID <= 0 {
 			WriteError(w, http.StatusBadRequest, "invalid occupancy_id")
 			return
 		}
-		targetID = body.OccupancyID
+		targetID = &stayID
 	}
-	if err := s.Store.UpdateBookingPayoutMapping(r.Context(), pid, referenceNumber, targetID); err != nil {
+	if err := s.Store.UpdateBookingPayoutNamedStayMapping(r.Context(), pid, referenceNumber, targetID); err != nil {
 		WriteError(w, http.StatusInternalServerError, "mapping update failed")
 		return
 	}
@@ -1333,7 +1363,7 @@ func (s *Server) mapFinanceBookingPayout(w http.ResponseWriter, r *http.Request)
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":               true,
 		"reference_number": referenceNumber,
-		"occupancy_id":     targetID,
+		"named_stay_id":    targetID,
 	})
 }
 
@@ -1356,49 +1386,61 @@ func (s *Server) createFinanceBookingPayoutStay(w http.ResponseWriter, r *http.R
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	prop, err := s.Store.GetProperty(r.Context(), pid)
-	if err != nil {
-		WriteError(w, http.StatusNotFound, "property not found")
-		return
-	}
-	loc, err := time.LoadLocation(prop.Timezone)
-	if err != nil {
-		loc = time.UTC
-	}
-	syntheticUID := "booking_payout:" + referenceNumber
-	preExistingSynthetic, err := s.Store.GetOccupancyBySourceEventUID(r.Context(), pid, syntheticUID)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	occ, err := s.resolveBookingPayoutOccupancy(
+	checkIn := strings.TrimSpace(payout.CheckInDate.String)
+	checkOut := strings.TrimSpace(payout.CheckOutDate.String)
+	guest := fixCSVMojibake(strings.TrimSpace(payout.GuestName.String))
+	stay, err := s.resolveBookingPayoutNamedStay(
 		r.Context(),
 		pid,
 		referenceNumber,
-		strings.TrimSpace(payout.CheckInDate.String),
-		strings.TrimSpace(payout.CheckOutDate.String),
-		fixCSVMojibake(strings.TrimSpace(payout.GuestName.String)),
-		loc,
+		checkIn,
+		checkOut,
+		guest,
 	)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to create stay")
 		return
 	}
-	if occ == nil {
+	created := false
+	if stay == nil {
+		if checkIn == "" || checkOut == "" {
+			WriteError(w, http.StatusBadRequest, "cannot create stay: missing or invalid check-in/check-out dates")
+			return
+		}
+		if strings.TrimSpace(guest) == "" {
+			guest = referenceNumber
+		}
+		stay, err = s.Store.CreateNamedStayRecord(r.Context(), store.NamedStayCreateInput{
+			PropertyID:      pid,
+			DisplayName:     guest,
+			StayType:        store.StayTypeBookingCom,
+			CheckInDate:     checkIn,
+			CheckOutDate:    checkOut,
+			SourceChannel:   "booking_com_finance",
+			SourceReference: referenceNumber,
+			CreatedByUserID: actor.ID,
+		})
+		if err != nil {
+			writeNamedStayError(w, err)
+			return
+		}
+		created = true
+	}
+	if stay == nil {
 		WriteError(w, http.StatusBadRequest, "cannot create stay: missing or invalid check-in/check-out dates")
 		return
 	}
-	occID := occ.ID
-	if err := s.Store.UpdateBookingPayoutMapping(r.Context(), pid, referenceNumber, &occID); err != nil {
+	stayID := stay.ID
+	if err := s.Store.UpdateBookingPayoutNamedStayMapping(r.Context(), pid, referenceNumber, &stayID); err != nil {
 		WriteError(w, http.StatusInternalServerError, "mapping update failed")
 		return
 	}
-	created := preExistingSynthetic == nil && (occ.SourceType == "booking_payout" || strings.HasPrefix(occ.SourceEventUID, "booking_payout:"))
 	s.audit(r, actor, "finance_booking_payout_create_stay", "finance_booking_payout", referenceNumber, "success")
 	WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":               true,
 		"reference_number": referenceNumber,
-		"occupancy_id":     occID,
+		"named_stay_id":    stayID,
+		"occupancy_id":     nullInt64Ptr(stay.LegacyOccupancyID),
 		"created":          created,
 	})
 }

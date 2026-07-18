@@ -14,6 +14,7 @@ import (
 
 	"pms/backend/internal/ctxuser"
 	"pms/backend/internal/permissions"
+	"pms/backend/internal/store"
 )
 
 type nukiKeypadCodeRow struct {
@@ -34,10 +35,13 @@ type nukiCodesResponse struct {
 }
 
 type nukiUpcomingStayRow struct {
+	StayID              int64   `json:"stay_id"`
+	LegacyOccupancyID   *int64  `json:"legacy_occupancy_id,omitempty"`
 	OccupancyID         int64   `json:"occupancy_id"`
 	SourceEventUID      string  `json:"source_event_uid"`
 	Summary             *string `json:"summary"`
 	SavedPinName        *string `json:"saved_pin_name"`
+	StayType            string  `json:"stay_type"`
 	StartAt             string  `json:"start_at"`
 	EndAt               string  `json:"end_at"`
 	OccupancyStatus     string  `json:"occupancy_status"`
@@ -202,6 +206,7 @@ func (s *Server) generateNukiCodes(w http.ResponseWriter, r *http.Request) {
 	}
 	type body struct {
 		OccupancyID *int64  `json:"occupancy_id"`
+		StayID      *int64  `json:"stay_id"`
 		PinName     *string `json:"pin_name"`
 	}
 	var b body
@@ -210,7 +215,13 @@ func (s *Server) generateNukiCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var genErr error
-	if b.OccupancyID != nil {
+	if b.StayID != nil {
+		if b.PinName == nil || strings.TrimSpace(*b.PinName) == "" {
+			WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: "pin_name required"})
+			return
+		}
+		genErr = s.Nuki.GenerateCodeForNamedStay(r.Context(), pid, *b.StayID, "generate_one", strings.TrimSpace(*b.PinName))
+	} else if b.OccupancyID != nil {
 		if b.PinName == nil || strings.TrimSpace(*b.PinName) == "" {
 			WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: "pin_name required"})
 			return
@@ -265,10 +276,13 @@ func (s *Server) listNukiUpcomingStays(w http.ResponseWriter, r *http.Request) {
 			summary = nullStringPtr(row.RawSummary)
 		}
 		out = append(out, nukiUpcomingStayRow{
+			StayID:              row.StayID,
+			LegacyOccupancyID:   nullInt64Ptr(row.LegacyOccupancyID),
 			OccupancyID:         row.OccupancyID,
 			SourceEventUID:      row.SourceEventUID,
 			Summary:             summary,
 			SavedPinName:        nullStringPtr(row.GuestDisplayName),
+			StayType:            row.StayType,
 			StartAt:             row.StartAt.UTC().Format(time.RFC3339),
 			EndAt:               row.EndAt.UTC().Format(time.RFC3339),
 			OccupancyStatus:     row.OccupancyStatus,
@@ -290,9 +304,9 @@ func (s *Server) saveNukiStayName(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	occupancyID, err := strconv.ParseInt(chi.URLParam(r, "occupancyId"), 10, 64)
+	stayID, err := strconv.ParseInt(chi.URLParam(r, "stayId"), 10, 64)
 	if err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid occupancy id")
+		WriteError(w, http.StatusBadRequest, "invalid stay id")
 		return
 	}
 	var body struct {
@@ -306,7 +320,7 @@ func (s *Server) saveNukiStayName(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "pin_name required")
 		return
 	}
-	if err := s.Store.UpdateOccupancyGuestDisplayName(r.Context(), pid, occupancyID, body.PinName); err != nil {
+	if _, err := s.Store.UpdateNamedStayRecord(r.Context(), pid, stayID, store.NamedStayUpdateInput{DisplayName: body.PinName, UpdatedByUserID: actor.ID}); err != nil {
 		if s.Store.IsNotFound(err) {
 			WriteError(w, http.StatusNotFound, "not found")
 			return
@@ -319,7 +333,7 @@ func (s *Server) saveNukiStayName(w http.ResponseWriter, r *http.Request) {
 	if trimmed != "" {
 		saved = &trimmed
 	}
-	s.audit(r, actor, "nuki_save_stay_name", "occupancy", strconv.FormatInt(occupancyID, 10), "success")
+	s.audit(r, actor, "nuki_save_stay_name", "named_stay", strconv.FormatInt(stayID, 10), "success")
 	WriteJSON(w, http.StatusOK, struct {
 		OK           bool    `json:"ok"`
 		SavedPinName *string `json:"saved_pin_name,omitempty"`

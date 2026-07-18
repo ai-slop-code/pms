@@ -5,7 +5,7 @@ import UiTable from '@/components/ui/UiTable.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import { displayStatus, statusTone } from './status'
-import type { OccupancySyncRun as Run, OccupancyApiToken as TokenRow, OccupancyRepairReport } from '@/api/types/occupancy'
+import type { OccupancySyncRun as Run, OccupancyRepairReport } from '@/api/types/occupancy'
 
 function deletionTitle(r: Run): string {
   const parts = [`${r.representations_deleted_from_source ?? 0} rows deleted from source`]
@@ -17,12 +17,9 @@ function deletionTitle(r: Run): string {
 defineProps<{
   source: { active: boolean; source_type: string } | null
   runs: Run[]
-  tokens: TokenRow[]
   syncing: boolean
   repairBusy: boolean
   repairReport: OccupancyRepairReport | null
-  newTokenPlain: string
-  copiedExport: string
 }>()
 
 const emit = defineEmits<{
@@ -30,9 +27,6 @@ const emit = defineEmits<{
   runSync: []
   repairDryRun: []
   repairApply: []
-  createToken: []
-  removeToken: [id: number]
-  copyCurl: []
 }>()
 </script>
 
@@ -128,48 +122,6 @@ const emit = defineEmits<{
       </UiTable>
     </UiSection>
 
-    <UiSection
-      title="JSON export (n8n)"
-      description="Create a token (shown once). Call the export endpoint with the token in an Authorization: Bearer header."
-    >
-      <UiCard>
-        <p class="muted">
-          <code>GET /api/properties/{id}/occupancy-export</code> — pass the token via
-          <code>Authorization: Bearer …</code> or <code>X-Export-Token</code>. Query string
-          fallback (<code>?token=…</code>) is deprecated.
-        </p>
-        <div class="sync-actions">
-          <UiButton variant="primary" @click="emit('createToken')">Create export token</UiButton>
-        </div>
-        <div v-if="newTokenPlain" class="token-callout">
-          <strong>Save this token now:</strong>
-          <code class="token-callout__value">{{ newTokenPlain }}</code>
-          <div class="token-callout__actions">
-            <UiButton variant="secondary" size="sm" @click="emit('copyCurl')">Copy curl command</UiButton>
-            <span v-if="copiedExport" class="token-callout__hint">{{ copiedExport }}</span>
-          </div>
-        </div>
-      </UiCard>
-
-      <UiTable :empty="!tokens.length" empty-text="No export tokens yet.">
-        <template #head>
-          <tr>
-            <th class="num">ID</th>
-            <th>Created</th>
-            <th>Last used</th>
-            <th aria-label="Actions" />
-          </tr>
-        </template>
-        <tr v-for="t in tokens" :key="t.id">
-          <td class="num">{{ t.id }}</td>
-          <td>{{ t.created_at }}</td>
-          <td>{{ t.last_used_at || '—' }}</td>
-          <td class="row-actions">
-            <UiButton variant="ghost" size="sm" @click="emit('removeToken', t.id)">Revoke</UiButton>
-          </td>
-        </tr>
-      </UiTable>
-    </UiSection>
   </div>
 </template>
 
@@ -215,35 +167,5 @@ const emit = defineEmits<{
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   margin-top: 2px;
-}
-.token-callout {
-  margin-top: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-sunken);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.token-callout__value {
-  word-break: break-all;
-  font-family: var(--font-family-mono, monospace);
-  background: var(--color-surface);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-}
-.token-callout__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.token-callout__hint {
-  font-size: var(--font-size-xs);
-  color: var(--success-fg);
-}
-.row-actions {
-  text-align: right;
 }
 </style>

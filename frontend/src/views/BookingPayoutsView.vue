@@ -17,7 +17,7 @@ import { formatEuros, formatShortDate, isoTitle } from '@/utils/format'
 import { monthKey, shiftMonth } from '@/utils/month'
 import type {
   BookingPayoutRow,
-  BookingPayoutOccupancyOption as OccupancyOption,
+  BookingPayoutStayOption as StayOption,
 } from '@/api/types/bookingPayouts'
 
 const eur = (cents?: number | null) => formatEuros(cents ?? 0)
@@ -31,7 +31,7 @@ const busy = ref(false)
 const error = ref('')
 const success = ref('')
 const payouts = ref<BookingPayoutRow[]>([])
-const occupancyOptions = ref<OccupancyOption[]>([])
+const stayOptions = ref<StayOption[]>([])
 const mapInputByRef = ref<Record<string, string>>({})
 
 function prevMonth() { month.value = shiftMonth(month.value, -1) }
@@ -49,7 +49,7 @@ async function load() {
     payouts.value = r.payouts || []
     const next: Record<string, string> = { ...mapInputByRef.value }
     for (const p of payouts.value) {
-      if (p.occupancy_id) next[p.reference_number] = String(p.occupancy_id)
+      if (p.named_stay_id) next[p.reference_number] = String(p.named_stay_id)
       else if (!next[p.reference_number]) next[p.reference_number] = ''
     }
     mapInputByRef.value = next
@@ -60,58 +60,57 @@ async function load() {
   }
 }
 
-async function loadOccupancyOptions() {
+async function loadStayOptions() {
   if (!pid.value) return
   const months = [shiftMonth(month.value, -2), shiftMonth(month.value, -1), month.value, shiftMonth(month.value, 1)]
-  const uniq = new Map<number, OccupancyOption>()
+  const uniq = new Map<number, StayOption>()
   for (const m of months) {
     try {
-      const r = await api<{ occupancies: OccupancyOption[] }>(
-        `/api/properties/${pid.value}/occupancies?month=${encodeURIComponent(m)}&limit=500`
+      const r = await api<{ stays: StayOption[] }>(
+        `/api/properties/${pid.value}/finance/stay-candidates?month=${encodeURIComponent(m)}&limit=500`
       )
-      for (const o of r.occupancies || []) {
+      for (const o of r.stays || []) {
         if (!uniq.has(o.id)) uniq.set(o.id, o)
       }
     } catch {
       // best-effort
     }
   }
-  occupancyOptions.value = Array.from(uniq.values()).sort((a, b) => a.start_at.localeCompare(b.start_at))
+  stayOptions.value = Array.from(uniq.values()).sort((a, b) => a.check_in_date.localeCompare(b.check_in_date))
 }
 
-function occLabel(o: OccupancyOption) {
-  const name = o.raw_summary || o.source_event_uid
-  return `${o.start_at.slice(0, 10)} to ${o.end_at.slice(0, 10)} | ${name} [#${o.id}]`
+function stayLabel(o: StayOption) {
+  return `${o.check_in_date} to ${o.check_out_date} | ${o.display_name} (${o.stay_type}) [#${o.id}]`
 }
 
 function suggestionsForPayout(p: BookingPayoutRow) {
   const inDate = (p.check_in_date || '').trim()
   const outDate = (p.check_out_date || '').trim()
-  if (!inDate || !outDate) return occupancyOptions.value.slice(0, 20)
-  const exact = occupancyOptions.value.filter(
-    (o) => o.start_at.slice(0, 10) === inDate && o.end_at.slice(0, 10) === outDate
+  if (!inDate || !outDate) return stayOptions.value.slice(0, 20)
+  const exact = stayOptions.value.filter(
+    (o) => o.check_in_date === inDate && o.check_out_date === outDate
   )
   if (exact.length) return exact
   const q = (mapInputByRef.value[p.reference_number] || '').toLowerCase().trim()
-  if (!q) return occupancyOptions.value.slice(0, 20)
-  return occupancyOptions.value
-    .filter((o) => occLabel(o).toLowerCase().includes(q) || o.source_event_uid.toLowerCase().includes(q))
+  if (!q) return stayOptions.value.slice(0, 20)
+  return stayOptions.value
+    .filter((o) => stayLabel(o).toLowerCase().includes(q))
     .slice(0, 20)
 }
 
-async function saveMapping(referenceNumber: string, occupancyIdRaw: string) {
+async function saveMapping(referenceNumber: string, stayIdRaw: string) {
   if (!pid.value) return
   busy.value = true
   error.value = ''
   success.value = ''
   try {
-    const n = Number(occupancyIdRaw)
-    const occupancyID = Number.isFinite(n) && n > 0 ? n : null
+    const n = Number(stayIdRaw)
+    const namedStayID = Number.isFinite(n) && n > 0 ? n : null
     await api(`/api/properties/${pid.value}/finance/booking-payouts/${encodeURIComponent(referenceNumber)}/map`, {
       method: 'PATCH',
-      json: { occupancy_id: occupancyID },
+      json: { named_stay_id: namedStayID },
     })
-    success.value = occupancyID
+    success.value = namedStayID
       ? `Stay mapping saved for ${referenceNumber}.`
       : `Stay mapping cleared for ${referenceNumber}.`
     await load()
@@ -151,18 +150,49 @@ async function createStayFromPayout(referenceNumber: string) {
   error.value = ''
   success.value = ''
   try {
-    const r = await api<{ ok: boolean; occupancy_id: number; created: boolean }>(
+    const r = await api<{ ok: boolean; named_stay_id: number; created: boolean }>(
       `/api/properties/${pid.value}/finance/booking-payouts/${encodeURIComponent(referenceNumber)}/create-stay`,
       { method: 'POST' }
     )
     success.value = r.created
       ? `Stay created and mapped for ${referenceNumber}.`
       : `Existing stay mapped for ${referenceNumber}.`
-    mapInputByRef.value[referenceNumber] = String(r.occupancy_id)
+    mapInputByRef.value[referenceNumber] = String(r.named_stay_id)
     await load()
-    await loadOccupancyOptions()
+    await loadStayOptions()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to create stay'
+  } finally {
+    busy.value = false
+  }
+}
+
+async function setManualRevenue(p: BookingPayoutRow) {
+  if (!pid.value || !p.named_stay_id) return
+  const raw = window.prompt('Manual revenue amount in EUR')
+  if (raw == null) return
+  const amount = Number(raw.replace(',', '.'))
+  if (!Number.isFinite(amount) || amount < 0) {
+    error.value = 'Manual revenue must be a non-negative number.'
+    return
+  }
+  busy.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    await api(`/api/properties/${pid.value}/stays/${p.named_stay_id}`, {
+      method: 'PATCH',
+      json: {
+        manual_revenue_cents: Math.round(amount * 100),
+        manual_revenue_currency: p.currency || 'EUR',
+        manual_revenue_note: `Manual revenue from finance row ${p.reference_number}`,
+      },
+    })
+    success.value = `Manual revenue saved for ${p.reference_number}.`
+    await load()
+    await loadStayOptions()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to save manual revenue'
   } finally {
     busy.value = false
   }
@@ -173,7 +203,7 @@ watch([pid, month, mappedOnly], () => {
 }, { immediate: true })
 
 watch([pid, month], () => {
-  loadOccupancyOptions().catch(() => {})
+  loadStayOptions().catch(() => {})
 }, { immediate: true })
 </script>
 
@@ -251,8 +281,8 @@ watch([pid, month], () => {
             <div><span class="muted">Fee</span> {{ eur(p.payment_service_fee_cents) }}</div>
           </td>
           <td>
-            <UiBadge :tone="p.occupancy_id ? 'success' : 'warning'" dot>
-              {{ p.occupancy_id ? 'Mapped' : 'Unmapped' }}
+            <UiBadge :tone="p.named_stay_id ? 'success' : 'warning'" dot>
+              {{ p.named_stay_id ? 'Mapped' : 'Unmapped' }}
             </UiBadge>
           </td>
           <td>
@@ -293,7 +323,7 @@ watch([pid, month], () => {
               />
               <datalist :id="`occ-${p.reference_number}`">
                 <option v-for="o in suggestionsForPayout(p)" :key="o.id" :value="String(o.id)">
-                  {{ occLabel(o) }}
+                  {{ stayLabel(o) }}
                 </option>
               </datalist>
               <div class="map-cell__actions">
@@ -315,6 +345,13 @@ watch([pid, month], () => {
                   :disabled="busy || !canCreateStay(p)"
                   @click="createStayFromPayout(p.reference_number)"
                 >Create stay</UiButton>
+                <UiButton
+                  v-if="p.named_stay_id && p.named_stay_type === 'external'"
+                  size="sm"
+                  variant="secondary"
+                  :disabled="busy"
+                  @click="setManualRevenue(p)"
+                >Set revenue</UiButton>
               </div>
             </div>
           </td>

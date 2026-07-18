@@ -49,6 +49,22 @@ func seedGuestHeatmapFixtures(t *testing.T) (string, []*http.Cookie, int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nowText := time.Now().UTC().Format(time.RFC3339)
+	res, err := st.DB.ExecContext(ctx, `
+		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
+		VALUES (?, 'Heatmap Guest', 'booking_com', '2026-04-09', '2026-04-12', 'active', 1, 'booking_ics', 'uid-h', 'confirmed', 'generated', ?, ?)`, prop.ID, nowText, nowText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stayID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
+		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, row.ID, prop.ID, stayID, nowText); err != nil {
+		t.Fatal(err)
+	}
 
 	// Two unlock rows in range (different days so each gets a row), plus
 	// one outside the range that must be excluded.

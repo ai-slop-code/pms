@@ -44,6 +44,11 @@ type OccupancySyncRun struct {
 	ProvisionalCleaningEventsCreated int
 	ProvisionalCleaningEventsRemoved int
 	DeletionEnabled                  bool
+	RawBlocksInserted                int
+	RawBlocksUpdated                 int
+	RawBlocksUnchanged               int
+	RawBlocksDeletedFromSource       int
+	RawBlockConflicts                int
 }
 
 // SyncCounters accumulates PMS_19 §12 counts during a sync run.
@@ -62,6 +67,13 @@ type SyncCounters struct {
 	ProvisionalCleaningEventsCreated int
 	ProvisionalCleaningEventsRemoved int
 	DeletionEnabled                  bool
+	SyncRunID                        int64
+	RawBlocksDualWrite               bool
+	RawBlocksInserted                int
+	RawBlocksUpdated                 int
+	RawBlocksUnchanged               int
+	RawBlocksDeletedFromSource       int
+	RawBlockConflicts                int
 }
 
 type Occupancy struct {
@@ -519,7 +531,8 @@ func (s *Store) ListOccupancySyncRunsPaged(ctx context.Context, propertyID int64
 		SELECT id, property_id, started_at, finished_at, status, error_message, events_seen, occupancies_upserted, http_status, trigger, created_at,
 		       upstream_events_parsed, parse_errors, representations_inserted, representations_updated, representations_unchanged,
 		       representations_superseded, representations_deleted_from_source, duplicate_nights_resolved, legacy_generated_rows_converted,
-		       named_stays_deleted_from_source, provisional_cleaning_events_created, provisional_cleaning_events_removed, deletion_enabled
+		       named_stays_deleted_from_source, provisional_cleaning_events_created, provisional_cleaning_events_removed, deletion_enabled,
+		       raw_blocks_inserted, raw_blocks_updated, raw_blocks_unchanged, raw_blocks_deleted_from_source, raw_block_conflicts
 		FROM occupancy_sync_runs WHERE property_id = ? ORDER BY started_at DESC LIMIT ? OFFSET ?`, propertyID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -534,7 +547,8 @@ func (s *Store) ListOccupancySyncRunsPaged(ctx context.Context, propertyID int64
 		if err := rows.Scan(&r.ID, &r.PropertyID, &started, &finished, &r.Status, &r.ErrorMessage, &r.EventsSeen, &r.OccupanciesUpserted, &r.HTTPStatus, &r.Trigger, &created,
 			&r.UpstreamEventsParsed, &r.ParseErrors, &r.RepresentationsInserted, &r.RepresentationsUpdated, &r.RepresentationsUnchanged,
 			&r.RepresentationsSuperseded, &r.RepresentationsDeletedFromSource, &r.DuplicateNightsResolved, &r.LegacyGeneratedRowsConverted,
-			&r.NamedStaysDeletedFromSource, &r.ProvisionalCleaningEventsCreated, &r.ProvisionalCleaningEventsRemoved, &deletionEnabled); err != nil {
+			&r.NamedStaysDeletedFromSource, &r.ProvisionalCleaningEventsCreated, &r.ProvisionalCleaningEventsRemoved, &deletionEnabled,
+			&r.RawBlocksInserted, &r.RawBlocksUpdated, &r.RawBlocksUnchanged, &r.RawBlocksDeletedFromSource, &r.RawBlockConflicts); err != nil {
 			return nil, err
 		}
 		r.DeletionEnabled = deletionEnabled == 1

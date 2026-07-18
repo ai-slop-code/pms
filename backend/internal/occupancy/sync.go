@@ -26,9 +26,10 @@ const (
 
 // Service runs ICS fetch and occupancy normalization.
 type Service struct {
-	Store *store.Store
-	HTTP  *http.Client
-	Now   func() time.Time
+	Store              *store.Store
+	HTTP               *http.Client
+	Now                func() time.Time
+	RawBlocksDualWrite bool
 }
 
 func (s *Service) now() time.Time {
@@ -114,6 +115,8 @@ func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger st
 		UpstreamEventsParsed: len(parsedRes.Events),
 		ParseErrors:          len(parsedRes.ParseErrors),
 		DeletionEnabled:      true,
+		SyncRunID:            runID,
+		RawBlocksDualWrite:   s.RawBlocksDualWrite,
 	}
 
 	// PMS_19 §7.2: any event-level parse failure aborts mutation entirely so a

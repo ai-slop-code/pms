@@ -137,9 +137,19 @@ type occupancySyncRunRow struct {
 	RepresentationsDeletedFromSource int     `json:"representations_deleted_from_source"`
 	DuplicateNightsResolved          int     `json:"duplicate_nights_resolved"`
 	NamedStaysDeletedFromSource      int     `json:"named_stays_deleted_from_source"`
+	RawBlocksInserted                int     `json:"raw_blocks_inserted"`
+	RawBlocksUpdated                 int     `json:"raw_blocks_updated"`
+	RawBlocksUnchanged               int     `json:"raw_blocks_unchanged"`
+	RawBlocksDeletedFromSource       int     `json:"raw_blocks_deleted_from_source"`
+	RawBlockConflicts                int     `json:"raw_block_conflicts"`
 }
 
 func (s *Server) getOccupancyExportPublic(w http.ResponseWriter, r *http.Request) {
+	addDeprecatedAPIHeaders(w, "Deprecated public occupancy export; use native Google Calendar cleaning sync instead.")
+	if s.OccupancyExportDisabled {
+		WriteError(w, http.StatusGone, "occupancy export is disabled")
+		return
+	}
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid property id")
@@ -448,6 +458,11 @@ func (s *Server) listOccupancySyncRuns(w http.ResponseWriter, r *http.Request) {
 			RepresentationsDeletedFromSource: run.RepresentationsDeletedFromSource,
 			DuplicateNightsResolved:          run.DuplicateNightsResolved,
 			NamedStaysDeletedFromSource:      run.NamedStaysDeletedFromSource,
+			RawBlocksInserted:                run.RawBlocksInserted,
+			RawBlocksUpdated:                 run.RawBlocksUpdated,
+			RawBlocksUnchanged:               run.RawBlocksUnchanged,
+			RawBlocksDeletedFromSource:       run.RawBlocksDeletedFromSource,
+			RawBlockConflicts:                run.RawBlockConflicts,
 		})
 	}
 	WriteJSON(w, http.StatusOK, occupancyRunsResponse{Runs: out, Page: page, Limit: limit, HasMore: hasMore})

@@ -51,6 +51,23 @@ func setupNukiPinFixture(t *testing.T) (*store.Store, *httptest.Server, int64, i
 	if err != nil || occ == nil {
 		t.Fatalf("expected occupancy, err=%v", err)
 	}
+	nowText := time.Now().UTC().Format(time.RFC3339)
+	res, err := st.DB.ExecContext(ctx, `
+		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
+		VALUES (?, 'Guest X', 'booking_com', ?, ?, 'active', 1, 'booking_ics', 'nuki-pin-occ', 'confirmed', 'generated', ?, ?)`,
+		prop.ID, start.UTC().Format("2006-01-02"), end.UTC().Format("2006-01-02"), nowText, nowText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stayID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
+		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, occ.ID, prop.ID, stayID, nowText); err != nil {
+		t.Fatal(err)
+	}
 	nukiRunID, err := st.StartNukiSyncRun(ctx, prop.ID, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +75,7 @@ func setupNukiPinFixture(t *testing.T) (*store.Store, *httptest.Server, int64, i
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:        prop.ID,
 		OccupancyID:       occ.ID,
+		NamedStayID:       sql.NullInt64{Int64: stayID, Valid: true},
 		CodeLabel:         "booking-pin-reveal",
 		AccessCodeMasked:  sql.NullString{String: "98**", Valid: true},
 		GeneratedPINPlain: sql.NullString{String: "9876", Valid: true},
@@ -224,8 +242,11 @@ func TestOccupancyExport_AuthorizationBearerSucceeds(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", res.StatusCode)
 	}
-	if res.Header.Get("Warning") != "" {
-		t.Fatalf("header path must not emit a deprecation Warning header, got %q", res.Header.Get("Warning"))
+	if res.Header.Get("Deprecation") != "true" {
+		t.Fatalf("Deprecation header = %q, want true", res.Header.Get("Deprecation"))
+	}
+	if res.Header.Get("Warning") == "" {
+		t.Fatalf("deprecated export must emit Warning header")
 	}
 	var payload struct {
 		Occupancies []interface{} `json:"occupancies"`
@@ -274,5 +295,24 @@ func TestOccupancyExport_NoTokenReturns401(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status=%d want 401", res.StatusCode)
+	}
+}
+
+func TestOccupancyExport_DisabledReturnsGone(t *testing.T) {
+	st := testDB(t)
+	srv := &Server{Store: st, SessionTTL: time.Hour, OccupancyExportDisabled: true}
+	ts := httptest.NewServer(srv.Routes())
+	t.Cleanup(ts.Close)
+
+	res, err := http.Get(fmt.Sprintf("%s/api/properties/1/occupancy-export", ts.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusGone {
+		t.Fatalf("status=%d want 410", res.StatusCode)
+	}
+	if res.Header.Get("Deprecation") != "true" {
+		t.Fatalf("Deprecation header = %q, want true", res.Header.Get("Deprecation"))
 	}
 }

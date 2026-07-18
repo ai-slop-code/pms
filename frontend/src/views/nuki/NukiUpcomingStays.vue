@@ -11,19 +11,19 @@ defineProps<{
   stays: UpcomingStay[]
   pinNames: Record<number, string>
   savingStayName: Record<number, boolean>
-  generatingOccupancyId: number | null
+  generatingStayId: number | null
   revealingCodeId: number | null
 }>()
 
 const emit = defineEmits<{
-  'update:pinName': [occupancyId: number, value: string]
-  savePinName: [occupancyId: number]
-  generate: [occupancyId: number]
+  'update:pinName': [stayId: number, value: string]
+  savePinName: [stayId: number]
+  generate: [stayId: number]
   reveal: [stay: UpcomingStay]
 }>()
 
-function onInput(occupancyId: number, event: Event) {
-  emit('update:pinName', occupancyId, (event.target as HTMLInputElement).value)
+function onInput(stayId: number, event: Event) {
+  emit('update:pinName', stayId, (event.target as HTMLInputElement).value)
 }
 
 function displayStart(stay: UpcomingStay) {
@@ -55,16 +55,16 @@ function displayEnd(stay: UpcomingStay) {
           <th aria-label="Actions" />
         </tr>
       </template>
-      <tr v-for="s in stays" :key="s.occupancy_id">
+      <tr v-for="s in stays" :key="s.stay_id">
         <td>
           <input
-            :value="pinNames[s.occupancy_id] || ''"
+            :value="pinNames[s.stay_id] || ''"
             :placeholder="s.summary || s.source_event_uid || 'Stay name'"
             class="row-input"
-            @input="onInput(s.occupancy_id, $event)"
-            @blur="emit('savePinName', s.occupancy_id)"
+            @input="onInput(s.stay_id, $event)"
+            @blur="emit('savePinName', s.stay_id)"
           />
-          <small v-if="savingStayName[s.occupancy_id]" class="muted">Saving…</small>
+          <small v-if="savingStayName[s.stay_id]" class="muted">Saving…</small>
         </td>
         <td>
           <time :datetime="displayStart(s)" :title="isoTitle(displayStart(s))">{{ formatShortDate(displayStart(s)) }}</time>
@@ -94,8 +94,8 @@ function displayEnd(stay: UpcomingStay) {
             v-if="canGenerate(s.generated_status)"
             variant="primary"
             size="sm"
-            :loading="generatingOccupancyId === s.occupancy_id"
-            @click="emit('generate', s.occupancy_id)"
+            :loading="generatingStayId === s.stay_id"
+            @click="emit('generate', s.stay_id)"
           >Generate PIN</UiButton>
         </td>
       </tr>

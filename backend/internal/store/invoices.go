@@ -9,32 +9,33 @@ import (
 )
 
 type Invoice struct {
-	ID                   int64
-	PropertyID           int64
-	OccupancyID          sql.NullInt64
-	InvoiceNumber        string
-	SequenceYear         int
-	SequenceValue        int
-	Language             string
-	IssueDate            time.Time
-	TaxableSupplyDate    time.Time
-	DueDate              time.Time
-	StayStartDate        time.Time
-	StayEndDate          time.Time
-	SupplierSnapshotJSON string
-	CustomerSnapshotJSON string
-	AmountTotalCents     int
-	Currency             string
-	PaymentStatus        string
-	PaymentNote          string
+	ID                     int64
+	PropertyID             int64
+	OccupancyID            sql.NullInt64
+	NamedStayID            sql.NullInt64
+	InvoiceNumber          string
+	SequenceYear           int
+	SequenceValue          int
+	Language               string
+	IssueDate              time.Time
+	TaxableSupplyDate      time.Time
+	DueDate                time.Time
+	StayStartDate          time.Time
+	StayEndDate            time.Time
+	SupplierSnapshotJSON   string
+	CustomerSnapshotJSON   string
+	AmountTotalCents       int
+	Currency               string
+	PaymentStatus          string
+	PaymentNote            string
 	FinanceBookingPayoutID sql.NullInt64
-	Version              int
-	CreatedBy            sql.NullInt64
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-	LatestFilePath       sql.NullString
-	LatestFileSizeBytes  sql.NullInt64
-	LatestFileCreatedAt  sql.NullTime
+	Version                int
+	CreatedBy              sql.NullInt64
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	LatestFilePath         sql.NullString
+	LatestFileSizeBytes    sql.NullInt64
+	LatestFileCreatedAt    sql.NullTime
 }
 
 type InvoiceFile struct {
@@ -96,7 +97,7 @@ func (s *Store) PreviewNextInvoiceNumber(ctx context.Context, propertyID int64, 
 
 func (s *Store) ListInvoices(ctx context.Context, propertyID int64) ([]Invoice, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT i.id, i.property_id, i.occupancy_id, i.finance_booking_payout_id, i.invoice_number, i.sequence_year, i.sequence_value,
+		SELECT i.id, i.property_id, i.occupancy_id, i.named_stay_id, i.finance_booking_payout_id, i.invoice_number, i.sequence_year, i.sequence_value,
 			i.language, i.issue_date, i.taxable_supply_date, i.due_date, i.stay_start_date, i.stay_end_date,
 			i.supplier_snapshot_json, i.customer_snapshot_json, i.amount_total_cents, i.currency, i.payment_status,
 			i.payment_note, i.version, i.created_by, i.created_at, i.updated_at,
@@ -133,7 +134,7 @@ func (s *Store) ListInvoices(ctx context.Context, propertyID int64) ([]Invoice, 
 
 func (s *Store) GetInvoiceByID(ctx context.Context, propertyID, invoiceID int64) (*Invoice, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT i.id, i.property_id, i.occupancy_id, i.finance_booking_payout_id, i.invoice_number, i.sequence_year, i.sequence_value,
+		SELECT i.id, i.property_id, i.occupancy_id, i.named_stay_id, i.finance_booking_payout_id, i.invoice_number, i.sequence_year, i.sequence_value,
 			i.language, i.issue_date, i.taxable_supply_date, i.due_date, i.stay_start_date, i.stay_end_date,
 			i.supplier_snapshot_json, i.customer_snapshot_json, i.amount_total_cents, i.currency, i.payment_status,
 			i.payment_note, i.version, i.created_by, i.created_at, i.updated_at,
@@ -210,12 +211,12 @@ func (s *Store) CreateInvoice(ctx context.Context, row *Invoice) (*Invoice, erro
 	row.Version = 1
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO invoices (
-			property_id, occupancy_id, finance_booking_payout_id, invoice_number, sequence_year, sequence_value, language,
+			property_id, occupancy_id, named_stay_id, finance_booking_payout_id, invoice_number, sequence_year, sequence_value, language,
 			issue_date, taxable_supply_date, due_date, stay_start_date, stay_end_date,
 			supplier_snapshot_json, customer_snapshot_json, amount_total_cents, currency,
 			payment_status, payment_note, version, created_by, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		row.PropertyID, nullInt64Value(row.OccupancyID), nullInt64Value(row.FinanceBookingPayoutID), row.InvoiceNumber, row.SequenceYear, row.SequenceValue, row.Language,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.PropertyID, nullInt64Value(row.OccupancyID), nullInt64Value(row.NamedStayID), nullInt64Value(row.FinanceBookingPayoutID), row.InvoiceNumber, row.SequenceYear, row.SequenceValue, row.Language,
 		row.IssueDate.UTC().Format(time.RFC3339), row.TaxableSupplyDate.UTC().Format(time.RFC3339), row.DueDate.UTC().Format(time.RFC3339),
 		row.StayStartDate.UTC().Format(time.RFC3339), row.StayEndDate.UTC().Format(time.RFC3339),
 		row.SupplierSnapshotJSON, row.CustomerSnapshotJSON, row.AmountTotalCents, row.Currency,
@@ -247,11 +248,11 @@ func (s *Store) UpdateInvoice(ctx context.Context, row *Invoice) (*Invoice, erro
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.DB.ExecContext(ctx, `
 		UPDATE invoices
-		SET occupancy_id = ?, finance_booking_payout_id = ?, language = ?, issue_date = ?, taxable_supply_date = ?, due_date = ?,
+		SET occupancy_id = ?, named_stay_id = ?, finance_booking_payout_id = ?, language = ?, issue_date = ?, taxable_supply_date = ?, due_date = ?,
 			stay_start_date = ?, stay_end_date = ?, supplier_snapshot_json = ?, customer_snapshot_json = ?,
 			amount_total_cents = ?, currency = ?, payment_status = ?, payment_note = ?, updated_at = ?
 		WHERE id = ? AND property_id = ?`,
-		nullInt64Value(row.OccupancyID), nullInt64Value(row.FinanceBookingPayoutID), row.Language, row.IssueDate.UTC().Format(time.RFC3339),
+		nullInt64Value(row.OccupancyID), nullInt64Value(row.NamedStayID), nullInt64Value(row.FinanceBookingPayoutID), row.Language, row.IssueDate.UTC().Format(time.RFC3339),
 		row.TaxableSupplyDate.UTC().Format(time.RFC3339), row.DueDate.UTC().Format(time.RFC3339),
 		row.StayStartDate.UTC().Format(time.RFC3339), row.StayEndDate.UTC().Format(time.RFC3339),
 		row.SupplierSnapshotJSON, row.CustomerSnapshotJSON, row.AmountTotalCents, row.Currency,
@@ -375,7 +376,7 @@ func scanInvoicesRows(rows *sql.Rows) ([]Invoice, error) {
 		var createdAt, updatedAt string
 		var latestFileCreatedAt sql.NullString
 		if err := rows.Scan(
-			&row.ID, &row.PropertyID, &row.OccupancyID, &row.FinanceBookingPayoutID, &row.InvoiceNumber, &row.SequenceYear, &row.SequenceValue,
+			&row.ID, &row.PropertyID, &row.OccupancyID, &row.NamedStayID, &row.FinanceBookingPayoutID, &row.InvoiceNumber, &row.SequenceYear, &row.SequenceValue,
 			&row.Language, &issueDate, &taxableSupplyDate, &dueDate, &stayStartDate, &stayEndDate,
 			&row.SupplierSnapshotJSON, &row.CustomerSnapshotJSON, &row.AmountTotalCents, &row.Currency, &row.PaymentStatus,
 			&row.PaymentNote, &row.Version, &row.CreatedBy, &createdAt, &updatedAt,

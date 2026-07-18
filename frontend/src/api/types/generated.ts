@@ -503,7 +503,6 @@ export interface paths {
                         "application/json": components["schemas"]["Property"];
                     };
                 };
-                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -540,6 +539,1164 @@ export interface paths {
         };
         trace?: never;
     };
+    "/properties/{id}/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** Return permission-filtered dashboard widgets. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Dashboard widgets. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DashboardSummaryResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/messages/stays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List message-eligible named stays. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Message-eligible named stays. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageStaysResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/messages/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** Generate guest messages for a named stay. */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Preferred PMS 21 named stay identity. */
+                    stay_id?: number;
+                    /**
+                     * @deprecated
+                     * @description Deprecated compatibility identity resolved through occupancy_stay_migration_map.
+                     */
+                    occupancy_id?: number;
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Rendered messages. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GenerateMessagesResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/booking-blocks": {
+        parameters: {
+            query: {
+                month: components["parameters"]["MonthQuery"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List raw Booking.com blocks for a month. */
+        get: {
+            parameters: {
+                query: {
+                    month: components["parameters"]["MonthQuery"];
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Raw booking blocks. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            raw_blocks: components["schemas"]["RawBookingBlock"][];
+                        };
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/stays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List named stays for a month. */
+        get: {
+            parameters: {
+                query: {
+                    month: components["parameters"]["MonthQuery"];
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Named stays. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            named_stays: components["schemas"]["NamedStay"][];
+                        };
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Create a named stay. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NamedStayCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description Named stay created. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NamedStayMutationResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/stays/{stayId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                stayId: components["parameters"]["StayIdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update a named stay. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    stayId: components["parameters"]["StayIdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NamedStayPatchRequest"];
+                };
+            };
+            responses: {
+                /** @description Named stay updated. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NamedStayMutationResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/properties/{id}/stays/{stayId}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                stayId: components["parameters"]["StayIdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change named stay status. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    stayId: components["parameters"]["StayIdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "active" | "cancelled" | "archived";
+                    };
+                };
+            };
+            responses: {
+                /** @description Named stay status changed. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NamedStayMutationResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/properties/{id}/booking-blocks/{blockId}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                blockId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote a raw Booking.com block range to a named stay. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    blockId: number;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NamedStayCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description Named stay created. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NamedStayMutationResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/availability-blocks": {
+        parameters: {
+            query: {
+                month: components["parameters"]["MonthQuery"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List non-stay availability blocks for a month. */
+        get: {
+            parameters: {
+                query: {
+                    month: components["parameters"]["MonthQuery"];
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Availability blocks. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            availability_blocks: components["schemas"]["AvailabilityBlock"][];
+                        };
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Create a non-stay availability block. */
+        post: {
+            parameters: {
+                query: {
+                    month: components["parameters"]["MonthQuery"];
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AvailabilityBlockRequest"];
+                };
+            };
+            responses: {
+                /** @description Availability block created. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AvailabilityBlockMutationResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/availability-blocks/{blockId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                blockId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update a non-stay availability block. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    blockId: number;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AvailabilityBlockRequest"];
+                };
+            };
+            responses: {
+                /** @description Availability block updated. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AvailabilityBlockMutationResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+            };
+        };
+        trace?: never;
+    };
+    "/properties/{id}/occupancy-calendar": {
+        parameters: {
+            query: {
+                month: components["parameters"]["MonthQuery"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** Return combined raw-block, named-stay, and availability calendar model. */
+        get: {
+            parameters: {
+                query: {
+                    month: components["parameters"]["MonthQuery"];
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Combined occupancy calendar. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            calendar: components["schemas"]["OccupancyCalendar"];
+                        };
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/occupancy-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Deprecated public occupancy JSON export.
+         * @deprecated
+         * @description Public occupancy export is retired by PMS 21. Native Google Calendar cleaning sync is the supported external calendar integration path.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Legacy export payload when temporarily enabled for compatibility. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeprecatedOccupancyExportResponse"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                /** @description Occupancy export is disabled. */
+                410: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/occupancy-api-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Deprecated occupancy export token list.
+         * @deprecated
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Legacy export tokens. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeprecatedOccupancyTokensResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /**
+         * Deprecated occupancy export token creation.
+         * @deprecated
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        label?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Legacy export token created. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeprecatedOccupancyTokenCreateResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/occupancy-api-tokens/{tokenId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                tokenId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Deprecated occupancy export token revocation.
+         * @deprecated
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    tokenId: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Token revoked. */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/nuki/upcoming-stays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List Nuki-eligible upcoming named stays and generated code state. */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Nuki upcoming stays. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NukiUpcomingStaysResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/nuki/upcoming-stays/{stayId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                stayId: components["parameters"]["StayIdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update the named stay display name used for Nuki PIN labels. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    stayId: components["parameters"]["StayIdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NukiStayNamePatchRequest"];
+                };
+            };
+            responses: {
+                /** @description Stay name saved. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NukiStayNamePatchResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        trace?: never;
+    };
+    "/properties/{id}/nuki/codes/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate Nuki guest codes for all eligible named stays or one named stay. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["NukiGenerateRequest"];
+                };
+            };
+            responses: {
+                /** @description Generation result. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActionResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/nuki/codes/{codeId}/reveal-pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                codeId: number;
+            };
+            cookie?: never;
+        };
+        /** Reveal a generated Nuki PIN with write-level permission and audit logging. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    codeId: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Plaintext PIN. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            pin: string;
+                        };
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/finance/booking-payouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List Booking.com finance rows mapped to named stays. */
+        get: {
+            parameters: {
+                query?: {
+                    month?: string;
+                    mapped_only?: boolean;
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Finance booking rows. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinanceBookingPayoutsResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/finance/stay-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List named stays eligible for finance mapping. */
+        get: {
+            parameters: {
+                query?: {
+                    month?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Named-stay candidates. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinanceStayCandidatesResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/finance/booking-payouts/{referenceNumber}/map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                referenceNumber: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Map or clear a Booking.com finance row to a named stay. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    referenceNumber: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FinanceBookingPayoutMapRequest"];
+                };
+            };
+            responses: {
+                /** @description Mapping saved. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinanceBookingPayoutMapResponse"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/properties/{id}/finance/booking-payouts/{referenceNumber}/create-stay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                referenceNumber: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Explicitly create or link a named stay from a finance row. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    referenceNumber: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Named stay created or linked. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinanceBookingPayoutCreateStayResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/invoices/occupancy-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List named stays for invoice stay selection. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Named-stay candidates; deprecated occupancies is empty for compatibility. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InvoiceStayCandidatesResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -553,6 +1710,278 @@ export interface components {
             error: string;
             /** @description Optional machine-readable code. */
             code?: string;
+        };
+        /** @deprecated */
+        DeprecatedOccupancyExportResponse: {
+            occupancies: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** @deprecated */
+        DeprecatedOccupancyTokenCreateResponse: {
+            /** Format: int64 */
+            id: number;
+            token: string;
+        };
+        /** @deprecated */
+        DeprecatedOccupancyTokensResponse: {
+            tokens: {
+                /** Format: int64 */
+                id: number;
+                label?: string;
+                /** Format: date-time */
+                created_at: string;
+                /** Format: date-time */
+                last_used_at?: string;
+            }[];
+        };
+        ActionResponse: {
+            ok: boolean;
+            error?: string;
+        };
+        FinanceBookingPayoutsResponse: {
+            month?: string;
+            mapped_only?: string;
+            payouts: components["schemas"]["FinanceBookingPayout"][];
+        };
+        FinanceBookingPayout: {
+            /** Format: int64 */
+            id: number;
+            reference_number: string;
+            payout_id?: string;
+            row_type?: string;
+            /** Format: date */
+            check_in_date?: string;
+            /** Format: date */
+            check_out_date?: string;
+            guest_name?: string;
+            reservation_status?: string;
+            currency?: string;
+            payment_status?: string;
+            /** Format: int64 */
+            amount_cents?: number;
+            /** Format: int64 */
+            commission_cents?: number;
+            /** Format: int64 */
+            payment_service_fee_cents?: number;
+            net_cents: number;
+            /** Format: date-time */
+            payout_date: string;
+            /** Format: int64 */
+            transaction_id?: number;
+            /** Format: int64 */
+            named_stay_id?: number;
+            /**
+             * Format: int64
+             * @deprecated
+             */
+            occupancy_id?: number;
+            occupancy_summary?: string;
+            named_stay_display_name?: string;
+            /** @enum {string} */
+            named_stay_type?: "booking_com" | "external" | "maintenance" | "personal_use";
+            /** Format: date */
+            named_stay_check_in_date?: string;
+            /** Format: date */
+            named_stay_check_out_date?: string;
+            /** Format: int64 */
+            linked_invoice_id?: number;
+            has_payout_data: boolean;
+            has_statement_data: boolean;
+        };
+        FinanceNamedStayCandidate: {
+            /** Format: int64 */
+            id: number;
+            display_name: string;
+            /** @enum {string} */
+            stay_type: "booking_com" | "external" | "maintenance" | "personal_use";
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+            /** @enum {string} */
+            status: "active" | "cancelled" | "archived";
+            /** @enum {string} */
+            review_status?: "confirmed" | "needs_review";
+            /** Format: int64 */
+            manual_revenue_cents?: number;
+            has_finance_data: boolean;
+        };
+        FinanceStayCandidatesResponse: {
+            stays: components["schemas"]["FinanceNamedStayCandidate"][];
+        };
+        FinanceBookingPayoutMapRequest: {
+            /** Format: int64 */
+            named_stay_id?: number | null;
+            /**
+             * Format: int64
+             * @deprecated
+             */
+            occupancy_id?: number | null;
+        };
+        FinanceBookingPayoutMapResponse: {
+            ok: boolean;
+            reference_number: string;
+            /** Format: int64 */
+            named_stay_id?: number | null;
+        };
+        FinanceBookingPayoutCreateStayResponse: {
+            ok: boolean;
+            reference_number: string;
+            /** Format: int64 */
+            named_stay_id: number;
+            /**
+             * Format: int64
+             * @deprecated
+             */
+            occupancy_id?: number;
+            created: boolean;
+        };
+        InvoiceStayCandidatesResponse: {
+            stays: components["schemas"]["FinanceNamedStayCandidate"][];
+            /** @deprecated */
+            occupancies: Record<string, never>[];
+        };
+        NukiUpcomingStaysResponse: {
+            stays: components["schemas"]["NukiUpcomingStay"][];
+        };
+        NukiUpcomingStay: {
+            /** Format: int64 */
+            stay_id: number;
+            /** Format: int64 */
+            legacy_occupancy_id?: number;
+            /**
+             * Format: int64
+             * @deprecated
+             * @description Legacy compatibility ID retained until old Nuki callers are removed.
+             */
+            occupancy_id: number;
+            source_event_uid?: string;
+            summary: string;
+            saved_pin_name?: string;
+            /** @enum {string} */
+            stay_type?: "booking_com" | "external";
+            /** Format: date-time */
+            start_at: string;
+            /** Format: date-time */
+            end_at: string;
+            /** @description Compatibility field containing the named stay status. */
+            occupancy_status: string;
+            /** Format: int64 */
+            generated_code_id?: number;
+            generated_label?: string;
+            /** @enum {string} */
+            generated_status?: "not_generated" | "generated" | "revoked";
+            generated_masked?: string;
+            /** Format: date-time */
+            generated_valid_from?: string;
+            /** Format: date-time */
+            generated_valid_until?: string;
+            generated_error?: string;
+            /** Format: date-time */
+            generated_updated_at?: string;
+        };
+        NukiStayNamePatchRequest: {
+            /** @description New named stay display name used for generated PIN labels. */
+            pin_name: string;
+        };
+        NukiStayNamePatchResponse: {
+            ok: boolean;
+            saved_pin_name?: string;
+        };
+        NukiGenerateRequest: {
+            /**
+             * Format: int64
+             * @description Preferred Stage 7 named stay identity for single-stay generation.
+             */
+            stay_id?: number;
+            /**
+             * Format: int64
+             * @deprecated
+             * @description Deprecated compatibility identity resolved through occupancy_stay_migration_map.
+             */
+            occupancy_id?: number;
+            pin_name?: string;
+        };
+        MessageStaysResponse: {
+            stays: components["schemas"]["MessageStay"][];
+        };
+        MessageStay: {
+            /**
+             * Format: int64
+             * @description Named stay ID.
+             */
+            id: number;
+            display_name: string;
+            /** @enum {string} */
+            stay_type: "booking_com" | "external";
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+            nuki_status: string;
+        };
+        RenderedMessage: {
+            language_code: string;
+            title: string;
+            body: string;
+            nuki_available: boolean;
+        };
+        GenerateMessagesResponse: {
+            /** Format: int64 */
+            stay_id: number;
+            /**
+             * Format: int64
+             * @deprecated
+             */
+            occupancy_id?: number;
+            messages: components["schemas"]["RenderedMessage"][];
+            nuki_available: boolean;
+            placeholders?: {
+                [key: string]: unknown;
+            };
+        };
+        DashboardSummaryResponse: {
+            /** Format: int64 */
+            property_id: number;
+            widgets: components["schemas"]["DashboardWidgets"];
+        };
+        DashboardWidgets: {
+            sync_status?: {
+                occupancy?: string;
+                nuki?: string;
+            };
+            upcoming_stays?: components["schemas"]["DashboardUpcomingStay"][];
+            active_nuki_codes?: {
+                [key: string]: unknown;
+            }[];
+            cleaning_month?: {
+                counted_days?: number;
+                salary_draft?: number;
+            };
+            finance_month?: {
+                incoming?: number;
+                outgoing?: number;
+                net?: number;
+            };
+            recent_invoices?: {
+                [key: string]: unknown;
+            }[];
+        };
+        DashboardUpcomingStay: {
+            /** Format: int64 */
+            stay_id: number;
+            /**
+             * Format: int64
+             * @deprecated
+             */
+            occupancy_id?: number;
+            summary: string;
+            /** Format: date */
+            start_at: string;
+            /** Format: date */
+            end_at: string;
+            status: string;
         };
         LoginRequest: {
             /** Format: email */
@@ -610,6 +2039,159 @@ export interface components {
             address?: string | null;
             timezone?: string | null;
         };
+        OccupancyCalendar: {
+            /** Format: int64 */
+            property_id: number;
+            month: string;
+            raw_blocks: components["schemas"]["RawBookingBlock"][];
+            named_stays: components["schemas"]["NamedStay"][];
+            availability_blocks: components["schemas"]["AvailabilityBlock"][];
+        };
+        RawBookingBlock: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            property_id: number;
+            /** @enum {string} */
+            source_type: "booking_ics";
+            source_event_uid: string;
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+            /** @enum {string} */
+            status: "active" | "deleted_from_source" | "conflict";
+            raw_summary?: string;
+            source_dtstamp?: string;
+            /** Format: int64 */
+            last_sync_run_id?: number;
+            conflict_reason?: string;
+            covered_nights: string[];
+            /** Format: int64 */
+            legacy_occupancy_id?: number;
+            cleaning_events: components["schemas"]["CalendarCleaningEvent"][];
+        };
+        NamedStay: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            property_id: number;
+            display_name: string;
+            /** @enum {string} */
+            stay_type: "booking_com" | "external" | "maintenance" | "personal_use";
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+            /** @enum {string} */
+            status: "active" | "cancelled" | "archived";
+            cleaning_required: boolean;
+            /** @enum {string} */
+            review_status: "confirmed" | "needs_review";
+            /** @enum {string} */
+            nuki_generation_status: "not_applicable" | "pending" | "generated" | "error";
+            nuki_generation_error?: string;
+            covered_nights: string[];
+            /** Format: int64 */
+            legacy_occupancy_id?: number;
+            source_links: components["schemas"]["StaySourceLink"][];
+            cleaning_events: components["schemas"]["CalendarCleaningEvent"][];
+        };
+        CalendarCleaningEvent: {
+            /** Format: int64 */
+            id: number;
+            /** Format: date */
+            checkout_date: string;
+            /** @enum {string} */
+            cleaning_kind: "provisional_block" | "named_stay";
+            title: string;
+            /** @enum {string} */
+            status: "pending" | "synced" | "error" | "removed";
+            google_event_id?: string;
+            error_message?: string;
+            warning_message?: string;
+        };
+        StaySourceLink: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            raw_booking_block_id?: number;
+            source_type: string;
+            source_event_uid?: string;
+            /** Format: date */
+            linked_check_in_date: string;
+            /** Format: date */
+            linked_check_out_date: string;
+            /** @enum {string} */
+            link_status: "active" | "source_deleted" | "conflict" | "manual_unlinked";
+            conflict_reason?: string;
+        };
+        AvailabilityBlock: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            property_id: number;
+            /** @enum {string} */
+            block_type: "closed" | "off_market";
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+            reason?: string;
+            /** @enum {string} */
+            status: "active" | "archived";
+            covered_nights: string[];
+        };
+        NamedStayCreateRequest: {
+            display_name: string;
+            /**
+             * @deprecated
+             * @description Legacy alias accepted during the compatibility window.
+             */
+            guest_display_name?: string;
+            /** Format: date */
+            check_in: string;
+            /** Format: date */
+            check_out: string;
+            /** @enum {string} */
+            stay_type: "booking_com" | "external" | "maintenance" | "personal_use";
+            cleaning_required?: boolean;
+        };
+        AvailabilityBlockRequest: {
+            /** @enum {string} */
+            block_type: "closed" | "off_market";
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+            reason?: string;
+        };
+        AvailabilityBlockMutationResponse: {
+            ok: boolean;
+            availability_block: components["schemas"]["AvailabilityBlock"];
+        };
+        NamedStayPatchRequest: {
+            display_name?: string;
+            /** @deprecated */
+            guest_display_name?: string;
+            /** Format: date */
+            check_in?: string;
+            /** Format: date */
+            check_out?: string;
+            /** @enum {string} */
+            stay_type?: "booking_com" | "external" | "maintenance" | "personal_use";
+            cleaning_required?: boolean;
+        };
+        NamedStayMutationResponse: {
+            ok: boolean;
+            /** Format: int64 */
+            named_stay_id: number;
+            /** Format: int64 */
+            legacy_occupancy_id?: number;
+            /** @enum {string} */
+            nuki_generation_status: "not_applicable" | "pending" | "generated" | "error";
+            nuki_generation_error?: string;
+        };
     };
     responses: {
         /** @description Invalid request payload. */
@@ -648,6 +2230,15 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description Request conflicts with current calendar state. */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description Too many requests. */
         RateLimited: {
             headers: {
@@ -660,6 +2251,8 @@ export interface components {
     };
     parameters: {
         IdPath: number;
+        StayIdPath: number;
+        MonthQuery: string;
     };
     requestBodies: never;
     headers: never;

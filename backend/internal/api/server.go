@@ -52,6 +52,9 @@ type Server struct {
 	// access-log client-IP key. Only enable when the deployment is fronted
 	// by a reverse proxy you control (Caddy/nginx).
 	TrustedProxy bool
+	// OccupancyExportDisabled disables the legacy public JSON export surface.
+	// Google Calendar cleaning sync is the supported external calendar path.
+	OccupancyExportDisabled bool
 }
 
 func (s *Server) cookieSameSite() http.SameSite {
@@ -140,32 +143,42 @@ func (s *Server) Routes() chi.Router {
 				r.Patch("/properties/{id}/settings", s.patchPropertySettings)
 				r.Get("/dashboard/summary", s.getDashboardSummary)
 				r.Get("/properties/{id}/dashboard", s.getDashboardSummary)
-				r.Get("/properties/{id}/occupancies", s.getOccupancies)
-				r.Get("/properties/{id}/occupancies/calendar", s.getOccupanciesCalendar)
+				r.Get("/properties/{id}/occupancies", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; use /api/properties/{id}/occupancy-calendar or /api/properties/{id}/stays.", s.getOccupancies))
+				r.Get("/properties/{id}/occupancies/calendar", s.deprecatedHandler("Deprecated occupancy calendar endpoint; use /api/properties/{id}/occupancy-calendar.", s.getOccupanciesCalendar))
+				r.Get("/properties/{id}/occupancy-calendar", s.getOccupancyCalendarV2)
+				r.Get("/properties/{id}/booking-blocks", s.getBookingBlocks)
+				r.Get("/properties/{id}/stays", s.getStays)
+				r.Get("/properties/{id}/availability-blocks", s.getAvailabilityBlocks)
+				r.Post("/properties/{id}/availability-blocks", s.postAvailabilityBlock)
+				r.Patch("/properties/{id}/availability-blocks/{blockId}", s.patchAvailabilityBlock)
 				r.Post("/properties/{id}/occupancy-sync/run", s.postOccupancySyncRun)
 				r.Get("/properties/{id}/occupancy-sync/runs", s.listOccupancySyncRuns)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/close", s.postOccupancyClose)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/external-sale", s.postOccupancyExternalSale)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/split-nights", s.postOccupancySplitNights)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/reopen", s.postOccupancyReopen)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/cancelled-non-refundable", s.postOccupancyOutcomeCancelledNonRefundable)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/no-show", s.postOccupancyOutcomeNoShow)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/clear", s.postOccupancyOutcomeClear)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/cleaning-calendar/exclude", s.postOccupancyCleaningCalendarExclude)
-				r.Post("/properties/{id}/occupancies/{occupancyId}/cleaning-calendar/include", s.postOccupancyCleaningCalendarInclude)
-				r.Post("/properties/{id}/occupancy-blocks/{upstreamUid}/named-stays", s.postNamedStay)
-				r.Patch("/properties/{id}/occupancies/{occupancyId}/named-stay", s.patchNamedStay)
-				r.Delete("/properties/{id}/occupancies/{occupancyId}/named-stay", s.deleteNamedStay)
+				r.Post("/properties/{id}/occupancies/{occupancyId}/close", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; create maintenance/personal-use stays or availability blocks through PMS 21 APIs.", s.postOccupancyClose))
+				r.Post("/properties/{id}/occupancies/{occupancyId}/external-sale", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; create external named stays through /api/properties/{id}/stays.", s.postOccupancyExternalSale))
+				r.Post("/properties/{id}/occupancies/{occupancyId}/split-nights", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; use named-stay range edits through /api/properties/{id}/stays/{stayId}.", s.postOccupancySplitNights))
+				r.Post("/properties/{id}/occupancies/{occupancyId}/reopen", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; use named-stay status APIs or availability-block status APIs.", s.postOccupancyReopen))
+				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/cancelled-non-refundable", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; stay outcomes now belong to named stays.", s.postOccupancyOutcomeCancelledNonRefundable))
+				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/no-show", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; stay outcomes now belong to named stays.", s.postOccupancyOutcomeNoShow))
+				r.Post("/properties/{id}/occupancies/{occupancyId}/outcome/clear", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; stay outcomes now belong to named stays.", s.postOccupancyOutcomeClear))
+				r.Post("/properties/{id}/occupancies/{occupancyId}/cleaning-calendar/exclude", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; use named-stay cleaning controls.", s.postOccupancyCleaningCalendarExclude))
+				r.Post("/properties/{id}/occupancies/{occupancyId}/cleaning-calendar/include", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; use named-stay cleaning controls.", s.postOccupancyCleaningCalendarInclude))
+				r.Post("/properties/{id}/occupancy-blocks/{upstreamUid}/named-stays", s.deprecatedHandler("Deprecated raw-block promotion endpoint; use /api/properties/{id}/booking-blocks/{blockId}/promote.", s.postNamedStay))
+				r.Patch("/properties/{id}/occupancies/{occupancyId}/named-stay", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; use /api/properties/{id}/stays/{stayId}.", s.patchNamedStay))
+				r.Delete("/properties/{id}/occupancies/{occupancyId}/named-stay", s.deprecatedHandler("Deprecated occupancy-as-stay endpoint; use /api/properties/{id}/stays/{stayId}/status.", s.deleteNamedStay))
+				r.Post("/properties/{id}/booking-blocks/{blockId}/promote", s.postBookingBlockPromote)
+				r.Post("/properties/{id}/stays", s.postStay)
+				r.Patch("/properties/{id}/stays/{stayId}", s.patchStay)
+				r.Patch("/properties/{id}/stays/{stayId}/status", s.patchStayStatus)
 				r.Post("/properties/{id}/occupancy-repair/ics-reconciliation/dry-run", s.postOccupancyRepairDryRun)
 				r.Post("/properties/{id}/occupancy-repair/ics-reconciliation/apply", s.postOccupancyRepairApply)
 				r.Get("/properties/{id}/occupancy-source", s.getOccupancySource)
 				r.Patch("/properties/{id}/occupancy-source", s.patchOccupancySource)
-				r.Post("/properties/{id}/occupancy-api-tokens", s.postOccupancyAPIToken)
-				r.Get("/properties/{id}/occupancy-api-tokens", s.listOccupancyAPITokens)
-				r.Delete("/properties/{id}/occupancy-api-tokens/{tokenId}", s.deleteOccupancyAPIToken)
+				r.Post("/properties/{id}/occupancy-api-tokens", s.deprecatedHandler("Deprecated public occupancy export token endpoint; use native Google Calendar cleaning sync instead.", s.postOccupancyAPIToken))
+				r.Get("/properties/{id}/occupancy-api-tokens", s.deprecatedHandler("Deprecated public occupancy export token endpoint; use native Google Calendar cleaning sync instead.", s.listOccupancyAPITokens))
+				r.Delete("/properties/{id}/occupancy-api-tokens/{tokenId}", s.deprecatedHandler("Deprecated public occupancy export token endpoint; use native Google Calendar cleaning sync instead.", s.deleteOccupancyAPIToken))
 				r.Get("/properties/{id}/nuki/codes", s.listNukiCodes)
 				r.Get("/properties/{id}/nuki/upcoming-stays", s.listNukiUpcomingStays)
-				r.Patch("/properties/{id}/nuki/upcoming-stays/{occupancyId}", s.saveNukiStayName)
+				r.Patch("/properties/{id}/nuki/upcoming-stays/{stayId}", s.saveNukiStayName)
 				r.Patch("/properties/{id}/nuki/keypad-codes/{externalId}", s.patchNukiKeypadCode)
 				r.Delete("/properties/{id}/nuki/keypad-codes/{externalId}", s.deleteNukiKeypadCode)
 				r.Post("/properties/{id}/nuki/codes/generate", s.generateNukiCodes)
@@ -193,6 +206,7 @@ func (s *Server) Routes() chi.Router {
 				r.Get("/properties/{id}/finance/transactions", s.listFinanceTransactions)
 				r.Post("/properties/{id}/finance/transactions", s.postFinanceTransaction)
 				r.Get("/properties/{id}/finance/booking-payouts", s.listFinanceBookingPayouts)
+				r.Get("/properties/{id}/finance/stay-candidates", s.listFinanceStayCandidates)
 				r.Post("/properties/{id}/finance/imports/preview", s.postFinanceImportPreview)
 				r.Post("/properties/{id}/finance/imports/commit", s.postFinanceImportCommit)
 				r.Get("/properties/{id}/finance/imports", s.listFinanceImports)
@@ -226,6 +240,7 @@ func (s *Server) Routes() chi.Router {
 				r.Post("/properties/{id}/message-templates", s.postMessageTemplate)
 				r.Patch("/properties/{id}/message-templates/{templateId}", s.patchMessageTemplate)
 				r.Delete("/properties/{id}/message-templates/{templateId}", s.deleteMessageTemplate)
+				r.Get("/properties/{id}/messages/stays", s.listMessageStays)
 				r.Get("/properties/{id}/messages/generate", s.generateMessage)
 				r.Get("/properties/{id}/messages/cleaning", s.generateCleaningMessage)
 				r.Get("/properties/{id}/analytics/freshness", s.getAnalyticsFreshness)
@@ -935,20 +950,20 @@ func (s *Server) getDashboardSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if occCan {
-		rows, err := s.Store.ListUpcomingOccupancies(r.Context(), pid, 5)
+		loc := s.analyticsLocation(r, pid)
+		now := time.Now().In(loc)
+		from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).Format("2006-01-02")
+		rows, err := s.Store.ListMessageStayOptions(r.Context(), pid, from, 5)
 		if err == nil {
 			out := make([]dashboardUpcomingStayRow, 0, len(rows))
 			for _, row := range rows {
-				summary := nullStringPtr(row.GuestDisplayName)
-				if summary == nil {
-					summary = nullStringPtr(row.RawSummary)
-				}
+				summary := &row.DisplayName
 				out = append(out, dashboardUpcomingStayRow{
-					OccupancyID: row.ID,
-					Summary:     summary,
-					StartAt:     row.StartAt.UTC().Format(time.RFC3339),
-					EndAt:       row.EndAt.UTC().Format(time.RFC3339),
-					Status:      row.Status,
+					StayID:  row.ID,
+					Summary: summary,
+					StartAt: row.CheckInDate,
+					EndAt:   row.CheckOutDate,
+					Status:  "active",
 				})
 			}
 			widgets.UpcomingStays = &out

@@ -1,7 +1,5 @@
 // Message templates / generated guest messages API types.
 
-import type { OccupancySummary } from './occupancy'
-
 export interface MessageTemplate {
   id: number
   property_id: number
@@ -29,10 +27,17 @@ export interface RenderedMessage {
 }
 
 export interface GenerateMessagesResponse {
-  occupancy_id: number
+  stay_id: number
+  occupancy_id?: number
   messages: RenderedMessage[]
   nuki_available: boolean
 }
 
-/** Re-exported for MessagesView so it has a single import site. */
-export type MessagesOccupancy = OccupancySummary
+export interface MessagesStay {
+  id: number
+  display_name: string
+  stay_type: 'booking_com' | 'external' | 'maintenance' | 'personal_use'
+  check_in_date: string
+  check_out_date: string
+  nuki_status: string
+}

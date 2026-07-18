@@ -97,11 +97,12 @@ func setupPropertyForNuki(t *testing.T, st *store.Store) int64 {
 
 func upsertOcc(t *testing.T, st *store.Store, pid int64, uid, status string, start, end time.Time) {
 	t.Helper()
-	runID, err := st.StartOccupancySyncRun(context.Background(), pid, "test")
+	ctx := context.Background()
+	runID, err := st.StartOccupancySyncRun(ctx, pid, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = st.UpsertOccupancy(context.Background(), &store.Occupancy{
+	err = st.UpsertOccupancy(ctx, &store.Occupancy{
 		PropertyID:       pid,
 		SourceType:       "ics_booking",
 		SourceEventUID:   uid,
@@ -112,6 +113,50 @@ func upsertOcc(t *testing.T, st *store.Store, pid int64, uid, status string, sta
 		GuestDisplayName: sql.NullString{String: "Guest " + uid, Valid: true},
 	}, runID)
 	if err != nil {
+		t.Fatal(err)
+	}
+	occ, err := st.GetOccupancyBySourceEventUID(ctx, pid, uid)
+	if err != nil || occ == nil {
+		t.Fatalf("get occupancy %s: %v", uid, err)
+	}
+	stayStatus := store.NamedStayStatusActive
+	if status == "cancelled" {
+		stayStatus = store.NamedStayStatusCancelled
+	} else if status == "deleted_from_source" {
+		stayStatus = store.NamedStayStatusArchived
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	checkIn := start.UTC().Format("2006-01-02")
+	checkOut := end.UTC().Format("2006-01-02")
+	var stayID int64
+	err = st.DB.QueryRowContext(ctx, `SELECT id FROM named_stays WHERE property_id = ? AND source_reference = ? LIMIT 1`, pid, uid).Scan(&stayID)
+	if err == sql.ErrNoRows {
+		res, insertErr := st.DB.ExecContext(ctx, `
+			INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
+			VALUES (?, ?, 'booking_com', ?, ?, ?, 1, 'booking_ics', ?, 'confirmed', 'pending', ?, ?)`,
+			pid, "Guest "+uid, checkIn, checkOut, stayStatus, uid, now, now)
+		if insertErr != nil {
+			t.Fatal(insertErr)
+		}
+		stayID, err = res.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if err == nil {
+		if _, err := st.DB.ExecContext(ctx, `
+			UPDATE named_stays
+			SET check_in_date = ?, check_out_date = ?, status = ?, updated_at = ?
+			WHERE property_id = ? AND id = ?`, checkIn, checkOut, stayStatus, now, pid, stayID); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
+		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)
+		ON CONFLICT(old_occupancy_id) DO UPDATE SET named_stay_id = excluded.named_stay_id, migration_kind = excluded.migration_kind`,
+		occ.ID, pid, stayID, now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -730,11 +775,20 @@ func TestReconcileGuestDailyEntries_PartitionsCleanerVsGuest(t *testing.T) {
 	if err != nil || occB == nil {
 		t.Fatalf("occB: %v", err)
 	}
+	stayA, err := st.ResolveNamedStayIDForOccupancy(ctx, pid, occA.ID)
+	if err != nil {
+		t.Fatalf("stayA: %v", err)
+	}
+	stayB, err := st.ResolveNamedStayIDForOccupancy(ctx, pid, occB.ID)
+	if err != nil {
+		t.Fatalf("stayB: %v", err)
+	}
 
 	// Guest access codes mapping authID -> occupancy.
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:     pid,
 		OccupancyID:    occA.ID,
+		NamedStayID:    sql.NullInt64{Int64: stayA, Valid: true},
 		CodeLabel:      "uid-A",
 		ExternalNukiID: sql.NullString{String: "guest-A", Valid: true},
 		ValidFrom:      today.Add(-72 * time.Hour),
@@ -746,6 +800,7 @@ func TestReconcileGuestDailyEntries_PartitionsCleanerVsGuest(t *testing.T) {
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:     pid,
 		OccupancyID:    occB.ID,
+		NamedStayID:    sql.NullInt64{Int64: stayB, Valid: true},
 		CodeLabel:      "uid-B",
 		ExternalNukiID: sql.NullString{String: "guest-B", Valid: true},
 		ValidFrom:      today.Add(-72 * time.Hour),

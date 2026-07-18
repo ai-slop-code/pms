@@ -18,9 +18,14 @@ export interface BookingPayoutRow {
   payout_date: string
   transaction_id?: number
   occupancy_id?: number
+  named_stay_id?: number
   occupancy_start_at?: string
   occupancy_end_at?: string
   occupancy_summary?: string
+  named_stay_display_name?: string
+  named_stay_type?: 'booking_com' | 'external' | 'maintenance' | 'personal_use'
+  named_stay_check_in_date?: string
+  named_stay_check_out_date?: string
   outcome_override?: 'cancelled_non_refundable' | 'no_show' | null
   outcome_override_marked_at?: string | null
   linked_invoice_id?: number | null
@@ -32,11 +37,16 @@ export interface BookingPayoutRow {
  * Occupancy candidate shown in the BookingPayoutsView "link stay" picker.
  * Different shape from {@link ./invoice.InvoiceOccupancyOption}.
  */
-export interface BookingPayoutOccupancyOption {
+export interface BookingPayoutStayOption {
   id: number
-  source_event_uid: string
-  start_at: string
-  end_at: string
-  raw_summary: string
+  display_name: string
+  stay_type: 'booking_com' | 'external' | 'maintenance' | 'personal_use'
+  check_in_date: string
+  check_out_date: string
   status: string
+  review_status?: string
+  manual_revenue_cents?: number
+  has_finance_data: boolean
 }
+
+export type BookingPayoutOccupancyOption = BookingPayoutStayOption

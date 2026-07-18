@@ -167,6 +167,89 @@ func TestSumPayoutGrossNetForStays_MatchesByCheckInDate(t *testing.T) {
 	}
 }
 
+func insertNamedStayForAnalytics(t *testing.T, st *Store, pid int64, name, stayType, checkIn, checkOut string, manualRevenue *int64, review string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if review == "" {
+		review = "confirmed"
+	}
+	var revenue interface{}
+	var currency interface{}
+	if manualRevenue != nil {
+		revenue = *manualRevenue
+		currency = "EUR"
+	}
+	res, err := st.DB.ExecContext(ctx, `
+		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, manual_revenue_cents, manual_revenue_currency, review_status, nuki_generation_status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'active', 1, ?, ?, ?, 'not_applicable', ?, ?)`, pid, name, stayType, checkIn, checkOut, revenue, currency, review, now, now)
+	if err != nil {
+		t.Fatalf("insert named stay: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	start, _ := time.Parse("2006-01-02", checkIn)
+	end, _ := time.Parse("2006-01-02", checkOut)
+	for d := start; d.Before(end); d = d.AddDate(0, 0, 1) {
+		if _, err := st.DB.ExecContext(ctx, `INSERT INTO named_stay_nights (property_id, named_stay_id, local_night_date, active, created_at) VALUES (?, ?, ?, 1, ?)`, pid, id, d.Format("2006-01-02"), now); err != nil {
+			t.Fatalf("insert named night: %v", err)
+		}
+	}
+	return id
+}
+
+func TestAnalyticsStage9_NamedStaySemanticsExcludeRawAndUnfundedExternal(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := seedAnalyticsProperty(t, st)
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	_, err := st.DB.ExecContext(ctx, `
+		INSERT INTO raw_booking_blocks (property_id, source_type, source_event_uid, check_in_date, check_out_date, status, content_hash, imported_at, last_synced_at, created_at, updated_at)
+		VALUES (?, 'booking_ics', 'raw-stage9', '2026-07-01', '2026-07-04', 'active', 'raw', ?, ?, ?, ?)`, pid, now, now, now, now)
+	if err != nil {
+		t.Fatalf("insert raw block: %v", err)
+	}
+	insertNamedStayForAnalytics(t, st, pid, "Booking Guest", "booking_com", "2026-07-05", "2026-07-07", nil, "confirmed")
+	insertNamedStayForAnalytics(t, st, pid, "No Revenue External", "external", "2026-07-08", "2026-07-10", nil, "confirmed")
+	manual := int64(18000)
+	manualID := insertNamedStayForAnalytics(t, st, pid, "Manual External", "external", "2026-07-11", "2026-07-13", &manual, "confirmed")
+	insertNamedStayForAnalytics(t, st, pid, "Maintenance", "maintenance", "2026-07-14", "2026-07-15", nil, "confirmed")
+	insertNamedStayForAnalytics(t, st, pid, "Review Booking", "booking_com", "2026-07-16", "2026-07-17", nil, "needs_review")
+
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)
+	stays, err := st.ListActiveOccupanciesInDateRange(ctx, pid, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := NightsSoldInRange(stays, from, to); got != 4 {
+		t.Fatalf("sold nights=%d want 4", got)
+	}
+	ids := map[int64]bool{}
+	for _, stay := range stays {
+		ids[stay.ID] = true
+	}
+	if !ids[manualID] {
+		t.Fatalf("manual-revenue external stay missing from sold set: %+v", stays)
+	}
+
+	blockers, err := st.ListClosedOccupanciesInDateRange(ctx, pid, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ClosedNightsInRange(blockers, from, to); got != 4 {
+		t.Fatalf("availability blockers=%d want 4", got)
+	}
+
+	gross, net, _, _, matched, err := st.SumPayoutGrossNetForStays(ctx, pid, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gross != manual || net != manual || len(matched) != 1 || matched[0] != manualID {
+		t.Fatalf("manual revenue gross=%d net=%d matched=%v", gross, net, matched)
+	}
+}
+
 func TestTrailingADR_ReturnsZeroBelowMinimumMatchedNights(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := seedAnalyticsProperty(t, st)
