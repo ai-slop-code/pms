@@ -2,6 +2,36 @@
 
 Status: active readiness companion to `spec/PMS_21_Raw_Booking_Blocks_Named_Stays_Migration_Plan.md`. Local Stage 0 through Stage 11 implementation artifacts exist where referenced by the main plan, but production audit, Stage 2 apply/backfill, production gate enablement, and destructive cleanup remain blocked. This document must not be read as production approval.
 
+## Latest Agent Handoff
+
+Pass date: 2026-07-18.
+
+Committed snapshot: `3605fcf feat(occupancy): implement PMS 21 remediation`.
+
+What changed in that pass:
+
+- Added frontend PMS 21 cleaning defaults for create/promote flows: `booking_com` and `external` default cleaning on; `maintenance` and `personal_use` default cleaning off.
+- Added calendar day-detail lifecycle controls for named stays: edit display name, date range, stay type, cleaning required, cancel, archive, and reactivate through PMS 21 `/stays/{stayId}` endpoints.
+- Displayed Nuki error details and raw-source warning details already present in calendar DTOs.
+- Updated readiness and main plan docs to reflect the owner decision to use deployment/version rollback instead of adding the wider runtime gate set.
+- Added `docs/pms-21-operations-cutover-runbook.md` with production preconditions, dry-run/audit steps, apply stop point, deployment, verification, rollback, monitoring, and cleanup eligibility.
+- Updated `frontend/src/api/types/README.md` to define generated OpenAPI types as API contract types and hand-authored types as UI/domain adapters or compatibility shims.
+- Committed all previously dirty PMS 21 code, docs, specs, migrations, generated types, and frontend/backend changes in the snapshot above so the worktree was clean after commit.
+
+Verification run in that pass:
+
+- `git diff --check`
+- `npm run test -- OccupancyView.spec.ts` from `frontend/`
+- `npm run type-check` from `frontend/`
+
+Important remaining blockers for the next agent:
+
+- Stage 2 apply/backfill is still not implemented; the CLI remains dry-run only.
+- No production audit artifact exists; do not fabricate `docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md`.
+- Nuki named-stay-primary storage still needs a preservation-proven schema/store pass before `PMS21_OCCUPANCY_LEGACY_WRITE_DISABLED=1` is safe.
+- Source-link recomputation and multi-raw-block union coverage remain required workstreams.
+- Full OpenAPI route-table coverage and analytics strict `named_stay_nights` review remain separate workstreams.
+
 ## Stage 0 Decisions
 
 - Source of truth: [ADR-002](adr/ADR-002-raw-booking-blocks-and-named-stays.md).
@@ -35,6 +65,7 @@ Dry-run command template:
 
 ```bash
 cd backend
+go run ./cmd/pms21-migration --db /absolute/path/to/production-or-backup.db --dry-run --sample-limit 25 > ../docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md
 ```
 
 Stage 2 apply command state: apply mode is not implemented in the current CLI. Stop before production apply until the command exists with explicit apply and confirmation flags, idempotency tests pass, and the output artifact format includes created, updated, skipped, conflict, and review-required counts.

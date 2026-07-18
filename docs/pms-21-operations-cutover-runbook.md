@@ -28,6 +28,7 @@ Run the read-only PMS 21 dry-run/audit command against a production backup or pr
 
 ```bash
 cd backend
+go run ./cmd/pms21-migration --db /absolute/path/to/production-or-backup.db --dry-run --sample-limit 25 > ../docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md
 ```
 
 Review the saved artifact for:
@@ -48,6 +49,7 @@ Required future command shape before use:
 
 ```bash
 cd backend
+go run ./cmd/pms21-migration --db /absolute/path/to/production.db --apply --confirm-apply --sample-limit 25 > ../docs/audits/PMS_21_production_apply_YYYY-MM-DD.md
 ```
 
 Required future apply checks:
