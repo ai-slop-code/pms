@@ -228,12 +228,12 @@ function revealStayPin(stay: UpcomingStay) {
   if (!stay.generated_code_id) return
   revealPin(stay.generated_code_id, {
     stayName: stay.summary || pinNames.value[stay.stay_id] || stay.source_event_uid,
-    label: stay.generated_label,
+    label: stay.generated_label ?? undefined,
   }).catch(() => {})
 }
 
 function revealCode(code: KeypadCode) {
-  revealPin(code.id, { stayName: code.name, label: code.name || code.external_nuki_id }).catch(() => {})
+  revealPin(code.id, { stayName: code.name ?? undefined, label: code.name || code.external_nuki_id }).catch(() => {})
 }
 
 async function generateForStay(stayId: number) {
@@ -259,7 +259,7 @@ async function generateForStay(stayId: number) {
       if (row && row.generated_code_id) {
         await revealPin(row.generated_code_id, {
           stayName: row.summary || pinNames.value[row.stay_id] || row.source_event_uid,
-          label: row.generated_label,
+          label: row.generated_label ?? undefined,
         })
       }
       success.value = 'Guest PIN generated.'

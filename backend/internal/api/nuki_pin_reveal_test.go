@@ -74,7 +74,7 @@ func setupNukiPinFixture(t *testing.T) (*store.Store, *httptest.Server, int64, i
 	}
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:        prop.ID,
-		OccupancyID:       occ.ID,
+		OccupancyID:       sql.NullInt64{Int64: occ.ID, Valid: true},
 		NamedStayID:       sql.NullInt64{Int64: stayID, Valid: true},
 		CodeLabel:         "booking-pin-reveal",
 		AccessCodeMasked:  sql.NullString{String: "98**", Valid: true},

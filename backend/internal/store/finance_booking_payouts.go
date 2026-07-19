@@ -431,10 +431,10 @@ func (s *Store) FindOccupancyForStayDates(ctx context.Context, propertyID int64,
 	return nil, nil
 }
 
-// FindOrCreateOccupancyForPayoutStayDates returns a matching legacy occupancy by stay dates.
-// Until the Stage 11 cleanup gate is enabled, it can also create a synthetic
-// historical occupancy from payout data when none exists.
-func (s *Store) FindOrCreateOccupancyForPayoutStayDates(
+// legacyFindOrCreateOccupancyForPayoutStayDates exists only for rollback tests
+// of the pre-PMS 21 compatibility path. Production import/rematch code must use
+// FindNamedStayForFinanceStayDates and must never call this synthetic writer.
+func (s *Store) legacyFindOrCreateOccupancyForPayoutStayDates(
 	ctx context.Context,
 	propertyID int64,
 	referenceNumber, checkInDate, checkOutDate, guestName string,
@@ -443,7 +443,9 @@ func (s *Store) FindOrCreateOccupancyForPayoutStayDates(
 	return s.findOrCreateOccupancyForFinanceStayDates(ctx, propertyID, "booking_payout", referenceNumber, checkInDate, checkOutDate, guestName, loc)
 }
 
-func (s *Store) FindOrCreateOccupancyForStatementStayDates(
+// legacyFindOrCreateOccupancyForStatementStayDates is the statement equivalent
+// of the rollback-only payout helper above.
+func (s *Store) legacyFindOrCreateOccupancyForStatementStayDates(
 	ctx context.Context,
 	propertyID int64,
 	referenceNumber, checkInDate, checkOutDate, guestName string,

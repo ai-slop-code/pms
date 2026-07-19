@@ -241,6 +241,9 @@ func (s *Server) patchStay(w http.ResponseWriter, r *http.Request) {
 		writeNamedStayError(w, err)
 		return
 	}
+	if namedStayNukiFieldsChanged(before, stay) {
+		stay = s.reconcileNamedStayNuki(r, propID, stay, "named_stay_update")
+	}
 	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_update", stayRangeFromNamedStay(before), stayRange{stay.CheckInDate, stay.CheckOutDate})
 	s.audit(r, actor, "named_stay_updated", "named_stay", strconv.FormatInt(stayID, 10), "success")
 	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
@@ -268,6 +271,7 @@ func (s *Server) patchStayStatus(w http.ResponseWriter, r *http.Request) {
 		writeNamedStayError(w, err)
 		return
 	}
+	stay = s.reconcileNamedStayNuki(r, propID, stay, "named_stay_status")
 	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_status", stayRangeFromNamedStay(before), stayRange{stay.CheckInDate, stay.CheckOutDate})
 	s.audit(r, actor, "named_stay_status_changed", "named_stay", strconv.FormatInt(stayID, 10), "success")
 	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
@@ -387,6 +391,39 @@ func (s *Server) triggerNamedStayNukiGeneration(r *http.Request, propID int64, s
 		return s.refreshedNamedStayOrOriginal(r, propID, stay)
 	}
 	_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationGenerated, "")
+	return s.refreshedNamedStayOrOriginal(r, propID, stay)
+}
+
+func namedStayNukiFieldsChanged(before, after *store.NamedStay) bool {
+	if before == nil || after == nil {
+		return true
+	}
+	return before.DisplayName != after.DisplayName || before.StayType != after.StayType ||
+		before.CheckInDate != after.CheckInDate || before.CheckOutDate != after.CheckOutDate ||
+		before.Status != after.Status || before.ReviewStatus != after.ReviewStatus || before.StayOutcome != after.StayOutcome
+}
+
+func (s *Server) reconcileNamedStayNuki(r *http.Request, propID int64, stay *store.NamedStay, trigger string) *store.NamedStay {
+	if stay == nil {
+		return stay
+	}
+	if s.Nuki == nil {
+		_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationError, "nuki_service_unavailable")
+		return s.refreshedNamedStayOrOriginal(r, propID, stay)
+	}
+	if err := s.Nuki.ReconcileNamedStay(r.Context(), propID, stay.ID, trigger); err != nil {
+		_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationError, err.Error())
+		return s.refreshedNamedStayOrOriginal(r, propID, stay)
+	}
+	reviewStatus := "confirmed"
+	if stay.ReviewStatus.Valid && strings.TrimSpace(stay.ReviewStatus.String) != "" {
+		reviewStatus = strings.TrimSpace(stay.ReviewStatus.String)
+	}
+	status := store.NukiGenerationNotApplicable
+	if stay.Status == store.NamedStayStatusActive && store.NamedStayNukiEligible(stay.StayType, reviewStatus) && !stay.StayOutcome.Valid {
+		status = store.NukiGenerationGenerated
+	}
+	_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, status, "")
 	return s.refreshedNamedStayOrOriginal(r, propID, stay)
 }
 

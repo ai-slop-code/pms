@@ -7,7 +7,8 @@ This directory holds TypeScript types for the backend API consumed by the Vue ap
 - **Generated** (`generated.ts`) — produced from
   [`spec/openapi.yaml`](../../../../spec/openapi.yaml) by
   [`openapi-typescript`](https://openapi-ts.dev/) via
-  `npm run types:openapi`. These are the backend API contract types.
+  `npm run types:openapi`. Concrete operations are backend API contract types;
+  operations marked `x-contract-status: route-only` provide route inventory only.
 - **Hand-authored** (`analytics.ts`, `bookingPayouts.ts`, `cleaning.ts`, etc.) —
   allowed only as UI/domain adapters or compatibility shims where they add
   frontend value. They must not contradict `spec/openapi.yaml` for a touched
@@ -32,7 +33,7 @@ The file **must not** be edited by hand — commit the regenerated output.
 
 Each module will be migrated one at a time:
 
-1. Extend `spec/openapi.yaml` with the module's routes and schemas.
+1. Replace the module's route-only inventory entries with concrete routes and schemas.
 2. Run `npm run types:openapi`.
 3. Decide whether consumers should use generated types directly or keep a small
    hand-authored adapter type.

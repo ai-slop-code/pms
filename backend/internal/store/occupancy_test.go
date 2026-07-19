@@ -133,7 +133,7 @@ func TestListUpcomingStaysForNuki_UsesNamedStaysAndHidesRawBlocks(t *testing.T) 
 	}
 	if err := st.UpsertNukiCode(ctx, &NukiAccessCode{
 		PropertyID:       p.ID,
-		OccupancyID:      saved.ID,
+		OccupancyID:      sql.NullInt64{Int64: saved.ID, Valid: true},
 		NamedStayID:      sql.NullInt64{Int64: stayID, Valid: true},
 		CodeLabel:        "Booking-Alexander",
 		ExternalNukiID:   sql.NullString{String: "ext-alexander", Valid: true},
@@ -164,7 +164,7 @@ func TestListUpcomingStaysForNuki_UsesNamedStaysAndHidesRawBlocks(t *testing.T) 
 	if len(rows) != 1 {
 		t.Fatalf("rows=%d want 1", len(rows))
 	}
-	if rows[0].StayID != stayID || rows[0].OccupancyID != saved.ID || rows[0].OccupancyStatus != "active" {
+	if rows[0].StayID != stayID || !rows[0].OccupancyID.Valid || rows[0].OccupancyID.Int64 != saved.ID || rows[0].OccupancyStatus != "active" {
 		t.Fatalf("unexpected row: %+v", rows[0])
 	}
 	if !rows[0].GeneratedStatus.Valid || rows[0].GeneratedStatus.String != "generated" {

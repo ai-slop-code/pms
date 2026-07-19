@@ -665,12 +665,12 @@ func TestOpenFinanceMonth_PositiveTimezoneKeepsTargetMonth_AfterPurge(t *testing
 	}
 }
 
-func TestFindOrCreateOccupancyForPayoutStayDates_CreatesHistoricalStay(t *testing.T) {
+func TestLegacyFindOrCreateOccupancyForPayoutStayDates_CreatesHistoricalStay(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := setupFinanceProperty(t, st)
 	loc := time.FixedZone("UTC+2", 2*60*60)
 
-	occ, err := st.FindOrCreateOccupancyForPayoutStayDates(
+	occ, err := st.legacyFindOrCreateOccupancyForPayoutStayDates(
 		context.Background(),
 		pid,
 		"BP-1001",
@@ -702,11 +702,11 @@ func TestFindOrCreateOccupancyForPayoutStayDates_CreatesHistoricalStay(t *testin
 	}
 }
 
-func TestFindOrCreateOccupancyForPayoutStayDates_LegacyWriteDisabledDoesNotCreateSyntheticStay(t *testing.T) {
+func TestLegacyFindOrCreateOccupancyForPayoutStayDates_LegacyWriteDisabledDoesNotCreateSyntheticStay(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t), OccupancyLegacyWriteDisabled: true}
 	pid := setupFinanceProperty(t, st)
 
-	occ, err := st.FindOrCreateOccupancyForPayoutStayDates(
+	occ, err := st.legacyFindOrCreateOccupancyForPayoutStayDates(
 		context.Background(),
 		pid,
 		"BP-1002",
@@ -730,7 +730,7 @@ func TestFindOrCreateOccupancyForPayoutStayDates_LegacyWriteDisabledDoesNotCreat
 	}
 }
 
-func TestFindOrCreateOccupancyForPayoutStayDates_ReusesExistingStay(t *testing.T) {
+func TestLegacyFindOrCreateOccupancyForPayoutStayDates_ReusesExistingStay(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := setupFinanceProperty(t, st)
 	loc := time.UTC
@@ -758,7 +758,7 @@ func TestFindOrCreateOccupancyForPayoutStayDates_ReusesExistingStay(t *testing.T
 		t.Fatalf("expected existing occupancy err=%v", err)
 	}
 
-	occ, err := st.FindOrCreateOccupancyForPayoutStayDates(
+	occ, err := st.legacyFindOrCreateOccupancyForPayoutStayDates(
 		ctx,
 		pid,
 		"BP-2002",
@@ -785,7 +785,7 @@ func TestFindOrCreateOccupancyForPayoutStayDates_ReusesExistingStay(t *testing.T
 	}
 }
 
-func TestFindOrCreateOccupancyForStatementStayDates_CreatesStatementStayAndSupersedesGenericICS(t *testing.T) {
+func TestLegacyFindOrCreateOccupancyForStatementStayDates_CreatesStatementStayAndSupersedesGenericICS(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := setupFinanceProperty(t, st)
 	ctx := context.Background()
@@ -810,7 +810,7 @@ func TestFindOrCreateOccupancyForStatementStayDates_CreatesStatementStayAndSuper
 		}
 	}
 
-	occ, err := st.FindOrCreateOccupancyForStatementStayDates(ctx, pid, "ST-3003", "2026-08-07", "2026-08-10", "August Guest", loc)
+	occ, err := st.legacyFindOrCreateOccupancyForStatementStayDates(ctx, pid, "ST-3003", "2026-08-07", "2026-08-10", "August Guest", loc)
 	if err != nil {
 		t.Fatal(err)
 	}

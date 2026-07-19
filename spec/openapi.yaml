@@ -5,11 +5,10 @@ info:
     OpenAPI contract for the PMS backend. This spec is the source of truth for
     the public HTTP surface consumed by the Vue frontend and external clients.
 
-    Coverage is incremental: authentication, users/permissions, properties, and
-    system endpoints are fully specified here. Module-specific endpoints
-    (occupancy, cleaning, finance, invoices, messages, analytics, nuki) are
-    progressively migrated from the hand-authored TypeScript types under
-    `frontend/src/api/types/*` — see `README.md` in that folder.
+    The complete registered backend route inventory is represented here. Detailed
+    schemas are authoritative for concrete operations. Operations marked with
+    `x-contract-status: route-only` document routing only and still require
+    request and response contract refinement.
   version: 1.0.0
   contact:
     name: PMS Engineering
@@ -33,6 +32,39 @@ tags:
 
 security:
   - SessionCookie: []
+
+x-route-read: &route-read
+  summary: Registered backend read operation; response schema remains module-specific.
+  x-contract-status: route-only
+  responses:
+    default:
+      description: Response emitted by the registered backend handler.
+x-route-write: &route-write
+  summary: Registered backend write operation; request and response schemas remain module-specific.
+  x-contract-status: route-only
+  responses:
+    default:
+      description: Response emitted by the registered backend handler.
+x-route-deprecated-read: &route-deprecated-read
+  summary: Deprecated occupancy compatibility read operation.
+  deprecated: true
+  x-contract-status: route-only
+  responses:
+    default:
+      description: Legacy compatibility response.
+      headers:
+        Deprecation: { $ref: "#/components/headers/Deprecation" }
+        Warning: { $ref: "#/components/headers/Warning" }
+x-route-deprecated-write: &route-deprecated-write
+  summary: Deprecated occupancy compatibility write operation.
+  deprecated: true
+  x-contract-status: route-only
+  responses:
+    default:
+      description: Legacy compatibility response.
+      headers:
+        Deprecation: { $ref: "#/components/headers/Deprecation" }
+        Warning: { $ref: "#/components/headers/Warning" }
 
 paths:
   /healthz:
@@ -445,10 +477,11 @@ paths:
   /properties/{id}/availability-blocks:
     parameters:
       - $ref: "#/components/parameters/IdPath"
-      - $ref: "#/components/parameters/MonthQuery"
     get:
       tags: [Occupancy]
       summary: List non-stay availability blocks for a month.
+      parameters:
+        - $ref: "#/components/parameters/MonthQuery"
       responses:
         "200":
           description: Availability blocks.
@@ -545,6 +578,9 @@ paths:
       responses:
         "200":
           description: Legacy export payload when temporarily enabled for compatibility.
+          headers:
+            Deprecation: { $ref: "#/components/headers/Deprecation" }
+            Warning: { $ref: "#/components/headers/Warning" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeprecatedOccupancyExportResponse" }
@@ -565,6 +601,9 @@ paths:
       responses:
         "200":
           description: Legacy export tokens.
+          headers:
+            Deprecation: { $ref: "#/components/headers/Deprecation" }
+            Warning: { $ref: "#/components/headers/Warning" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeprecatedOccupancyTokensResponse" }
@@ -584,6 +623,9 @@ paths:
       responses:
         "201":
           description: Legacy export token created.
+          headers:
+            Deprecation: { $ref: "#/components/headers/Deprecation" }
+            Warning: { $ref: "#/components/headers/Warning" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeprecatedOccupancyTokenCreateResponse" }
@@ -601,7 +643,11 @@ paths:
       summary: Deprecated occupancy export token revocation.
       deprecated: true
       responses:
-        "204": { description: Token revoked. }
+        "204":
+          description: Token revoked.
+          headers:
+            Deprecation: { $ref: "#/components/headers/Deprecation" }
+            Warning: { $ref: "#/components/headers/Warning" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -779,6 +825,381 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/InvoiceStayCandidatesResponse" }
 
+  /health:
+    get:
+      tags: [System]
+      summary: Liveness probe alias
+      security: []
+      responses:
+        "200":
+          description: Service is alive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /auth/2fa/verify:
+    post: *route-write
+  /auth/2fa/status:
+    get: *route-read
+  /auth/2fa/enroll/start:
+    post: *route-write
+  /auth/2fa/enroll/confirm:
+    post: *route-write
+  /auth/2fa/disable:
+    post: *route-write
+
+  /properties/{id}/settings:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    patch: *route-write
+  /dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Return permission-filtered dashboard widgets using the legacy query-based route.
+      parameters:
+        - in: query
+          name: property_id
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200":
+          description: Dashboard widgets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DashboardSummaryResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/occupancies:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-deprecated-read
+  /properties/{id}/occupancies/calendar:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-deprecated-read
+  /properties/{id}/occupancy-sync/run:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/occupancy-sync/runs:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/occupancies/{occupancyId}/close:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/external-sale:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/split-nights:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/reopen:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/outcome/cancelled-non-refundable:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/outcome/no-show:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/outcome/clear:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/cleaning-calendar/exclude:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/cleaning-calendar/include:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancy-blocks/{upstreamUid}/named-stays:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/UpstreamUidPath" }]
+    post: *route-deprecated-write
+  /properties/{id}/occupancies/{occupancyId}/named-stay:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/OccupancyIdPath" }]
+    patch: *route-deprecated-write
+    delete: *route-deprecated-write
+  /properties/{id}/occupancy-repair/ics-reconciliation/dry-run:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/occupancy-repair/ics-reconciliation/apply:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/occupancy-source:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    patch: *route-write
+
+  /properties/{id}/nuki/codes:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get:
+      tags: [Nuki]
+      summary: List cached Nuki keypad codes.
+      parameters:
+        - in: query
+          name: pins_only
+          schema:
+            oneOf:
+              - { type: boolean }
+              - { type: integer, enum: [1] }
+          description: Filter to PIN-like keypad authorizations when set to `true` or `1`.
+      responses:
+        "200":
+          description: Cached keypad codes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiCodesResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /properties/{id}/nuki/keypad-codes/{externalId}:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/ExternalIdPath" }]
+    patch:
+      tags: [Nuki]
+      summary: Enable or disable a Nuki keypad code.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NukiKeypadCodePatchRequest" }
+      responses:
+        "200":
+          description: Keypad code state updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiKeypadCodePatchResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502":
+          description: Nuki provider request failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Nuki]
+      summary: Delete a PMS-linked Nuki keypad code.
+      responses:
+        "204": { description: Keypad code deleted. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502":
+          description: Nuki provider request failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /properties/{id}/nuki/codes/{codeId}/revoke:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/CodeIdPath" }]
+    post:
+      tags: [Nuki]
+      summary: Revoke a generated Nuki access code.
+      responses:
+        "204": { description: Access code revoked. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502":
+          description: Nuki provider request failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /properties/{id}/nuki/sync/run:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post:
+      tags: [Nuki]
+      summary: Run a Nuki synchronization.
+      responses:
+        "200":
+          description: "Synchronization result; provider failures are reported with `ok: false`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /properties/{id}/nuki/runs:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get:
+      tags: [Nuki]
+      summary: List Nuki synchronization runs.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+      responses:
+        "200":
+          description: Paginated synchronization runs.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiRunsResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/cleaning/logs:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/cleaning/summary:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/cleaning/heatmap:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/cleaning/fees:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    post: *route-write
+  /properties/{id}/cleaning/adjustments:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    post: *route-write
+  /properties/{id}/cleaning/reconcile/run:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/cleaning-calendar/settings:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    patch: *route-write
+  /properties/{id}/cleaning-calendar/google/calendars:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/cleaning-calendar/google/connect:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/cleaning-calendar/google/disconnect:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/cleaning-calendar/events:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get:
+      summary: List cleaning calendar events with PMS 21 ownership identities.
+      responses:
+        "200":
+          description: Cleaning calendar events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [month, events]
+                properties:
+                  month: { type: string }
+                  events: { type: array, items: { $ref: "#/components/schemas/CleaningCalendarEvent" } }
+  /properties/{id}/cleaning-calendar/runs:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/cleaning-calendar/reconcile:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/cleaning-calendar/events/{eventId}/retry:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/EventIdPath" }]
+    post: *route-write
+
+  /properties/{id}/finance/transactions:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    post: *route-write
+  /properties/{id}/finance/imports/preview:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/finance/imports/commit:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/finance/imports:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/finance/booking-payouts/rematch:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/finance/transactions/{transactionId}:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/TransactionIdPath" }]
+    patch: *route-write
+    delete: *route-write
+  /properties/{id}/finance/transactions/{transactionId}/attachment/download:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/TransactionIdPath" }]
+    get: *route-read
+  /properties/{id}/finance/reset/preview:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/finance/reset:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /properties/{id}/finance/months/{month}/open:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/MonthPath" }]
+    post: *route-write
+  /properties/{id}/finance/months/{month}/sync-generated:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/MonthPath" }]
+    post: *route-write
+  /properties/{id}/finance/summary:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/finance/categories:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    post: *route-write
+  /properties/{id}/finance/recurring-rules:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    post: *route-write
+  /properties/{id}/finance/recurring-rules/{ruleId}:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/RuleIdPath" }]
+    patch: *route-write
+    delete: *route-write
+
+  /properties/{id}/invoices/payout-link-candidates:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/invoices:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    post: *route-write
+  /properties/{id}/invoices/{invoiceId}:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/InvoiceIdPath" }]
+    get: *route-read
+    patch: *route-write
+  /properties/{id}/invoices/{invoiceId}/regenerate:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/InvoiceIdPath" }]
+    post: *route-write
+  /properties/{id}/invoices/{invoiceId}/download:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/InvoiceIdPath" }]
+    get: *route-read
+  /properties/{id}/invoice-sequence/next-preview:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+
+  /properties/{id}/message-templates:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+    post: *route-write
+  /properties/{id}/message-templates/{templateId}:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }, { $ref: "#/components/parameters/TemplateIdPath" }]
+    patch: *route-write
+    delete: *route-write
+  /properties/{id}/messages/cleaning:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+
+  /properties/{id}/analytics/freshness:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/analytics/outlook:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/analytics/performance:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/analytics/demand:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/analytics/pace:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/analytics/returning-guests:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/analytics/guest-checkin-heatmap:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get: *route-read
+  /properties/{id}/analytics/guest-checkin/reconcile/run:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post: *route-write
+  /admin/backup:
+    get: *route-read
+
 components:
   securitySchemes:
     SessionCookie:
@@ -797,6 +1218,56 @@ components:
       name: stayId
       required: true
       schema: { type: integer, format: int64, minimum: 1 }
+    OccupancyIdPath:
+      in: path
+      name: occupancyId
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    UpstreamUidPath:
+      in: path
+      name: upstreamUid
+      required: true
+      schema: { type: string, minLength: 1 }
+    ExternalIdPath:
+      in: path
+      name: externalId
+      required: true
+      schema: { type: string, minLength: 1 }
+    CodeIdPath:
+      in: path
+      name: codeId
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    EventIdPath:
+      in: path
+      name: eventId
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    TransactionIdPath:
+      in: path
+      name: transactionId
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    RuleIdPath:
+      in: path
+      name: ruleId
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    InvoiceIdPath:
+      in: path
+      name: invoiceId
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    TemplateIdPath:
+      in: path
+      name: templateId
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    MonthPath:
+      in: path
+      name: month
+      required: true
+      schema: { type: string, pattern: "^\\d{4}-\\d{2}$" }
     MonthQuery:
       in: query
       name: month
@@ -804,6 +1275,14 @@ components:
       schema:
         type: string
         pattern: "^\\d{4}-\\d{2}$"
+
+  headers:
+    Deprecation:
+      description: Indicates that the endpoint is deprecated.
+      schema: { type: string }
+    Warning:
+      description: Human-readable migration target for the deprecated endpoint.
+      schema: { type: string }
 
   responses:
     BadRequest:
@@ -840,11 +1319,10 @@ components:
   schemas:
     HealthStatus:
       type: object
-      required: [status]
+      required: [ok]
       properties:
-        status:
-          type: string
-          enum: [ok, degraded, error]
+        ok: { type: boolean }
+        reason: { type: string }
 
     Error:
       type: object
@@ -1019,7 +1497,22 @@ components:
     NukiUpcomingStay:
       type: object
       required:
-        [stay_id, occupancy_id, summary, start_at, end_at, occupancy_status]
+        - stay_id
+        - source_event_uid
+        - summary
+        - saved_pin_name
+        - stay_type
+        - start_at
+        - end_at
+        - occupancy_status
+        - generated_code_id
+        - generated_label
+        - generated_status
+        - generated_masked
+        - generated_valid_from
+        - generated_valid_until
+        - generated_error
+        - generated_updated_at
       properties:
         stay_id: { type: integer, format: int64 }
         legacy_occupancy_id: { type: integer, format: int64 }
@@ -1029,23 +1522,25 @@ components:
           deprecated: true
           description: Legacy compatibility ID retained until old Nuki callers are removed.
         source_event_uid: { type: string }
-        summary: { type: string }
-        saved_pin_name: { type: string }
+        summary: { type: string, nullable: true }
+        saved_pin_name: { type: string, nullable: true }
         stay_type: { type: string, enum: [booking_com, external] }
         start_at: { type: string, format: date-time }
         end_at: { type: string, format: date-time }
         occupancy_status:
           type: string
           description: Compatibility field containing the named stay status.
-        generated_code_id: { type: integer, format: int64 }
-        generated_label: { type: string }
+        generated_code_id: { type: integer, format: int64, nullable: true }
+        generated_label: { type: string, nullable: true }
         generated_status:
-          { type: string, enum: [not_generated, generated, revoked] }
-        generated_masked: { type: string }
-        generated_valid_from: { type: string, format: date-time }
-        generated_valid_until: { type: string, format: date-time }
-        generated_error: { type: string }
-        generated_updated_at: { type: string, format: date-time }
+          type: string
+          nullable: true
+          enum: [not_generated, generated, revoked]
+        generated_masked: { type: string, nullable: true }
+        generated_valid_from: { type: string, format: date-time, nullable: true }
+        generated_valid_until: { type: string, format: date-time, nullable: true }
+        generated_error: { type: string, nullable: true }
+        generated_updated_at: { type: string, format: date-time, nullable: true }
 
     NukiStayNamePatchRequest:
       type: object
@@ -1075,6 +1570,90 @@ components:
           deprecated: true
           description: Deprecated compatibility identity resolved through occupancy_stay_migration_map.
         pin_name: { type: string }
+
+    NukiCodesResponse:
+      type: object
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          items: { $ref: "#/components/schemas/NukiKeypadCode" }
+
+    NukiKeypadCode:
+      type: object
+      required:
+        - id
+        - external_nuki_id
+        - account_user_id
+        - name
+        - access_code_masked
+        - valid_from
+        - valid_until
+        - enabled
+        - pms_linked
+        - updated_at
+      properties:
+        id: { type: integer, format: int64 }
+        external_nuki_id: { type: string }
+        account_user_id: { type: string, nullable: true }
+        name: { type: string, nullable: true }
+        access_code_masked: { type: string, nullable: true }
+        valid_from: { type: string, format: date-time, nullable: true }
+        valid_until: { type: string, format: date-time, nullable: true }
+        enabled: { type: boolean }
+        pms_linked: { type: boolean }
+        updated_at: { type: string, format: date-time }
+
+    NukiKeypadCodePatchRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+
+    NukiKeypadCodePatchResponse:
+      type: object
+      required: [ok, enabled]
+      properties:
+        ok: { type: boolean }
+        enabled: { type: boolean }
+
+    NukiRunsResponse:
+      type: object
+      required: [runs, page, limit, has_more]
+      properties:
+        runs:
+          type: array
+          items: { $ref: "#/components/schemas/NukiRun" }
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1, maximum: 50 }
+        has_more: { type: boolean }
+
+    NukiRun:
+      type: object
+      required:
+        - id
+        - started_at
+        - finished_at
+        - status
+        - trigger
+        - error_message
+        - processed_count
+        - created_count
+        - updated_count
+        - revoked_count
+        - failed_count
+      properties:
+        id: { type: integer, format: int64 }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+        status: { type: string }
+        trigger: { type: string }
+        error_message: { type: string, nullable: true }
+        processed_count: { type: integer }
+        created_count: { type: integer }
+        updated_count: { type: integer }
+        revoked_count: { type: integer }
+        failed_count: { type: integer }
 
     MessageStaysResponse:
       type: object
@@ -1139,21 +1718,23 @@ components:
           items: { $ref: "#/components/schemas/DashboardUpcomingStay" }
         active_nuki_codes:
           type: array
-          items: { type: object, additionalProperties: true }
+          items: { $ref: "#/components/schemas/DashboardActiveNukiCode" }
         cleaning_month:
           type: object
+          required: [counted_days, salary_draft]
           properties:
             counted_days: { type: integer }
             salary_draft: { type: integer }
         finance_month:
           type: object
+          required: [incoming, outgoing, net]
           properties:
             incoming: { type: integer }
             outgoing: { type: integer }
             net: { type: integer }
         recent_invoices:
           type: array
-          items: { type: object, additionalProperties: true }
+          items: { $ref: "#/components/schemas/DashboardInvoice" }
 
     DashboardUpcomingStay:
       type: object
@@ -1164,10 +1745,50 @@ components:
           type: integer
           format: int64
           deprecated: true
-        summary: { type: string }
+        summary: { type: string, nullable: true }
         start_at: { type: string, format: date }
         end_at: { type: string, format: date }
         status: { type: string }
+
+    DashboardActiveNukiCode:
+      type: object
+      required:
+        - nuki_code_id
+        - stay_id
+        - summary
+        - code_label
+        - code_masked
+        - status
+        - valid_from
+        - valid_until
+        - last_updated_at
+        - error_message
+      properties:
+        nuki_code_id: { type: integer, format: int64 }
+        stay_id: { type: integer, format: int64 }
+        occupancy_id:
+          type: integer
+          format: int64
+          deprecated: true
+        summary: { type: string, nullable: true }
+        code_label: { type: string, nullable: true }
+        code_masked: { type: string, nullable: true }
+        status: { type: string }
+        valid_from: { type: string, format: date-time, nullable: true }
+        valid_until: { type: string, format: date-time, nullable: true }
+        last_updated_at: { type: string, format: date-time, nullable: true }
+        error_message: { type: string, nullable: true }
+
+    DashboardInvoice:
+      type: object
+      required: [invoice_id, invoice_number, customer_name, amount_total_cents, issue_date, version]
+      properties:
+        invoice_id: { type: integer, format: int64 }
+        invoice_number: { type: string }
+        customer_name: { type: string, nullable: true }
+        amount_total_cents: { type: integer }
+        issue_date: { type: string, format: date-time }
+        version: { type: integer }
 
     LoginRequest:
       type: object
@@ -1306,6 +1927,7 @@ components:
           status,
           cleaning_required,
           review_status,
+          counts_as_sold,
           nuki_generation_status,
           covered_nights,
           source_links,
@@ -1325,6 +1947,9 @@ components:
         status: { type: string, enum: [active, cancelled, archived] }
         cleaning_required: { type: boolean }
         review_status: { type: string, enum: [confirmed, needs_review] }
+        counts_as_sold:
+          type: boolean
+          description: Backend analytics sold-night eligibility for this stay.
         nuki_generation_status:
           { type: string, enum: [not_applicable, pending, generated, error] }
         nuki_generation_error: { type: string }
@@ -1418,6 +2043,33 @@ components:
           }
         cleaning_required: { type: boolean }
 
+    CleaningCalendarEvent:
+      type: object
+      required: [id, google_calendar_id, cleaning_date, starts_at, ends_at, same_day_arrival, title, status, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        occupancy_id:
+          type: integer
+          format: int64
+          nullable: true
+          deprecated: true
+        named_stay_id: { type: integer, format: int64, nullable: true }
+        raw_booking_block_id: { type: integer, format: int64, nullable: true }
+        cleaning_identity: { type: string, nullable: true }
+        google_calendar_id: { type: string }
+        google_event_id: { type: string, nullable: true }
+        cleaning_date: { type: string, format: date }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time }
+        same_day_arrival: { type: boolean }
+        next_occupancy_id: { type: integer, format: int64, nullable: true, deprecated: true }
+        title: { type: string }
+        status: { type: string, enum: [pending, synced, error, removed] }
+        warning_message: { type: string, nullable: true }
+        error_message: { type: string, nullable: true }
+        last_synced_at: { type: string, format: date-time, nullable: true }
+        updated_at: { type: string, format: date-time }
+
     AvailabilityBlockRequest:
       type: object
       required: [block_type, start_date, end_date]
@@ -1449,6 +2101,9 @@ components:
             enum: [booking_com, external, maintenance, personal_use],
           }
         cleaning_required: { type: boolean }
+        manual_revenue_cents: { type: integer, format: int64, minimum: 0, nullable: true }
+        manual_revenue_currency: { type: string, nullable: true }
+        manual_revenue_note: { type: string, nullable: true }
 
     NamedStayMutationResponse:
       type: object

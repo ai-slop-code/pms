@@ -12,7 +12,7 @@ import (
 type NukiGuestDailyEntry struct {
 	ID                 int64
 	PropertyID         int64
-	OccupancyID        int64
+	OccupancyID        sql.NullInt64
 	NamedStayID        sql.NullInt64
 	DayDate            string
 	FirstEntryAt       time.Time
@@ -34,25 +34,31 @@ func (s *Store) UpsertNukiGuestDailyEntry(ctx context.Context, row *NukiGuestDai
 	var stayID interface{}
 	if row.NamedStayID.Valid {
 		stayID = row.NamedStayID.Int64
-	} else if row.OccupancyID > 0 {
+	} else if row.OccupancyID.Valid && row.OccupancyID.Int64 > 0 {
 		var resolved int64
 		if err := s.DB.QueryRowContext(ctx, `
 			SELECT named_stay_id
 			FROM occupancy_stay_migration_map
 			WHERE property_id = ? AND old_occupancy_id = ? AND named_stay_id IS NOT NULL
-			LIMIT 1`, row.PropertyID, row.OccupancyID).Scan(&resolved); err == nil {
+			LIMIT 1`, row.PropertyID, row.OccupancyID.Int64).Scan(&resolved); err == nil {
 			stayID = resolved
 			row.NamedStayID = sql.NullInt64{Int64: resolved, Valid: true}
 		}
 	}
-	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO nuki_guest_daily_entries (property_id, occupancy_id, named_stay_id, day_date, first_entry_at, nuki_event_reference, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(property_id, occupancy_id, day_date) DO UPDATE SET
-			named_stay_id = COALESCE(excluded.named_stay_id, nuki_guest_daily_entries.named_stay_id),
-			first_entry_at = excluded.first_entry_at,
-			nuki_event_reference = excluded.nuki_event_reference`,
-		row.PropertyID, row.OccupancyID, stayID, row.DayDate, first, ref, now)
+	var occupancyID interface{}
+	if row.OccupancyID.Valid {
+		occupancyID = row.OccupancyID.Int64
+	}
+	base := `INSERT INTO nuki_guest_daily_entries (property_id, occupancy_id, named_stay_id, day_date, first_entry_at, nuki_event_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	setSQL := `first_entry_at = excluded.first_entry_at, nuki_event_reference = excluded.nuki_event_reference,
+		occupancy_id = COALESCE(excluded.occupancy_id, nuki_guest_daily_entries.occupancy_id)`
+	var query string
+	if row.NamedStayID.Valid {
+		query = base + ` ON CONFLICT(property_id, named_stay_id, day_date) WHERE named_stay_id IS NOT NULL DO UPDATE SET ` + setSQL
+	} else {
+		query = base + ` ON CONFLICT(property_id, occupancy_id, day_date) WHERE named_stay_id IS NULL AND occupancy_id IS NOT NULL DO UPDATE SET ` + setSQL
+	}
+	_, err := s.DB.ExecContext(ctx, query, row.PropertyID, occupancyID, stayID, row.DayDate, first, ref, now)
 	return err
 }
 
@@ -106,7 +112,7 @@ func (s *Store) ListNukiGuestDailyEntriesInRange(ctx context.Context, propertyID
 // that happened while the code was live to the original stay, even if the
 // operator has since revoked the PIN.
 type NukiAccessCodeIdentity struct {
-	OccupancyID int64
+	OccupancyID sql.NullInt64
 	NamedStayID sql.NullInt64
 }
 

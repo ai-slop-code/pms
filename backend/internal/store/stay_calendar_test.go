@@ -92,6 +92,9 @@ func TestOccupancyCalendarViewStage5CombinesRawNamedAndAvailability(t *testing.T
 	if calStay.DisplayName != "Stage Five Guest" || calStay.StayType != StayTypeBookingCom {
 		t.Fatalf("bad named stay: %#v", calStay)
 	}
+	if !calStay.CountsAsSold {
+		t.Fatal("confirmed Booking.com stay must count as sold")
+	}
 	if len(calStay.CoveredNights) != 2 {
 		t.Fatalf("named covered nights=%v want 2 nights", calStay.CoveredNights)
 	}
@@ -111,6 +114,54 @@ func TestOccupancyCalendarViewStage5CombinesRawNamedAndAvailability(t *testing.T
 	}
 	if len(block.CoveredNights) != 2 || block.CoveredNights[0] != "2026-07-20" || block.CoveredNights[1] != "2026-07-21" {
 		t.Fatalf("bad availability covered nights: %#v", block.CoveredNights)
+	}
+}
+
+func TestCalendarNamedStayCountsAsSoldMatchesAnalyticsRules(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	unfunded, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Unfunded External", StayType: StayTypeExternal,
+		CheckInDate: "2026-11-01", CheckOutDate: "2026-11-02",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	funded, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Funded External", StayType: StayTypeExternal,
+		CheckInDate: "2026-11-03", CheckOutDate: "2026-11-04",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revenue := int64(12000)
+	currency := "EUR"
+	if _, err := st.UpdateNamedStayRecord(ctx, pid, funded.ID, NamedStayUpdateInput{ManualRevenueCents: &revenue, ManualRevenueCurrency: &currency}); err != nil {
+		t.Fatal(err)
+	}
+	review, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Review Booking", StayType: StayTypeBookingCom,
+		CheckInDate: "2026-11-05", CheckOutDate: "2026-11-06", ReviewStatus: "needs_review",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListCalendarNamedStays(ctx, pid, "2026-11-01", "2026-12-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[int64]CalendarNamedStay{}
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	if byID[unfunded.ID].CountsAsSold {
+		t.Fatal("unfunded external stay counted as sold")
+	}
+	if !byID[funded.ID].CountsAsSold {
+		t.Fatal("funded external stay did not count as sold")
+	}
+	if byID[review.ID].CountsAsSold {
+		t.Fatal("review-required stay counted as sold")
 	}
 }
 

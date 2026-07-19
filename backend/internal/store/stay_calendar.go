@@ -42,6 +42,7 @@ type CalendarNamedStay struct {
 	Status               string                   `json:"status"`
 	CleaningRequired     bool                     `json:"cleaning_required"`
 	ReviewStatus         string                   `json:"review_status"`
+	CountsAsSold         bool                     `json:"counts_as_sold"`
 	NukiGenerationStatus string                   `json:"nuki_generation_status"`
 	NukiGenerationError  *string                  `json:"nuki_generation_error,omitempty"`
 	CoveredNights        []string                 `json:"covered_nights"`
@@ -189,7 +190,17 @@ func (s *Store) ListCalendarRawBookingBlocks(ctx context.Context, propertyID int
 func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, startDate, endDate string) ([]CalendarNamedStay, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date,
-		       ns.status, ns.cleaning_required, ns.review_status, ns.nuki_generation_status, ns.nuki_generation_error,
+		       ns.status, ns.cleaning_required, ns.review_status,
+		       CASE WHEN ns.status = 'active' AND COALESCE(ns.review_status, 'confirmed') = 'confirmed' AND (
+		           ns.stay_type = 'booking_com' OR (
+		               ns.stay_type = 'external' AND (
+		                   ns.manual_revenue_cents IS NOT NULL OR EXISTS (
+		                       SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id
+		                   )
+		               )
+		           )
+		       ) THEN 1 ELSE 0 END,
+		       ns.nuki_generation_status, ns.nuki_generation_error,
 		       osm.old_occupancy_id
 		FROM named_stays ns
 		LEFT JOIN occupancy_stay_migration_map osm ON osm.named_stay_id = ns.id AND osm.migration_kind = 'named_stay'
@@ -205,14 +216,16 @@ func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, st
 	for rows.Next() {
 		var stay CalendarNamedStay
 		var cleaningRequired int
+		var countsAsSold int
 		var reviewStatus, nukiStatus, nukiError sql.NullString
 		var legacyOccupancyID sql.NullInt64
 		if err := rows.Scan(&stay.ID, &stay.PropertyID, &stay.DisplayName, &stay.StayType, &stay.CheckInDate, &stay.CheckOutDate,
-			&stay.Status, &cleaningRequired, &reviewStatus, &nukiStatus, &nukiError, &legacyOccupancyID); err != nil {
+			&stay.Status, &cleaningRequired, &reviewStatus, &countsAsSold, &nukiStatus, &nukiError, &legacyOccupancyID); err != nil {
 			return nil, err
 		}
 		stay.CleaningRequired = cleaningRequired == 1
 		stay.ReviewStatus = nullStringDefault(reviewStatus, "confirmed")
+		stay.CountsAsSold = countsAsSold == 1
 		stay.NukiGenerationStatus = nullStringDefault(nukiStatus, NukiGenerationNotApplicable)
 		stay.NukiGenerationError = stringPtr(nukiError)
 		stay.LegacyOccupancyID = int64Ptr(legacyOccupancyID)

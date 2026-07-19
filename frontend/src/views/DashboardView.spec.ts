@@ -78,6 +78,8 @@ describe('DashboardView', () => {
         upcoming_stays: [
           {
             occupancy_id: 11,
+            nuki_code_id: 21,
+            stay_id: 31,
             summary: 'Jane Guest',
             start_at: '2026-05-01T14:00:00Z',
             end_at: '2026-05-04T10:00:00Z',

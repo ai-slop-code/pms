@@ -514,7 +514,7 @@ func TestCreateNamedStay_RelinksLegacyNukiCode(t *testing.T) {
 	}
 	if err := st.UpsertNukiCode(ctx, &NukiAccessCode{
 		PropertyID:  pid,
-		OccupancyID: legacyRow.ID,
+		OccupancyID: sql.NullInt64{Int64: legacyRow.ID, Valid: true},
 		CodeLabel:   "Booking-Old",
 		ValidFrom:   dt("2026-07-11").Add(14 * time.Hour),
 		ValidUntil:  dt("2026-07-12").Add(10 * time.Hour),

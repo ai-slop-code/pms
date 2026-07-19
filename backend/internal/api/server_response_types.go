@@ -120,7 +120,9 @@ type dashboardUpcomingStayRow struct {
 }
 
 type dashboardActiveNukiCodeRow struct {
-	OccupancyID   int64   `json:"occupancy_id"`
+	NukiCodeID    int64   `json:"nuki_code_id"`
+	StayID        int64   `json:"stay_id"`
+	OccupancyID   *int64  `json:"occupancy_id,omitempty"`
 	Summary       *string `json:"summary"`
 	CodeLabel     *string `json:"code_label"`
 	CodeMasked    *string `json:"code_masked"`

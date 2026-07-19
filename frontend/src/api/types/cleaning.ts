@@ -67,7 +67,11 @@ export interface CleaningCalendarSettings {
 
 export interface CleaningCalendarEventRow {
   id: number
-  occupancy_id: number
+  /** @deprecated Legacy compatibility identity. */
+  occupancy_id?: number
+  named_stay_id?: number
+  raw_booking_block_id?: number
+  cleaning_identity?: string
   google_calendar_id: string
   google_event_id?: string
   cleaning_date: string

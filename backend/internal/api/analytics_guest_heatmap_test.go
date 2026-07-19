@@ -72,7 +72,7 @@ func seedGuestHeatmapFixtures(t *testing.T) (string, []*http.Cookie, int64) {
 		t.Helper()
 		if err := st.UpsertNukiGuestDailyEntry(ctx, &store.NukiGuestDailyEntry{
 			PropertyID:         prop.ID,
-			OccupancyID:        row.ID,
+			OccupancyID:        sql.NullInt64{Int64: row.ID, Valid: true},
 			DayDate:            day,
 			FirstEntryAt:       ts,
 			NukiEventReference: sql.NullString{String: "evt-" + day, Valid: true},

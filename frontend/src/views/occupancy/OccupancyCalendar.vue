@@ -281,7 +281,7 @@ const monthNightSummary = computed(() => {
         props.calendar.availability_blocks.some(
           (b) => b.status === 'active' && b.covered_nights.includes(key),
         ) || named.some((s) => s.stay_type === 'maintenance' || s.stay_type === 'personal_use')
-      const sold = named.some((s) => s.stay_type === 'booking_com' || s.stay_type === 'external')
+      const sold = named.some((s) => s.counts_as_sold)
       if (sold) occupiedNights++
       else if (unavailable) closedNights++
       else if (props.calendar.raw_blocks.some((b) => b.status === 'active' && b.covered_nights.includes(key)))

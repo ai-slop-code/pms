@@ -73,14 +73,14 @@ func TestUpsertNukiGuestDailyEntry_DedupAndOverwrite(t *testing.T) {
 	later := time.Date(2026, 4, 10, 18, 30, 0, 0, time.UTC)
 	earlier := time.Date(2026, 4, 10, 14, 5, 0, 0, time.UTC)
 	if err := st.UpsertNukiGuestDailyEntry(ctx, &NukiGuestDailyEntry{
-		PropertyID: p.ID, OccupancyID: occID, DayDate: "2026-04-10",
+		PropertyID: p.ID, OccupancyID: sql.NullInt64{Int64: occID, Valid: true}, DayDate: "2026-04-10",
 		FirstEntryAt:       later,
 		NukiEventReference: sql.NullString{String: "evt-late", Valid: true},
 	}); err != nil {
 		t.Fatalf("upsert later: %v", err)
 	}
 	if err := st.UpsertNukiGuestDailyEntry(ctx, &NukiGuestDailyEntry{
-		PropertyID: p.ID, OccupancyID: occID, DayDate: "2026-04-10",
+		PropertyID: p.ID, OccupancyID: sql.NullInt64{Int64: occID, Valid: true}, DayDate: "2026-04-10",
 		FirstEntryAt:       earlier,
 		NukiEventReference: sql.NullString{String: "evt-early", Valid: true},
 	}); err != nil {
@@ -98,6 +98,45 @@ func TestUpsertNukiGuestDailyEntry_DedupAndOverwrite(t *testing.T) {
 	}
 	if !rows[0].NukiEventReference.Valid || rows[0].NukiEventReference.String != "evt-early" {
 		t.Fatalf("nuki_event_reference=%v", rows[0].NukiEventReference)
+	}
+}
+
+func TestUpsertNukiGuestDailyEntry_UsesNamedStayIdentityWithoutOccupancy(t *testing.T) {
+	st := testStore(t)
+	st.OccupancyLegacyWriteDisabled = true
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "named-only-guest-log@test.local", "hash", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProperty(ctx, u.ID, "NamedOnlyGuestLog", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: p.ID, DisplayName: "Named Guest", StayType: StayTypeBookingCom,
+		CheckInDate: "2026-04-10", CheckOutDate: "2026-04-12", ReviewStatus: "confirmed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := &NukiGuestDailyEntry{
+		PropertyID: p.ID, NamedStayID: sql.NullInt64{Int64: stay.ID, Valid: true},
+		DayDate: "2026-04-10", FirstEntryAt: time.Date(2026, 4, 10, 15, 0, 0, 0, time.UTC),
+	}
+	if err := st.UpsertNukiGuestDailyEntry(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	entry.FirstEntryAt = entry.FirstEntryAt.Add(-time.Hour)
+	if err := st.UpsertNukiGuestDailyEntry(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListNukiGuestDailyEntriesInRange(ctx, p.ID, "2026-04-10", "2026-04-10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].OccupancyID.Valid || rows[0].NamedStayID.Int64 != stay.ID || !rows[0].FirstEntryAt.Equal(entry.FirstEntryAt) {
+		t.Fatalf("named-only guest entry: %+v", rows)
 	}
 }
 
@@ -146,7 +185,7 @@ func TestListNukiGuestDailyEntriesInRange_FiltersClosedAndCancelled(t *testing.T
 		t.Helper()
 		ts := time.Date(2026, 4, parseDayHelper(day), hour, 0, 0, 0, time.UTC)
 		if err := st.UpsertNukiGuestDailyEntry(ctx, &NukiGuestDailyEntry{
-			PropertyID: p.ID, OccupancyID: occID, DayDate: day,
+			PropertyID: p.ID, OccupancyID: sql.NullInt64{Int64: occID, Valid: true}, DayDate: day,
 			FirstEntryAt: ts,
 		}); err != nil {
 			t.Fatalf("upsert (%d,%s): %v", occID, day, err)
@@ -165,7 +204,7 @@ func TestListNukiGuestDailyEntriesInRange_FiltersClosedAndCancelled(t *testing.T
 	}
 	got := map[int64]bool{}
 	for _, r := range rows {
-		got[r.OccupancyID] = true
+		got[r.OccupancyID.Int64] = true
 	}
 	if !got[activeID] || !got[externalID] {
 		t.Fatalf("missing expected occupancy ids: %v", got)
@@ -179,7 +218,7 @@ func TestListNukiGuestDailyEntriesInRange_FiltersClosedAndCancelled(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].OccupancyID != externalID {
+	if len(rows) != 1 || !rows[0].OccupancyID.Valid || rows[0].OccupancyID.Int64 != externalID {
 		t.Fatalf("range filter: rows=%d want 1 (external only)", len(rows))
 	}
 }

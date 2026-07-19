@@ -3,6 +3,8 @@ package dbconn
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -71,6 +73,34 @@ func Open(databaseURL string) (*sql.DB, error) {
 	// SQLite + WAL supports many concurrent readers and a single writer; the
 	// pool can safely hold multiple connections because busy_timeout will
 	// serialize competing writes at the file level.
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(8)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+// OpenReadOnly opens an existing, stable absolute-path SQLite database without
+// requesting WAL or creating SQLite lock/journal sidecars.
+func OpenReadOnly(databaseURL string) (*sql.DB, error) {
+	if !strings.HasPrefix(databaseURL, "sqlite://") {
+		return nil, fmt.Errorf("only sqlite:// URLs supported")
+	}
+	path := strings.TrimPrefix(databaseURL, "sqlite://")
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	if path == "" || path == ":memory:" || !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("read-only SQLite database path must be absolute and non-memory")
+	}
+
+	fileURL := (&url.URL{Scheme: "file", Path: path}).String()
+	db, err := sql.Open("sqlite", fileURL+"?mode=ro&immutable=1&_pragma=query_only(ON)")
+	if err != nil {
+		return nil, err
+	}
 	db.SetMaxOpenConns(8)
 	db.SetMaxIdleConns(8)
 	if err := db.Ping(); err != nil {

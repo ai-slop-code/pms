@@ -37,7 +37,7 @@ type nukiCodesResponse struct {
 type nukiUpcomingStayRow struct {
 	StayID              int64   `json:"stay_id"`
 	LegacyOccupancyID   *int64  `json:"legacy_occupancy_id,omitempty"`
-	OccupancyID         int64   `json:"occupancy_id"`
+	OccupancyID         *int64  `json:"occupancy_id,omitempty"`
 	SourceEventUID      string  `json:"source_event_uid"`
 	Summary             *string `json:"summary"`
 	SavedPinName        *string `json:"saved_pin_name"`
@@ -278,7 +278,7 @@ func (s *Server) listNukiUpcomingStays(w http.ResponseWriter, r *http.Request) {
 		out = append(out, nukiUpcomingStayRow{
 			StayID:              row.StayID,
 			LegacyOccupancyID:   nullInt64Ptr(row.LegacyOccupancyID),
-			OccupancyID:         row.OccupancyID,
+			OccupancyID:         nullInt64Ptr(row.OccupancyID),
 			SourceEventUID:      row.SourceEventUID,
 			Summary:             summary,
 			SavedPinName:        nullStringPtr(row.GuestDisplayName),

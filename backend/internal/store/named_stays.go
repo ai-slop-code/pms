@@ -44,6 +44,7 @@ type NamedStay struct {
 	ManualRevenueNote       sql.NullString `json:"-"`
 	ReviewStatus            sql.NullString `json:"-"`
 	ReviewReason            sql.NullString `json:"-"`
+	StayOutcome             sql.NullString `json:"-"`
 	NukiGenerationStatus    sql.NullString `json:"-"`
 	NukiGenerationError     sql.NullString `json:"-"`
 	NukiGenerationUpdatedAt sql.NullTime   `json:"-"`
@@ -318,8 +319,10 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureNamedStayWithinActiveLinksTx(ctx, tx, propertyID, stayID, ci, co); err != nil {
-		return nil, err
+	if ci.Format("2006-01-02") != current.CheckInDate || co.Format("2006-01-02") != current.CheckOutDate {
+		if err := ensureNamedStayWithinActiveLinksTx(ctx, tx, propertyID, stayID, ci, co); err != nil {
+			return nil, err
+		}
 	}
 	if current.Status == NamedStayStatusActive {
 		if err := namedStayRangeAvailableTx(ctx, tx, propertyID, stayID, ci, co); err != nil {
@@ -359,19 +362,20 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 		nullableInt64(in.UpdatedByUserID), nowStr, propertyID, stayID); err != nil {
 		return nil, err
 	}
-	if linkedRaw != nil {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE stay_source_links
-			SET linked_check_in_date = ?, linked_check_out_date = ?, updated_at = ?
-			WHERE property_id = ? AND named_stay_id = ? AND link_status = 'active'`,
-			ci.Format("2006-01-02"), co.Format("2006-01-02"), nowStr, propertyID, stayID); err != nil {
-			return nil, err
-		}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE stay_source_links
+		SET linked_check_in_date = ?, linked_check_out_date = ?, updated_at = ?
+		WHERE property_id = ? AND named_stay_id = ? AND link_status <> 'manual_unlinked'`,
+		ci.Format("2006-01-02"), co.Format("2006-01-02"), nowStr, propertyID, stayID); err != nil {
+		return nil, err
 	}
 	if current.Status == NamedStayStatusActive {
 		if err := replaceNamedStayNightsTx(ctx, tx, propertyID, stayID, nightsUTC(ci, co), true, nowStr); err != nil {
 			return nil, err
 		}
+	}
+	if _, err := recomputeSourceLinkHealthTx(ctx, tx, propertyID, nowStr); err != nil {
+		return nil, err
 	}
 	if !s.OccupancyLegacyWriteDisabled {
 		legacyOccID, err := s.upsertLegacyOccupancyForNamedStayTx(ctx, tx, legacyNamedStayRow{
@@ -509,7 +513,7 @@ const namedStaySelectSQL = `
 	SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
 	       ns.cleaning_required, ns.cleaning_override_reason, ns.source_channel, ns.source_reference,
 	       ns.manual_revenue_cents, ns.manual_revenue_currency, ns.manual_revenue_note,
-	       ns.review_status, ns.review_reason, ns.nuki_generation_status, ns.nuki_generation_error, ns.nuki_generation_updated_at,
+	       ns.review_status, ns.review_reason, ns.stay_outcome, ns.nuki_generation_status, ns.nuki_generation_error, ns.nuki_generation_updated_at,
 	       ns.created_at, ns.updated_at,
 	       osm.old_occupancy_id
 	FROM named_stays ns
@@ -526,7 +530,7 @@ func scanNamedStays(rows *sql.Rows) ([]NamedStay, error) {
 		if err := rows.Scan(&n.ID, &n.PropertyID, &n.DisplayName, &n.StayType, &n.CheckInDate, &n.CheckOutDate, &n.Status,
 			&cleaning, &n.CleaningOverrideReason, &n.SourceChannel, &n.SourceReference,
 			&n.ManualRevenueCents, &n.ManualRevenueCurrency, &n.ManualRevenueNote,
-			&n.ReviewStatus, &n.ReviewReason, &n.NukiGenerationStatus, &n.NukiGenerationError, &nukiUpdated,
+			&n.ReviewStatus, &n.ReviewReason, &n.StayOutcome, &n.NukiGenerationStatus, &n.NukiGenerationError, &nukiUpdated,
 			&created, &updated, &n.LegacyOccupancyID); err != nil {
 			return nil, err
 		}
@@ -673,23 +677,11 @@ func replaceNamedStayNightsTx(ctx context.Context, tx *sql.Tx, propertyID, stayI
 }
 
 func ensureNamedStayWithinActiveLinksTx(ctx context.Context, tx *sql.Tx, propertyID, stayID int64, ci, co time.Time) error {
-	var cnt int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM stay_source_links WHERE property_id = ? AND named_stay_id = ? AND link_status = 'active' AND raw_booking_block_id IS NOT NULL`, propertyID, stayID).Scan(&cnt); err != nil {
+	hasLinks, covered, err := linkedRawNightUnionCoversTx(ctx, tx, propertyID, stayID, ci.Format("2006-01-02"), co.Format("2006-01-02"))
+	if err != nil {
 		return err
 	}
-	if cnt == 0 {
-		return nil
-	}
-	var covering int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM stay_source_links l
-		JOIN raw_booking_blocks rb ON rb.id = l.raw_booking_block_id
-		WHERE l.property_id = ? AND l.named_stay_id = ? AND l.link_status = 'active' AND rb.status = 'active'
-		  AND rb.check_in_date <= ? AND rb.check_out_date >= ?`, propertyID, stayID, ci.Format("2006-01-02"), co.Format("2006-01-02")).Scan(&covering); err != nil {
-		return err
-	}
-	if covering == 0 {
+	if hasLinks && !covered {
 		return ErrNamedStayOutsideBlock
 	}
 	return nil

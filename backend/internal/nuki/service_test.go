@@ -3,6 +3,7 @@ package nuki
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -18,6 +19,8 @@ type fakeClient struct {
 	logCalls    int
 	setCalls    int
 	failCreate  bool
+	failUpdate  bool
+	failRevoke  bool
 	listCodes   []KeypadAccessCode
 	logEvents   []SmartlockEvent
 	createID    string
@@ -58,6 +61,9 @@ func (f *fakeClient) ListSmartlockEvents(ctx context.Context, cred Credentials, 
 
 func (f *fakeClient) UpdateAccess(ctx context.Context, cred Credentials, externalID string, req UpsertAccessRequest) (*UpsertAccessResponse, error) {
 	f.updateCalls++
+	if f.failUpdate {
+		return nil, sql.ErrConnDone
+	}
 	return &UpsertAccessResponse{ExternalID: externalID, AccessCode: "654321"}, nil
 }
 
@@ -68,6 +74,9 @@ func (f *fakeClient) SetAccessEnabled(ctx context.Context, cred Credentials, ext
 
 func (f *fakeClient) RevokeAccess(ctx context.Context, cred Credentials, externalID string) error {
 	f.revokeCalls++
+	if f.failRevoke {
+		return sql.ErrConnDone
+	}
 	return nil
 }
 
@@ -195,6 +204,148 @@ func TestGenerateCodes_CreatesAndUpdatesWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestGenerateCodes_NamedStayWithoutLegacyOccupancy(t *testing.T) {
+	st := newTestStore(t)
+	st.OccupancyLegacyWriteDisabled = true
+	pid := setupPropertyForNuki(t, st)
+	fc := &fakeClient{createID: "named-only-external", createCode: "987654"}
+	svc := &Service{Store: st, Client: fc}
+	start := time.Now().UTC().Add(48 * time.Hour).Format("2006-01-02")
+	end := time.Now().UTC().Add(96 * time.Hour).Format("2006-01-02")
+	stay, err := st.CreateNamedStayRecord(context.Background(), store.NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Named Only", StayType: store.StayTypeBookingCom,
+		CheckInDate: start, CheckOutDate: end, ReviewStatus: "confirmed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stay.LegacyOccupancyID.Valid {
+		t.Fatalf("legacy occupancy unexpectedly created: %d", stay.LegacyOccupancyID.Int64)
+	}
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stay.ID, "test", "Named Only"); err != nil {
+		t.Fatal(err)
+	}
+	code, err := st.GetNukiCodeByNamedStayID(context.Background(), pid, stay.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code == nil || code.OccupancyID.Valid || !code.NamedStayID.Valid || code.NamedStayID.Int64 != stay.ID {
+		t.Fatalf("named-stay-primary code: %+v", code)
+	}
+	if code.GeneratedPINPlain.String != "987654" || code.ExternalNukiID.String != "named-only-external" {
+		t.Fatalf("generated values not preserved: %+v", code)
+	}
+}
+
+func TestReconcileNamedStay_UpdatesAndRevokesAcrossLifecycle(t *testing.T) {
+	st := newTestStore(t)
+	st.OccupancyLegacyWriteDisabled = true
+	pid := setupPropertyForNuki(t, st)
+	fc := &fakeClient{createID: "lifecycle-external", createCode: "987654"}
+	svc := &Service{Store: st, Client: fc}
+	start := time.Now().UTC().Add(48 * time.Hour).Format("2006-01-02")
+	end := time.Now().UTC().Add(96 * time.Hour).Format("2006-01-02")
+	stay, err := st.CreateNamedStayRecord(context.Background(), store.NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Lifecycle", StayType: store.StayTypeBookingCom,
+		CheckInDate: start, CheckOutDate: end, ReviewStatus: "confirmed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReconcileNamedStay(context.Background(), pid, stay.ID, "create"); err != nil {
+		t.Fatal(err)
+	}
+	newName := "Lifecycle Updated"
+	newEnd := time.Now().UTC().Add(120 * time.Hour).Format("2006-01-02")
+	if _, err := st.UpdateNamedStayRecord(context.Background(), pid, stay.ID, store.NamedStayUpdateInput{DisplayName: &newName, CheckOutDate: &newEnd}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReconcileNamedStay(context.Background(), pid, stay.ID, "patch"); err != nil {
+		t.Fatal(err)
+	}
+	if fc.updateCalls != 1 {
+		t.Fatalf("update calls=%d", fc.updateCalls)
+	}
+	code, err := st.GetNukiCodeByNamedStayID(context.Background(), pid, stay.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code.CodeLabel != "Booking-Lifecycle Updated" {
+		t.Fatalf("label=%q", code.CodeLabel)
+	}
+	if _, err := st.UpdateNamedStayStatus(context.Background(), pid, stay.ID, store.NamedStayStatusCancelled, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReconcileNamedStay(context.Background(), pid, stay.ID, "cancel"); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = st.GetNukiCodeByNamedStayID(context.Background(), pid, stay.ID)
+	if fc.revokeCalls != 1 || code.Status != "revoked" {
+		t.Fatalf("revoke calls=%d code=%+v", fc.revokeCalls, code)
+	}
+	if _, err := st.UpdateNamedStayStatus(context.Background(), pid, stay.ID, store.NamedStayStatusActive, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReconcileNamedStay(context.Background(), pid, stay.ID, "reactivate"); err != nil {
+		t.Fatal(err)
+	}
+	if fc.createCalls != 2 {
+		t.Fatalf("create calls after reactivation=%d", fc.createCalls)
+	}
+}
+
+func TestReconcileNamedStay_UpdateFailurePreservesCredentialAndReturnsError(t *testing.T) {
+	st := newTestStore(t)
+	st.OccupancyLegacyWriteDisabled = true
+	pid := setupPropertyForNuki(t, st)
+	fc := &fakeClient{createID: "update-failure-external", createCode: "987654"}
+	svc := &Service{Store: st, Client: fc}
+	ctx := context.Background()
+	start := time.Now().UTC().Add(48 * time.Hour).Format("2006-01-02")
+	end := time.Now().UTC().Add(96 * time.Hour).Format("2006-01-02")
+	stay, err := st.CreateNamedStayRecord(ctx, store.NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Update Failure", StayType: store.StayTypeBookingCom,
+		CheckInDate: start, CheckOutDate: end, ReviewStatus: "confirmed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReconcileNamedStay(ctx, pid, stay.ID, "create"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.GetNukiCodeByNamedStayID(ctx, pid, stay.ID)
+	if err != nil || before == nil {
+		t.Fatalf("initial code err=%v code=%+v", err, before)
+	}
+
+	newName := "Update Failure Renamed"
+	if _, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, store.NamedStayUpdateInput{DisplayName: &newName}); err != nil {
+		t.Fatal(err)
+	}
+	fc.failUpdate = true
+	if err := svc.ReconcileNamedStay(ctx, pid, stay.ID, "patch"); !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("reconcile error=%v want %v", err, sql.ErrConnDone)
+	}
+
+	after, err := st.GetNukiCodeByNamedStayID(ctx, pid, stay.ID)
+	if err != nil || after == nil {
+		t.Fatalf("failed code err=%v code=%+v", err, after)
+	}
+	if after.ID != before.ID || after.GeneratedPINPlain != before.GeneratedPINPlain || after.ExternalNukiID != before.ExternalNukiID {
+		t.Fatalf("credential identity changed: before=%+v after=%+v", before, after)
+	}
+	if after.Status != "not_generated" || !after.ErrorMessage.Valid {
+		t.Fatalf("failure state not persisted: %+v", after)
+	}
+	refreshed, err := st.GetNamedStay(ctx, pid, stay.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.NukiGenerationStatus.String != store.NukiGenerationError || !refreshed.NukiGenerationError.Valid {
+		t.Fatalf("named stay failure state cleared: %+v", refreshed)
+	}
+}
+
 func TestGenerateCodes_PreservesGeneratedWindowWhenBookingClosedBlockExpands(t *testing.T) {
 	st := newTestStore(t)
 	pid := setupPropertyForNuki(t, st)
@@ -230,7 +381,7 @@ func TestGenerateCodes_PreservesGeneratedWindowWhenBookingClosedBlockExpands(t *
 	validFrom, validUntil := occupancyWindow(*saved, time.UTC, 14, 0, 10, 0)
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:       pid,
-		OccupancyID:      saved.ID,
+		OccupancyID:      sql.NullInt64{Int64: saved.ID, Valid: true},
 		CodeLabel:        "Booking-Lenka",
 		ExternalNukiID:   sql.NullString{String: "ext-lenka", Valid: true},
 		ValidFrom:        validFrom,
@@ -787,7 +938,7 @@ func TestReconcileGuestDailyEntries_PartitionsCleanerVsGuest(t *testing.T) {
 	// Guest access codes mapping authID -> occupancy.
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:     pid,
-		OccupancyID:    occA.ID,
+		OccupancyID:    sql.NullInt64{Int64: occA.ID, Valid: true},
 		NamedStayID:    sql.NullInt64{Int64: stayA, Valid: true},
 		CodeLabel:      "uid-A",
 		ExternalNukiID: sql.NullString{String: "guest-A", Valid: true},
@@ -799,7 +950,7 @@ func TestReconcileGuestDailyEntries_PartitionsCleanerVsGuest(t *testing.T) {
 	}
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:     pid,
-		OccupancyID:    occB.ID,
+		OccupancyID:    sql.NullInt64{Int64: occB.ID, Valid: true},
 		NamedStayID:    sql.NullInt64{Int64: stayB, Valid: true},
 		CodeLabel:      "uid-B",
 		ExternalNukiID: sql.NullString{String: "guest-B", Valid: true},
@@ -850,7 +1001,7 @@ func TestReconcileGuestDailyEntries_PartitionsCleanerVsGuest(t *testing.T) {
 	}
 	byOcc := map[int64]store.NukiGuestDailyEntry{}
 	for _, r := range rows {
-		byOcc[r.OccupancyID] = r
+		byOcc[r.OccupancyID.Int64] = r
 	}
 	if got := byOcc[occA.ID].FirstEntryAt.UTC().Truncate(time.Second); !got.Equal(today.Add(-3 * time.Hour).UTC().Truncate(time.Second)) {
 		t.Fatalf("guest A first entry=%s want earlier of two unlocks", got)

@@ -28,7 +28,7 @@ type NukiSyncRun struct {
 type NukiAccessCode struct {
 	ID                int64
 	PropertyID        int64
-	OccupancyID       int64
+	OccupancyID       sql.NullInt64
 	NamedStayID       sql.NullInt64
 	CodeLabel         string
 	AccessCodeMasked  sql.NullString
@@ -85,7 +85,7 @@ type NukiKeypadCode struct {
 type UpcomingStayWithCode struct {
 	StayID              int64
 	LegacyOccupancyID   sql.NullInt64
-	OccupancyID         int64
+	OccupancyID         sql.NullInt64
 	SourceEventUID      string
 	RawSummary          sql.NullString
 	GuestDisplayName    sql.NullString
@@ -252,37 +252,55 @@ func (s *Store) UpsertNukiCode(ctx context.Context, c *NukiAccessCode) error {
 	if c.NamedStayID.Valid {
 		stayID = c.NamedStayID.Int64
 	}
+	var occupancyID interface{}
+	if c.OccupancyID.Valid {
+		occupancyID = c.OccupancyID.Int64
+	}
 	var revoked interface{}
 	if c.RevokedAt.Valid {
 		revoked = c.RevokedAt.Time.UTC().Format(time.RFC3339)
 	}
-	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO nuki_access_codes (property_id, occupancy_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(property_id, occupancy_id) DO UPDATE SET
+	args := []interface{}{c.PropertyID, occupancyID, stayID, c.CodeLabel, masked, pinPlain, ext,
+		c.ValidFrom.UTC().Format(time.RFC3339), c.ValidUntil.UTC().Format(time.RFC3339), c.Status, errMsg, runID, now, now, revoked}
+	setSQL := `occupancy_id = COALESCE(excluded.occupancy_id, nuki_access_codes.occupancy_id),
 			named_stay_id = COALESCE(excluded.named_stay_id, nuki_access_codes.named_stay_id),
-			code_label = excluded.code_label,
-			access_code_masked = excluded.access_code_masked,
-			generated_pin_plain = excluded.generated_pin_plain,
-			external_nuki_id = excluded.external_nuki_id,
-			valid_from = excluded.valid_from,
-			valid_until = excluded.valid_until,
-			status = excluded.status,
-			error_message = excluded.error_message,
-			last_sync_run_id = excluded.last_sync_run_id,
-			updated_at = excluded.updated_at,
-			revoked_at = excluded.revoked_at`,
-		c.PropertyID, c.OccupancyID, stayID, c.CodeLabel, masked, pinPlain, ext,
-		c.ValidFrom.UTC().Format(time.RFC3339), c.ValidUntil.UTC().Format(time.RFC3339), c.Status, errMsg, runID, now, now, revoked)
+			code_label = excluded.code_label, access_code_masked = excluded.access_code_masked,
+			generated_pin_plain = excluded.generated_pin_plain, external_nuki_id = excluded.external_nuki_id,
+			valid_from = excluded.valid_from, valid_until = excluded.valid_until, status = excluded.status,
+			error_message = excluded.error_message, last_sync_run_id = excluded.last_sync_run_id,
+			updated_at = excluded.updated_at, revoked_at = excluded.revoked_at`
+	if c.ID > 0 {
+		_, err := s.DB.ExecContext(ctx, `
+			UPDATE nuki_access_codes SET occupancy_id = ?, named_stay_id = ?, code_label = ?, access_code_masked = ?,
+				generated_pin_plain = ?, external_nuki_id = ?, valid_from = ?, valid_until = ?, status = ?,
+				error_message = ?, last_sync_run_id = ?, updated_at = ?, revoked_at = ?
+			WHERE property_id = ? AND id = ?`, occupancyID, stayID, c.CodeLabel, masked, pinPlain, ext,
+			c.ValidFrom.UTC().Format(time.RFC3339), c.ValidUntil.UTC().Format(time.RFC3339), c.Status, errMsg, runID, now, revoked, c.PropertyID, c.ID)
+		return err
+	}
+	base := `INSERT INTO nuki_access_codes (property_id, occupancy_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	var query string
+	if c.NamedStayID.Valid {
+		query = base + ` ON CONFLICT(property_id, named_stay_id) WHERE named_stay_id IS NOT NULL DO UPDATE SET ` + setSQL
+	} else {
+		if !c.OccupancyID.Valid {
+			return errors.New("nuki code requires named_stay_id or occupancy_id")
+		}
+		query = base + ` ON CONFLICT(property_id, occupancy_id) WHERE named_stay_id IS NULL AND occupancy_id IS NOT NULL DO UPDATE SET ` + setSQL
+	}
+	_, err := s.DB.ExecContext(ctx, query, args...)
 	return err
 }
 
 func (s *Store) ListNukiCodes(ctx context.Context, propertyID int64, scope string) ([]NukiAccessCodeWithOccupancy, error) {
 	q := `
 		SELECT nac.id, nac.property_id, nac.occupancy_id, nac.named_stay_id, nac.code_label, nac.access_code_masked, nac.generated_pin_plain, nac.external_nuki_id, nac.valid_from, nac.valid_until, nac.status, nac.error_message, nac.last_sync_run_id, nac.created_at, nac.updated_at, nac.revoked_at,
-		       o.source_event_uid, o.raw_summary, o.status, o.start_at, o.end_at
+		       COALESCE(ns.source_reference, o.source_event_uid, ''),
+		       COALESCE(ns.display_name, o.raw_summary), COALESCE(ns.status, o.status, ''),
+		       COALESCE(ns.check_in_date, o.start_at), COALESCE(ns.check_out_date, o.end_at)
 		FROM nuki_access_codes nac
-		INNER JOIN occupancies o ON o.id = nac.occupancy_id
+		LEFT JOIN named_stays ns ON ns.id = nac.named_stay_id AND ns.property_id = nac.property_id
+		LEFT JOIN occupancies o ON o.id = nac.occupancy_id AND o.property_id = nac.property_id
 		WHERE nac.property_id = ?`
 	switch scope {
 	case "active":
@@ -392,6 +410,7 @@ func (s *Store) ListNamedStaysForNukiSync(ctx context.Context, propertyID int64)
 		  AND ns.status = 'active'
 		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
 		  AND ns.stay_type IN ('booking_com', 'external')
+		  AND (ns.stay_outcome IS NULL OR ns.stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
 		  AND ns.check_out_date >= ?
 		ORDER BY ns.check_in_date ASC, ns.id ASC`, propertyID, time.Now().UTC().Format("2006-01-02"))
 	if err != nil {
@@ -805,7 +824,7 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		limit = 120
 	}
 	query := `
-		SELECT ns.id, osm.old_occupancy_id, COALESCE(osm.old_occupancy_id, nac.occupancy_id, 0),
+		SELECT ns.id, osm.old_occupancy_id, COALESCE(osm.old_occupancy_id, nac.occupancy_id),
 		       COALESCE(ns.source_reference, ''), ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
 		       nac.id, nac.code_label,
 		       CASE

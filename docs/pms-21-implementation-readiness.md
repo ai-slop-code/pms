@@ -1,6 +1,6 @@
 # PMS 21 Implementation Readiness
 
-Status: active readiness companion to `spec/PMS_21_Raw_Booking_Blocks_Named_Stays_Migration_Plan.md`. Local Stage 0 through Stage 11 implementation artifacts exist where referenced by the main plan, but production audit, Stage 2 apply/backfill, production gate enablement, and destructive cleanup remain blocked. This document must not be read as production approval.
+Status: active readiness companion to `spec/PMS_21_Raw_Booking_Blocks_Named_Stays_Migration_Plan.md`. Stage 2 apply and the 2026-07-18 remediation are locally implemented, but no production audit or apply has run. Production cutover, safety-gate changes, and destructive cleanup remain blocked. This document must not be read as production approval.
 
 ## Latest Agent Handoff
 
@@ -8,15 +8,19 @@ Pass date: 2026-07-18.
 
 Committed snapshot: `3605fcf feat(occupancy): implement PMS 21 remediation`.
 
-What changed in that pass:
+What changed in the current remediation pass:
 
 - Added frontend PMS 21 cleaning defaults for create/promote flows: `booking_com` and `external` default cleaning on; `maintenance` and `personal_use` default cleaning off.
 - Added calendar day-detail lifecycle controls for named stays: edit display name, date range, stay type, cleaning required, cancel, archive, and reactivate through PMS 21 `/stays/{stayId}` endpoints.
 - Displayed Nuki error details and raw-source warning details already present in calendar DTOs.
 - Updated readiness and main plan docs to reflect the owner decision to use deployment/version rollback instead of adding the wider runtime gate set.
 - Added `docs/pms-21-operations-cutover-runbook.md` with production preconditions, dry-run/audit steps, apply stop point, deployment, verification, rollback, monitoring, and cleanup eligibility.
-- Updated `frontend/src/api/types/README.md` to define generated OpenAPI types as API contract types and hand-authored types as UI/domain adapters or compatibility shims.
+- Updated `frontend/src/api/types/README.md` to distinguish concrete generated API contract types from route-only inventory and hand-authored UI/domain adapters.
 - Committed all previously dirty PMS 21 code, docs, specs, migrations, generated types, and frontend/backend changes in the snapshot above so the worktree was clean after commit.
+- Added a shared Stage 2 classifier and guarded `--apply --confirm-apply` path with explicit `--allow-review-required`, idempotent mapping, integration relinking, conflict refusal, and preservation tests.
+- Added migration `000036_nuki_named_stay_primary`, preserving Nuki code/event/guest-entry IDs and values while allowing named-stay-primary rows without `occupancy_id`.
+- Added named-stay update/status Nuki reconciliation, raw source-link union health recomputation, backend calendar sold semantics, PMS 21 cleaning DTO identities, and strict `named_stay_nights` analytics.
+- Added complete backend route inventory in OpenAPI and a router/OpenAPI coverage regression test. Touched PMS 21 contracts have concrete schemas; entries marked `x-contract-status: route-only` identify remaining contract work.
 
 Verification run in that pass:
 
@@ -24,13 +28,12 @@ Verification run in that pass:
 - `npm run test -- OccupancyView.spec.ts` from `frontend/`
 - `npm run type-check` from `frontend/`
 
-Important remaining blockers for the next agent:
+Production blockers:
 
-- Stage 2 apply/backfill is still not implemented; the CLI remains dry-run only.
 - No production audit artifact exists; do not fabricate `docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md`.
-- Nuki named-stay-primary storage still needs a preservation-proven schema/store pass before `PMS21_OCCUPANCY_LEGACY_WRITE_DISABLED=1` is safe.
-- Source-link recomputation and multi-raw-block union coverage remain required workstreams.
-- Full OpenAPI route-table coverage and analytics strict `named_stay_nights` review remain separate workstreams.
+- Stage 2 apply has not run against production and no production apply artifact exists.
+- Migration `000036` and Nuki named-stay-primary operation require operator verification against a production backup before enabling `PMS21_OCCUPANCY_LEGACY_WRITE_DISABLED=1`.
+- Production Nuki PIN/external-ID, Google event, invoice, finance, and message preservation checks remain mandatory.
 
 ## Stage 0 Decisions
 
@@ -65,10 +68,19 @@ Dry-run command template:
 
 ```bash
 cd backend
-go run ./cmd/pms21-migration --db /absolute/path/to/production-or-backup.db --dry-run --sample-limit 25 > ../docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md
+go run ./cmd/pms21-migration --db /absolute/path/to/verified-production-backup.db --dry-run --sample-limit 25 > ../docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.json
 ```
 
-Stage 2 apply command state: apply mode is not implemented in the current CLI. Stop before production apply until the command exists with explicit apply and confirmation flags, idempotency tests pass, and the output artifact format includes created, updated, skipped, conflict, and review-required counts.
+Reviewed audit notes use `docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md` and must reference the raw JSON artifact above. Neither artifact currently exists.
+
+Stage 2 local apply command:
+
+```bash
+cd backend
+go run ./cmd/pms21-migration --db /absolute/path/to/production.db --apply --confirm-apply --sample-limit 25 --allow-review-required > ../docs/audits/PMS_21_production_apply_YYYY-MM-DD.json
+```
+
+Omit `--allow-review-required` only when the dry run reports zero review-required named-stay candidates. Without the flag, apply stops before writing if any such candidates exist. Never use the flag to confirm those rows: override-created rows remain `review_status = needs_review`.
 
 The report must include:
 
@@ -106,6 +118,6 @@ Schema changes are additive only:
 - Pause or confirm safe operation for Nuki, Booking.com ICS sync, Google cleaning calendar, finance imports, invoice generation, and message jobs.
 - Run the production dry-run/audit command and save the artifact.
 - Stop if severe conflicts are non-zero and no owner-approved override exists.
-- Run Stage 2 apply only after it exists with explicit confirmation flags and idempotency tests.
+- Run Stage 2 apply with explicit confirmation only after reviewing the production dry run; save the raw JSON artifact and reviewed notes.
 - Verify Nuki, cleaning, finance, invoices, messages, analytics, dashboard, and frontend lifecycle behavior before resuming normal traffic/jobs.
 - Do not run destructive cleanup until the PMS 21 version has operated successfully for an agreed release window and rollback to the old binary is no longer expected.

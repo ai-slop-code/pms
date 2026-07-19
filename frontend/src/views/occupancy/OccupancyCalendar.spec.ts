@@ -50,6 +50,7 @@ const calendar: OccupancyCalendarView = {
       status: 'active',
       cleaning_required: true,
       review_status: 'confirmed',
+      counts_as_sold: true,
       nuki_generation_status: 'error',
       nuki_generation_error: 'credentials missing',
       covered_nights: ['2026-07-10', '2026-07-11'],

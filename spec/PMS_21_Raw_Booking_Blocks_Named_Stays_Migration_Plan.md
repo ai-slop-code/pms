@@ -1,6 +1,6 @@
 # PMS 21 - Raw Booking Blocks and Named Stays Migration Plan
 
-Status: Stage 11 non-destructive cleanup gate is locally implemented, but production rollout is not complete. Stage 2 has dry-run/audit planning only; apply/backfill is not implemented or run. Production audit, production backfill, version cutover, and destructive cleanup remain blocked pending owner-run production audit approval.  
+Status: Stage 2 guarded apply and the PMS 21 remediation are locally implemented and tested, but no production audit or apply has run. Production backfill, version cutover, safety-gate changes, and destructive cleanup remain blocked pending owner-run production audit approval.
 Source request: `spec/PMS_20_Occupancy_code_analysis_and_business_logic.md`  
 Goal: provide a staged technical plan for replacing the current overloaded occupancy model with explicit Raw booking date blocks and Named stays.
 
@@ -11,7 +11,7 @@ Current implementation stage: **Stage 11 - Cleanup**.
 Local status:
 
 - Stages 0 and 1 are implemented.
-- Stage 2 has local audit/dry-run planning only; apply mode is not implemented or run.
+- Stage 2 has local dry-run and guarded apply tooling with shared classification and idempotency tests; production apply has not run.
 - Stage 3 is implemented and locally verified behind `PMS21_RAW_BLOCKS_DUAL_WRITE`, which remains default-off.
 - Stage 4 is implemented and locally verified with backend tests in `docs/audits/PMS_21_stage4_local_verification_2026-07-13.md`.
 - Stage 5 is implemented and locally verified with backend/frontend checks in `docs/audits/PMS_21_stage5_local_verification_2026-07-13.md`.
@@ -127,14 +127,22 @@ Stage 11 remaining rollout/audit work:
 - Hard removal of old write paths, obsolete columns, token storage, and old occupancy-as-stay routes remains blocked by production verification.
 - Production cleanup still requires a clean migration conflict report or documented resolution for every ambiguity.
 
+2026-07-18 remediation review:
+
+- Migration `000036_nuki_named_stay_primary` rebuilds Nuki access-code and guest-entry tables with nullable legacy occupancy identity while preserving row IDs, encrypted PIN values, external Nuki IDs, run links, event-log links, and historical attribution. Local preservation tests pass.
+- Named-stay patch/status flows reconcile Nuki generation/revocation after the database update and retain visible error state when external Nuki calls fail.
+- Raw sync recomputes source-link health from the union of active linked raw nights; missing, shrunken, recovered, adjacent, and gap coverage are locally tested without mutating named-stay business fields.
+- Calendar sold-night eligibility is backend-provided and follows analytics rules. Analytics active/closed day metrics consume active `named_stay_nights` and divergence tests pass.
+- OpenAPI represents the complete registered route inventory, not complete contracts for route-only entries. Touched PMS 21/Nuki/cleaning/dashboard contracts are concrete, generated frontend types are refreshed, and route coverage is tested.
+
 Production status:
 
 - Production audit artifact is absent; expected reviewed artifact name is `docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md` or an equivalent recorded operational artifact.
-- Stage 2 apply/backfill is not implemented or run.
+- Stage 2 apply/backfill is implemented locally but has not run in production.
 - Production gate enablement is not approved.
 - Legacy occupancy writes must remain enabled until named-stay-primary dependencies, including Nuki, are verified safe.
 - Downstream production version cutover is not approved.
-- Production version-switch instructions are documented in `docs/pms-21-operations-cutover-runbook.md`; the runbook currently stops before apply because apply mode is absent.
+- Production version-switch instructions are documented in `docs/pms-21-operations-cutover-runbook.md`; the owner must stop before apply unless the reviewed production audit has zero severe conflicts and explicitly accounts for review-required rows.
 
 ## Executive Summary
 
@@ -918,7 +926,7 @@ Write ADRs before schema work where future agents need consistent rules:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | ADRs | Lock source-of-truth and stay-type rules | Added ADRs for raw vs named, cleaning ownership, stay type analytics, compatibility/export retirement, and finance import behavior; added readiness doc | `docs/adr/ADR-002-*` through `ADR-006-*`, `docs/pms-21-implementation-readiness.md` | No | No | ADR/readiness artifacts added; local audit artifact saved | Later cutovers still depend on resolving audit risks | Implemented |
 | 1 | Schema | Create first-class objects | Added additive raw block, named stay, night, source-link, availability-block, mapping tables, and nullable integration compatibility columns | `backend/internal/migrate/000032_raw_booking_blocks_named_stays.*.sql`, `backend/internal/store/nuki.go` | Yes | No | Applied migration to temp copy of `data/pms.db`, ran FK check, `go test ./...` from `backend/` passes | Additive only; no legacy columns removed and no read/write cutovers enabled | Implemented |
-| 2 | Backfill | Preserve existing production data | Added read-only local audit and dry-run planner/CLI; actual backfill apply not implemented or run | `docs/audits/PMS_21_local_data_audit_2026-07-13.md`, `backend/internal/store/pms21_migration.go`, `backend/cmd/pms21-migration` | No additional schema beyond Stage 1 | Yes, pending | Dry-run planner ran on migrated temp DB; `go test ./...` from `backend/` passes | Audit found 32 unmatched finance bookings, 129 finance-synthetic rows, 7 overlapping raw-block pairs, 1 Nuki mapping issue | Partially implemented: dry-run/audit done, apply pending |
+| 2 | Backfill | Preserve existing production data | Added shared dry-run/apply classifier, explicit confirmation and review override, idempotent object creation/mapping, integration relinking, structured applied counts, and severe-conflict refusal | `docs/audits/PMS_21_local_data_audit_2026-07-13.md`, `backend/internal/store/pms21_migration.go`, `backend/cmd/pms21-migration` | No additional schema beyond Stage 1 | Yes, production run pending | Apply-twice, classification, conflict refusal, integration-link, and legacy preservation tests pass locally | Production audit still must resolve actual overlaps/unmapped rows before apply | Locally implemented; production audit/apply absent |
 | 3 | ICS sync | Sync raw blocks without changing business truth | Added default-off `PMS21_RAW_BLOCKS_DUAL_WRITE` gate, raw-block/night writes inside the existing ICS reconciliation transaction, and raw-block sync counters | `backend/internal/occupancy/sync.go`, `backend/internal/store/occupancy_reconciliation.go`, `backend/internal/migrate/000033_raw_block_sync_counters.*.sql` | Yes, additive sync counters only | No | Unit tests for default-off safety, raw block/night upsert and shrink rebuild, source deletion; `go test ./...` from `backend/` passes; local verification report saved in `docs/audits/PMS_21_stage3_local_dual_write_verification_2026-07-13.md` | Gate must remain disabled in production until backfill/production audit verification passes | Implemented and locally verified behind default-off gate |
 | 4 | Named stay service | User promotes raw coverage to business stay | Added first-class named stay create/update/status/promote store methods, active-night overlap checks, source links, Nuki generation badge state, and derived legacy occupancy compatibility rows | `backend/internal/store/named_stays.go`, `backend/internal/api/occupancy_named_stay_handlers.go`, `backend/internal/api/server.go`, `backend/internal/store/named_stays_test.go` | No additional schema beyond Stage 1 | No | Unit tests for partial promotion, overlap rejection, status lifecycle, raw leftovers, Nuki failure badge state, legacy compatibility mapping; `go test ./...` from `backend/` passes; local verification saved in `docs/audits/PMS_21_stage4_local_verification_2026-07-13.md` | Cleaning still uses broad-window best-effort reconciliation until Stage 6; Nuki still uses legacy occupancy compatibility until Stage 7 | Implemented and locally verified |
 | 5 | Calendar API/UI | Show raw blocks, named stays, and availability blocks distinctly | Added OpenAPI contract, generated frontend OpenAPI types, combined calendar endpoint/read model, raw/named/availability Vue rendering, current cleaning status summaries, empty diagonal cells, source/Nuki/cleaning badges, raw-block promotion dialog, empty-night/manual stay creation UI, and availability-block create/edit endpoints/UI; dashboard widgets remain on legacy compatibility data until Stage 9 | `spec/openapi.yaml`, `frontend/src/api/types/generated.ts`, `backend/internal/store/stay_calendar.go`, `backend/internal/api/occupancy_calendar_v2_handlers.go`, `backend/internal/api/server.go`, `frontend/src/api/types/occupancy.ts`, `OccupancyView.vue`, `OccupancyView.spec.ts`, `OccupancyCalendar.vue`, `OccupancyCalendar.spec.ts` | No | No | Backend store tests for combined calendar model, cleaning status, availability-block overlap; frontend tests for combined calendar badges, empty-cell action emission, and Stage 5 endpoint loading; `go test ./...` from `backend/` passes; `npm run type-check`, `npm run test`, and `npm run build` from `frontend/` pass; local verification saved in `docs/audits/PMS_21_stage5_local_verification_2026-07-13.md` | Stage 6 still owns date-scoped/idempotent Google reconciliation; dashboard named-stay semantics intentionally deferred to Stage 9; production rollout still blocked pending audit/backfill approval | Implemented and locally verified |

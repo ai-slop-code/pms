@@ -739,6 +739,13 @@ func (s *Store) ReconcileBookingICSSync(ctx context.Context, propertyID int64, s
 			return err
 		}
 	}
+	if counters != nil && counters.RawBlocksDualWrite {
+		newConflicts, err := recomputeSourceLinkHealthTx(ctx, tx, propertyID, nowStr)
+		if err != nil {
+			return err
+		}
+		counters.RawBlockConflicts += newConflicts
+	}
 
 	return tx.Commit()
 }

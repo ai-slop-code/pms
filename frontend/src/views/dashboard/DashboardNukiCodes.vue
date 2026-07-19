@@ -28,7 +28,7 @@ const fmt = formatShortDateTime
       description="No Nuki access codes currently active."
     />
     <ul v-else class="dashboard-list-rows">
-      <li v-for="code in codes" :key="code.occupancy_id" class="dashboard-list-row">
+      <li v-for="code in codes" :key="code.nuki_code_id" class="dashboard-list-row">
         <div>
           <div class="dashboard-list-row__title">{{ code.summary || code.code_label || 'Code' }}</div>
           <div class="dashboard-list-row__meta">{{ code.code_masked || '—' }}</div>

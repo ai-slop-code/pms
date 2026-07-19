@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func stage4RawBlock(t *testing.T, st *Store, propertyID int64, uid, checkIn, checkOut string) int64 {
@@ -239,5 +241,194 @@ func TestNamedStayStage4_NukiGenerationBadgeState(t *testing.T) {
 	}
 	if !refreshed.NukiGenerationError.Valid || refreshed.NukiGenerationError.String != "nuki_credentials_not_configured" {
 		t.Fatalf("nuki error=%v", refreshed.NukiGenerationError)
+	}
+}
+
+func TestSourceLinkHealth_DisappearShrinkAndRecover(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	uid := "source-health@booking.com"
+	rawID := stage4RawBlock(t, st, pid, uid, "2026-07-20", "2026-07-23")
+	stay, err := st.PromoteRawBookingBlockToNamedStay(ctx, pid, rawID, NamedStayCreateInput{
+		DisplayName: "Source Owned Guest", StayType: StayTypeBookingCom,
+		CheckInDate: "2026-07-20", CheckOutDate: "2026-07-23",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLink := func(wantStatus, wantReason string) {
+		t.Helper()
+		var status string
+		var reason sql.NullString
+		if err := st.DB.QueryRowContext(ctx, `SELECT link_status, conflict_reason FROM stay_source_links WHERE named_stay_id = ?`, stay.ID).Scan(&status, &reason); err != nil {
+			t.Fatal(err)
+		}
+		if status != wantStatus || reason.String != wantReason || reason.Valid != (wantReason != "") {
+			t.Fatalf("link status=%q reason=%#v want %q/%q", status, reason, wantStatus, wantReason)
+		}
+	}
+	assertLink("active", "")
+
+	counters := &SyncCounters{RawBlocksDualWrite: true}
+	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, nil, dt("2026-07-19"), counters); err != nil {
+		t.Fatal(err)
+	}
+	assertLink("source_deleted", "raw_source_missing")
+	if counters.RawBlockConflicts != 1 {
+		t.Fatalf("raw conflicts=%d want 1", counters.RawBlockConflicts)
+	}
+	unchanged, err := st.GetNamedStay(ctx, pid, stay.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.DisplayName != "Source Owned Guest" || unchanged.CheckInDate != "2026-07-20" || unchanged.CheckOutDate != "2026-07-23" || unchanged.Status != NamedStayStatusActive {
+		t.Fatalf("sync mutated named stay: %+v", unchanged)
+	}
+
+	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{block(uid, "2026-07-20", "2026-07-22")}, dt("2026-07-19"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	assertLink("conflict", "raw_coverage_gap")
+	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{block(uid, "2026-07-20", "2026-07-23")}, dt("2026-07-19"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	assertLink("active", "")
+}
+
+func TestNamedStayUpdate_AllowsUnrelatedEditsWithSourceWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		desiredBlocks []DesiredBlock
+		wantStatus    string
+		nullSourceID  bool
+	}{
+		{name: "source deleted", wantStatus: "source_deleted", nullSourceID: true},
+		{name: "coverage conflict", desiredBlocks: []DesiredBlock{block("warning-edit", "2026-07-20", "2026-07-22")}, wantStatus: "conflict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, pid := recTestProperty(t)
+			ctx := context.Background()
+			rawID := stage4RawBlock(t, st, pid, "warning-edit", "2026-07-20", "2026-07-23")
+			stay, err := st.PromoteRawBookingBlockToNamedStay(ctx, pid, rawID, NamedStayCreateInput{
+				DisplayName: "Original Guest", StayType: StayTypeBookingCom,
+				CheckInDate: "2026-07-20", CheckOutDate: "2026-07-23",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, tc.desiredBlocks, dt("2026-07-19"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.nullSourceID {
+				if _, err := st.DB.ExecContext(ctx, `UPDATE stay_source_links SET raw_booking_block_id = NULL WHERE named_stay_id = ?`, stay.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			displayName := "Edited Guest"
+			stayType := StayTypeExternal
+			cleaningRequired := false
+			cleaningReason := "operator override"
+			revenue := int64(12345)
+			currency := "EUR"
+			note := "manual adjustment"
+			updated, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{
+				DisplayName: &displayName, StayType: &stayType,
+				CleaningRequired: &cleaningRequired, CleaningOverrideReason: &cleaningReason,
+				ManualRevenueCents: &revenue, ManualRevenueCurrency: &currency, ManualRevenueNote: &note,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.DisplayName != displayName || updated.StayType != stayType || updated.CleaningRequired ||
+				updated.CleaningOverrideReason.String != cleaningReason ||
+				updated.ManualRevenueCents.Int64 != revenue || updated.ManualRevenueCurrency.String != currency || updated.ManualRevenueNote.String != note {
+				t.Fatalf("unrelated edits not persisted: %+v", updated)
+			}
+			var linkStatus string
+			if err := st.DB.QueryRowContext(ctx, `SELECT link_status FROM stay_source_links WHERE named_stay_id = ?`, stay.ID).Scan(&linkStatus); err != nil {
+				t.Fatal(err)
+			}
+			if linkStatus != tc.wantStatus {
+				t.Fatalf("link status=%q want %q", linkStatus, tc.wantStatus)
+			}
+			_, err = st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{CheckOutDate: ptrString("2026-07-24")})
+			if !errors.Is(err, ErrNamedStayOutsideBlock) {
+				t.Fatalf("date update with %s source warning error=%v", tc.wantStatus, err)
+			}
+		})
+	}
+}
+
+func TestNamedStayUpdate_AllowsUnionOfAdjacentRawBlocks(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{
+		block("union-a", "2026-08-10", "2026-08-12"), block("union-b", "2026-08-12", "2026-08-14"),
+	}, dt("2026-07-01"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	var firstID, secondID int64
+	if err := st.DB.QueryRowContext(ctx, `SELECT id FROM raw_booking_blocks WHERE property_id = ? AND source_event_uid = 'union-a'`, pid).Scan(&firstID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB.QueryRowContext(ctx, `SELECT id FROM raw_booking_blocks WHERE property_id = ? AND source_event_uid = 'union-b'`, pid).Scan(&secondID); err != nil {
+		t.Fatal(err)
+	}
+	stay, err := st.PromoteRawBookingBlockToNamedStay(ctx, pid, firstID, NamedStayCreateInput{
+		DisplayName: "Union Guest", StayType: StayTypeBookingCom,
+		CheckInDate: "2026-08-10", CheckOutDate: "2026-08-12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := st.DB.ExecContext(ctx, `INSERT INTO stay_source_links (property_id, named_stay_id, raw_booking_block_id, source_type, source_event_uid, linked_check_in_date, linked_check_out_date, link_status, created_at, updated_at) VALUES (?, ?, ?, 'booking_ics', 'union-b', '2026-08-10', '2026-08-14', 'active', ?, ?)`, pid, stay.ID, secondID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{
+		CheckOutDate: ptrString("2026-08-14"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.CheckOutDate != "2026-08-14" {
+		t.Fatalf("checkout=%s", updated.CheckOutDate)
+	}
+	var activeLinks int
+	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM stay_source_links WHERE named_stay_id = ? AND link_status = 'active' AND conflict_reason IS NULL`, stay.ID).Scan(&activeLinks); err != nil || activeLinks != 2 {
+		t.Fatalf("active links=%d err=%v", activeLinks, err)
+	}
+}
+
+func TestNamedStayUpdate_RejectsGapInRawBlockUnion(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{
+		block("gap-a", "2026-09-10", "2026-09-12"), block("gap-b", "2026-09-13", "2026-09-15"),
+	}, dt("2026-07-01"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	var firstID, secondID int64
+	if err := st.DB.QueryRowContext(ctx, `SELECT id FROM raw_booking_blocks WHERE property_id = ? AND source_event_uid = 'gap-a'`, pid).Scan(&firstID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB.QueryRowContext(ctx, `SELECT id FROM raw_booking_blocks WHERE property_id = ? AND source_event_uid = 'gap-b'`, pid).Scan(&secondID); err != nil {
+		t.Fatal(err)
+	}
+	stay, err := st.PromoteRawBookingBlockToNamedStay(ctx, pid, firstID, NamedStayCreateInput{
+		DisplayName: "Gap Guest", StayType: StayTypeBookingCom,
+		CheckInDate: "2026-09-10", CheckOutDate: "2026-09-12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := st.DB.ExecContext(ctx, `INSERT INTO stay_source_links (property_id, named_stay_id, raw_booking_block_id, source_type, source_event_uid, linked_check_in_date, linked_check_out_date, link_status, created_at, updated_at) VALUES (?, ?, ?, 'booking_ics', 'gap-b', '2026-09-10', '2026-09-15', 'active', ?, ?)`, pid, stay.ID, secondID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{CheckOutDate: ptrString("2026-09-15")})
+	if !errors.Is(err, ErrNamedStayOutsideBlock) {
+		t.Fatalf("gap update error=%v", err)
 	}
 }

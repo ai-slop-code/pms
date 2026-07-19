@@ -11,7 +11,7 @@ Status: operator instructions for the future PMS 21 production switch. This does
 - Schedule a maintenance window or reduced-traffic period.
 - Confirm no other migration, import, sync, invoice, message, cleaning, or Nuki job is running.
 - Confirm Nuki, Booking.com ICS sync, Google cleaning calendar, finance imports, invoice generation, and message jobs are paused or safe to run during migration.
-- Confirm latest migrations included in the new binary. Current latest local migration number is `000035`; add later migrations only through the normal migration path.
+- Confirm latest migrations included in the new binary. Current latest local migration number is `000036`; add later migrations only through the normal migration path.
 - Confirm `PMS21_RAW_BLOCKS_DUAL_WRITE`, `PMS21_OCCUPANCY_EXPORT_DISABLED`, and `PMS21_OCCUPANCY_LEGACY_WRITE_DISABLED` are set as intended.
 - Confirm OpenAPI and frontend assets correspond to the deployed backend version.
 
@@ -24,11 +24,11 @@ Status: operator instructions for the future PMS 21 production switch. This does
 
 ## Dry-Run And Audit Steps
 
-Run the read-only PMS 21 dry-run/audit command against a production backup or production database opened in a safe read-only operational mode:
+Run the read-only PMS 21 dry-run/audit command against a verified, quiesced production backup. The CLI opens the backup with SQLite immutable read-only mode, so never point it at a database file that can still change:
 
 ```bash
 cd backend
-go run ./cmd/pms21-migration --db /absolute/path/to/production-or-backup.db --dry-run --sample-limit 25 > ../docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md
+go run ./cmd/pms21-migration --db /absolute/path/to/verified-production-backup.db --dry-run --sample-limit 25 > ../docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.json
 ```
 
 Review the saved artifact for:
@@ -39,24 +39,24 @@ Review the saved artifact for:
 - Unmapped Nuki, cleaning, finance, invoice, message, dashboard, or export dependencies.
 - Destructive-cleanup blockers.
 
-Stop if severe conflict counts are non-zero and no owner-approved override exists. Do not fabricate the production audit artifact.
+Write reviewed notes to `docs/audits/PMS_21_production_data_audit_YYYY-MM-DD.md`, referencing the raw JSON. Stop if `named_stay_overlap_pairs` is non-zero. No override exists for severe overlaps. Do not fabricate either artifact.
 
 ## Apply Steps
 
-Current command state: Stage 2 apply is not implemented. Stop here until an explicit apply command exists, idempotency tests pass, and the owner approves production execution.
-
-Required future command shape before use:
+Run apply only after the reviewed production dry run is approved:
 
 ```bash
 cd backend
-go run ./cmd/pms21-migration --db /absolute/path/to/production.db --apply --confirm-apply --sample-limit 25 > ../docs/audits/PMS_21_production_apply_YYYY-MM-DD.md
+go run ./cmd/pms21-migration --db /absolute/path/to/production.db --apply --confirm-apply --sample-limit 25 --allow-review-required > ../docs/audits/PMS_21_production_apply_YYYY-MM-DD.json
 ```
 
-Required future apply checks:
+`--apply` requires an explicit absolute `--db` path and will not accept `DATABASE_PATH`. Omit `--allow-review-required` only if the dry run has zero review-required candidates. When supplied, those candidates are created as `needs_review`, never silently confirmed.
+
+Apply checks:
 
 - Run additive database migrations required by the new binary before apply.
 - Save the apply output artifact with created, updated, skipped, conflict, and review-required counts.
-- Run apply a second time or run an idempotency check; the second run must report no duplicate creation and no unintended business-data mutation.
+- Run the same apply command a second time, saving `PMS_21_production_apply_idempotency_YYYY-MM-DD.json`; created and updated-link counts must be zero and no business data may change.
 - Stop if Nuki PINs, external Nuki IDs, invoices, finance links, Google event IDs, or message history would be lost.
 
 ## Deployment Steps

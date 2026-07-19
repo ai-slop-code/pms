@@ -983,7 +983,9 @@ func (s *Server) getDashboardSummary(w http.ResponseWriter, r *http.Request) {
 					summary = nullStringPtr(row.RawSummary)
 				}
 				out = append(out, dashboardActiveNukiCodeRow{
-					OccupancyID:   row.OccupancyID,
+					NukiCodeID:    row.GeneratedCodeID.Int64,
+					StayID:        row.StayID,
+					OccupancyID:   nullInt64Ptr(row.OccupancyID),
 					Summary:       summary,
 					CodeLabel:     nullStringPtr(row.GeneratedLabel),
 					CodeMasked:    nullStringPtr(row.GeneratedMasked),

@@ -211,7 +211,7 @@ func TestDashboardSummary_IncludesOnlyAuthorizedWidgets(t *testing.T) {
 	}
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:        prop.ID,
-		OccupancyID:       occ.ID,
+		OccupancyID:       sql.NullInt64{Int64: occ.ID, Valid: true},
 		NamedStayID:       sql.NullInt64{Int64: stayID, Valid: true},
 		CodeLabel:         "booking-guest-one",
 		AccessCodeMasked:  sql.NullString{String: "12**", Valid: true},

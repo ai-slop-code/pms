@@ -155,6 +155,7 @@ type OccupancyLite struct {
 	GuestName              string
 	ClosureState           string // "", "closed", or "external_sale"
 	ExternalNetAmountCents int64  // populated when ClosureState == "external_sale"
+	NightDates             []string
 }
 
 func (s *Store) propertyLocation(ctx context.Context, propertyID int64) *time.Location {
@@ -196,14 +197,23 @@ func (s *Store) ListActiveOccupanciesInDateRange(ctx context.Context, propertyID
 	fromDate, toDate := dateRangeParams(fromUTC, toUTC, loc)
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT ns.id, ns.check_in_date, ns.check_out_date, ns.status, ns.created_at,
-		       ns.display_name, ns.stay_type, COALESCE(ns.manual_revenue_cents, 0)
+		       ns.display_name, ns.stay_type, COALESCE(ns.manual_revenue_cents, 0),
+		       GROUP_CONCAT(DISTINCT nsn.local_night_date)
 		FROM named_stays ns
+		JOIN named_stay_nights nsn ON nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id
+		  AND nsn.active = 1
 		WHERE ns.property_id = ?
 		  AND ns.status = 'active'
 		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
 		  AND COALESCE(ns.stay_outcome, '') = ''
-		  AND ns.check_in_date < ?
-		  AND ns.check_out_date > ?
+		  AND EXISTS (
+		    SELECT 1 FROM named_stay_nights overlap_nsn
+		    WHERE overlap_nsn.named_stay_id = ns.id
+		      AND overlap_nsn.property_id = ns.property_id
+		      AND overlap_nsn.active = 1
+		      AND overlap_nsn.local_night_date >= ?
+		      AND overlap_nsn.local_night_date < ?
+		  )
 		  AND (
 		    ns.stay_type = 'booking_com'
 		    OR (
@@ -214,8 +224,9 @@ func (s *Store) ListActiveOccupanciesInDateRange(ctx context.Context, propertyID
 		      )
 		    )
 		  )
+		GROUP BY ns.id
 		ORDER BY ns.check_in_date ASC, ns.id ASC`,
-		propertyID, toDate, fromDate)
+		propertyID, fromDate, toDate)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +235,8 @@ func (s *Store) ListActiveOccupanciesInDateRange(ctx context.Context, propertyID
 	for rows.Next() {
 		var o OccupancyLite
 		var start, end, imported, stayType string
-		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName, &o.ClosureState, &o.ExternalNetAmountCents); err != nil {
+		var nights string
+		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName, &o.ClosureState, &o.ExternalNetAmountCents, &nights); err != nil {
 			return nil, err
 		}
 		stayType = o.ClosureState
@@ -235,6 +247,7 @@ func (s *Store) ListActiveOccupanciesInDateRange(ctx context.Context, propertyID
 		o.StartAt = parsePropertyDate(start, loc)
 		o.EndAt = parsePropertyDate(end, loc)
 		o.ImportedAt, _ = time.Parse(time.RFC3339, imported)
+		o.NightDates = splitNightDates(nights)
 		out = append(out, o)
 	}
 	return out, rows.Err()
@@ -281,20 +294,7 @@ func NightsSoldInRange(stays []OccupancyLite, fromDate, toDate time.Time) int {
 	}
 	count := 0
 	for _, st := range stays {
-		sd := toDateStart(st.StartAt, fromDate.Location())
-		ed := toDateStart(st.EndAt, fromDate.Location())
-		// Intersection with [fromDate, toDate)
-		lo := sd
-		if lo.Before(fromDate) {
-			lo = fromDate
-		}
-		hi := ed
-		if hi.After(toDate) {
-			hi = toDate
-		}
-		if hi.After(lo) {
-			count += int(hi.Sub(lo).Hours()/24 + 0.5)
-		}
+		count += len(occupancyNightDatesInRange(st, fromDate, toDate))
 	}
 	return count
 }
@@ -302,6 +302,47 @@ func NightsSoldInRange(stays []OccupancyLite, fromDate, toDate time.Time) int {
 func toDateStart(t time.Time, loc *time.Location) time.Time {
 	tl := t.In(loc)
 	return time.Date(tl.Year(), tl.Month(), tl.Day(), 0, 0, 0, 0, loc)
+}
+
+func splitNightDates(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return []string{}
+	}
+	return strings.Split(value, ",")
+}
+
+func occupancyNightDatesInRange(st OccupancyLite, fromDate, toDate time.Time) []time.Time {
+	loc := fromDate.Location()
+	if st.NightDates != nil {
+		out := make([]time.Time, 0, len(st.NightDates))
+		for _, value := range st.NightDates {
+			night := parsePropertyDate(value, loc)
+			if !night.Before(fromDate) && night.Before(toDate) {
+				out = append(out, night)
+			}
+		}
+		return out
+	}
+	start := toDateStart(st.StartAt, loc)
+	end := toDateStart(st.EndAt, loc)
+	if start.Before(fromDate) {
+		start = fromDate
+	}
+	if end.After(toDate) {
+		end = toDate
+	}
+	var out []time.Time
+	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
+		out = append(out, day)
+	}
+	return out
+}
+
+func occupancyNightCount(st OccupancyLite, loc *time.Location) int {
+	if st.NightDates != nil {
+		return len(st.NightDates)
+	}
+	return int(toDateStart(st.EndAt, loc).Sub(toDateStart(st.StartAt, loc)).Hours()/24 + 0.5)
 }
 
 // AvailableNightsInRange returns the raw number of calendar nights in
@@ -342,19 +383,7 @@ func ClosedNightsInRange(closedStays []OccupancyLite, fromDate, toDate time.Time
 		if st.ClosureState != "closed" {
 			continue
 		}
-		sd := toDateStart(st.StartAt, fromDate.Location())
-		ed := toDateStart(st.EndAt, fromDate.Location())
-		lo := sd
-		if lo.Before(fromDate) {
-			lo = fromDate
-		}
-		hi := ed
-		if hi.After(toDate) {
-			hi = toDate
-		}
-		if hi.After(lo) {
-			count += int(hi.Sub(lo).Hours()/24 + 0.5)
-		}
+		count += len(occupancyNightDatesInRange(st, fromDate, toDate))
 	}
 	return count
 }
@@ -372,24 +401,14 @@ func ExternalSaleRevenueCentsInRange(stays []OccupancyLite, fromDate, toDate tim
 		if st.ClosureState != "external_sale" || st.ExternalNetAmountCents == 0 {
 			continue
 		}
-		sd := toDateStart(st.StartAt, fromDate.Location())
-		ed := toDateStart(st.EndAt, fromDate.Location())
-		stayNights := int(ed.Sub(sd).Hours()/24 + 0.5)
+		stayNights := occupancyNightCount(st, fromDate.Location())
 		if stayNights <= 0 {
 			continue
 		}
-		lo := sd
-		if lo.Before(fromDate) {
-			lo = fromDate
-		}
-		hi := ed
-		if hi.After(toDate) {
-			hi = toDate
-		}
-		if !hi.After(lo) {
+		overlap := len(occupancyNightDatesInRange(st, fromDate, toDate))
+		if overlap == 0 {
 			continue
 		}
-		overlap := int(hi.Sub(lo).Hours()/24 + 0.5)
 		total += st.ExternalNetAmountCents * int64(overlap) / int64(stayNights)
 	}
 	return total
@@ -409,12 +428,12 @@ func (s *Store) ListClosedOccupanciesInDateRange(ctx context.Context, propertyID
 
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT ns.id, ns.check_in_date, ns.check_out_date, ns.status, ns.created_at,
-		       ns.display_name
+		       ns.display_name, GROUP_CONCAT(DISTINCT nsn.local_night_date)
 		FROM named_stays ns
+		JOIN named_stay_nights nsn ON nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id
+		  AND nsn.active = 1 AND nsn.local_night_date >= ? AND nsn.local_night_date < ?
 		WHERE ns.property_id = ?
 		  AND ns.status = 'active'
-		  AND ns.check_in_date < ?
-		  AND ns.check_out_date > ?
 		  AND (
 		    COALESCE(ns.review_status, 'confirmed') != 'confirmed'
 		    OR ns.stay_type IN ('maintenance', 'personal_use')
@@ -424,7 +443,8 @@ func (s *Store) ListClosedOccupanciesInDateRange(ctx context.Context, propertyID
 		      AND NOT EXISTS (SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id)
 		    )
 		  )
-		ORDER BY ns.check_in_date ASC, ns.id ASC`, propertyID, toDate, fromDate)
+		GROUP BY ns.id
+		ORDER BY ns.check_in_date ASC, ns.id ASC`, fromDate, toDate, propertyID)
 	if err != nil {
 		return nil, err
 	}
@@ -432,12 +452,14 @@ func (s *Store) ListClosedOccupanciesInDateRange(ctx context.Context, propertyID
 	for rows.Next() {
 		var o OccupancyLite
 		var start, end, imported string
-		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName); err != nil {
+		var nights string
+		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName, &nights); err != nil {
 			return nil, err
 		}
 		o.StartAt = parsePropertyDate(start, loc)
 		o.EndAt = parsePropertyDate(end, loc)
 		o.ImportedAt, _ = time.Parse(time.RFC3339, imported)
+		o.NightDates = splitNightDates(nights)
 		o.ClosureState = "closed"
 		out = append(out, o)
 	}
@@ -548,16 +570,19 @@ func (s *Store) SumPayoutGrossNetForStays(ctx context.Context, propertyID int64,
 		return s.legacySumPayoutGrossNetForStays(ctx, propertyID, fromDate, toDate)
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT named_stay_id,
+		SELECT fb.named_stay_id,
 			COALESCE(amount_cents, 0), COALESCE(commission_cents, 0),
 			COALESCE(payment_service_fee_cents, 0), COALESCE(net_cents, 0)
-		FROM finance_bookings
-		WHERE property_id = ?
-		  AND named_stay_id IS NOT NULL
-		  AND check_in_date IS NOT NULL
-		  AND check_in_date >= ?
-		  AND check_in_date < ?
-		  AND (reservation_status IS NULL OR reservation_status NOT IN ('cancelled_by_guest','cancelled_by_partner'))`,
+		FROM finance_bookings fb
+		JOIN named_stays ns ON ns.id = fb.named_stay_id AND ns.property_id = fb.property_id
+		WHERE fb.property_id = ?
+		  AND fb.named_stay_id IS NOT NULL
+		  AND fb.check_in_date IS NOT NULL
+		  AND fb.check_in_date >= ?
+		  AND fb.check_in_date < ?
+		  AND ns.status = 'active' AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
+		  AND EXISTS (SELECT 1 FROM named_stay_nights nsn WHERE nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id AND nsn.active = 1)
+		  AND (fb.reservation_status IS NULL OR fb.reservation_status NOT IN ('cancelled_by_guest','cancelled_by_partner'))`,
 		propertyID, fromDate.Format("2006-01-02"), toDate.Format("2006-01-02"))
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
@@ -593,6 +618,7 @@ func (s *Store) SumPayoutGrossNetForStays(ctx context.Context, propertyID int64,
 		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
 		  AND ns.stay_type = 'external'
 		  AND ns.manual_revenue_cents IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM named_stay_nights nsn WHERE nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id AND nsn.active = 1)
 		  AND ns.check_in_date >= ?
 		  AND ns.check_in_date < ?
 		  AND NOT EXISTS (SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id)`,
@@ -672,7 +698,7 @@ func (s *Store) TrailingADR(ctx context.Context, propertyID int64, asOf time.Tim
 	}
 	totalNights := 0
 	for _, st := range stays {
-		nights := int(toDateStart(st.EndAt, time.UTC).Sub(toDateStart(st.StartAt, time.UTC)).Hours()/24 + 0.5)
+		nights := occupancyNightCount(st, time.UTC)
 		if nights > 0 {
 			totalNights += nights
 		}
@@ -697,9 +723,12 @@ func (s *Store) listOccupanciesByIDs(ctx context.Context, propertyID int64, ids 
 		placeholders[i] = "?"
 		args = append(args, id)
 	}
-	q := fmt.Sprintf(`SELECT id, check_in_date, check_out_date, status, created_at, display_name
-		FROM named_stays
-		WHERE property_id = ? AND id IN (%s)`, strings.Join(placeholders, ","))
+	q := fmt.Sprintf(`SELECT ns.id, ns.check_in_date, ns.check_out_date, ns.status, ns.created_at, ns.display_name,
+		GROUP_CONCAT(DISTINCT nsn.local_night_date)
+		FROM named_stays ns
+		JOIN named_stay_nights nsn ON nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id AND nsn.active = 1
+		WHERE ns.property_id = ? AND ns.id IN (%s)
+		GROUP BY ns.id`, strings.Join(placeholders, ","))
 	rows, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -709,12 +738,14 @@ func (s *Store) listOccupanciesByIDs(ctx context.Context, propertyID int64, ids 
 	for rows.Next() {
 		var o OccupancyLite
 		var start, end, imported string
-		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName); err != nil {
+		var nights string
+		if err := rows.Scan(&o.ID, &start, &end, &o.Status, &imported, &o.GuestName, &nights); err != nil {
 			return nil, err
 		}
 		o.StartAt = parsePropertyDate(start, loc)
 		o.EndAt = parsePropertyDate(end, loc)
 		o.ImportedAt, _ = time.Parse(time.RFC3339, imported)
+		o.NightDates = splitNightDates(nights)
 		out = append(out, o)
 	}
 	return out, rows.Err()
@@ -764,12 +795,9 @@ func (s *Store) ListUnsoldNightsWithContext(ctx context.Context, propertyID int6
 	if err != nil {
 		return nil, err
 	}
-	loc := fromDate.Location()
 	booked := map[string]int64{}
 	for _, st := range stays {
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, fromDate.AddDate(0, 0, -30), toDate.AddDate(0, 0, 30)) {
 			booked[d.Format("2006-01-02")] = st.ID
 		}
 	}
@@ -841,6 +869,7 @@ func (s *Store) NewBookingsByDay(ctx context.Context, propertyID int64, sinceUTC
 		  AND status = 'active'
 		  AND COALESCE(review_status, 'confirmed') = 'confirmed'
 		  AND stay_type IN ('booking_com', 'external')
+		  AND EXISTS (SELECT 1 FROM named_stay_nights nsn WHERE nsn.named_stay_id = named_stays.id AND nsn.property_id = named_stays.property_id AND nsn.active = 1)
 		GROUP BY d
 		ORDER BY d ASC`, propertyID, sinceUTC.Format(time.RFC3339))
 	if err != nil {
@@ -866,12 +895,9 @@ func (s *Store) PaceSeriesCumulative(ctx context.Context, propertyID int64, from
 	if err != nil {
 		return nil, err
 	}
-	loc := fromDate.Location()
 	byDay := map[string]int{}
 	for _, st := range stays {
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, fromDate, toDate) {
 			if d.Before(fromDate) || !d.Before(toDate) {
 				continue
 			}
@@ -950,9 +976,7 @@ func (s *Store) ListMonthlyOccupancyAndADR(ctx context.Context, propertyID int64
 		a.availableNights = BookableNightsInRange(closedStays, cursor, monthEnd)
 	}
 	for _, st := range stays {
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, start, end) {
 			if d.Before(start) || !d.Before(end) {
 				continue
 			}
@@ -964,15 +988,18 @@ func (s *Store) ListMonthlyOccupancyAndADR(ctx context.Context, propertyID int64
 
 	// Revenue — cohort by arrival date (check_in_date on payout/stay).
 	payoutRows, err := s.DB.QueryContext(ctx, `
-		SELECT named_stay_id, substr(check_in_date, 1, 7) AS m,
-			COALESCE(amount_cents, 0), COALESCE(commission_cents, 0),
-			COALESCE(payment_service_fee_cents, 0), COALESCE(net_cents, 0)
-		FROM finance_bookings
-		WHERE property_id = ?
-		  AND named_stay_id IS NOT NULL
-		  AND check_in_date IS NOT NULL
-		  AND check_in_date >= ?
-		  AND check_in_date < ?`,
+		SELECT fb.named_stay_id, substr(fb.check_in_date, 1, 7) AS m,
+			COALESCE(fb.amount_cents, 0), COALESCE(fb.commission_cents, 0),
+			COALESCE(fb.payment_service_fee_cents, 0), COALESCE(fb.net_cents, 0)
+		FROM finance_bookings fb
+		JOIN named_stays ns ON ns.id = fb.named_stay_id AND ns.property_id = fb.property_id
+		WHERE fb.property_id = ?
+		  AND fb.named_stay_id IS NOT NULL
+		  AND fb.check_in_date IS NOT NULL
+		  AND fb.check_in_date >= ?
+		  AND fb.check_in_date < ?
+		  AND ns.status = 'active' AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
+		  AND EXISTS (SELECT 1 FROM named_stay_nights nsn WHERE nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id AND nsn.active = 1)`,
 		propertyID, start.Format("2006-01-02"), end.Format("2006-01-02"))
 	if err != nil {
 		return nil, err
@@ -1003,6 +1030,7 @@ func (s *Store) ListMonthlyOccupancyAndADR(ctx context.Context, propertyID int64
 		  AND COALESCE(review_status, 'confirmed') = 'confirmed'
 		  AND stay_type = 'external'
 		  AND manual_revenue_cents IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM named_stay_nights nsn WHERE nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id AND nsn.active = 1)
 		  AND check_in_date >= ? AND check_in_date < ?
 		  AND NOT EXISTS (SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id)`,
 		propertyID, start.Format("2006-01-02"), end.Format("2006-01-02"))
@@ -1028,9 +1056,7 @@ func (s *Store) ListMonthlyOccupancyAndADR(ctx context.Context, propertyID int64
 			continue
 		}
 		_ = m
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, start, end) {
 			if d.Before(start) || !d.Before(end) {
 				continue
 			}
@@ -1078,9 +1104,7 @@ func (s *Store) ListWeeklyOccupancy(ctx context.Context, propertyID int64, fromY
 	// Per-day flag: true when the day falls inside a closed stay.
 	closedDay := map[string]bool{}
 	for _, st := range closedStays {
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, start, end) {
 			if d.Before(start) || !d.Before(end) {
 				continue
 			}
@@ -1098,9 +1122,7 @@ func (s *Store) ListWeeklyOccupancy(ctx context.Context, propertyID int64, fromY
 		avail[cellKey(y, w)]++
 	}
 	for _, st := range stays {
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, start, end) {
 			if d.Before(start) || !d.Before(end) {
 				continue
 			}
@@ -1137,13 +1159,10 @@ func (s *Store) ListDOWOccupancy(ctx context.Context, propertyID int64, fromDate
 	if err != nil {
 		return nil, err
 	}
-	loc := fromDate.Location()
 	// Per-day flag: true when the day falls inside a closed stay.
 	closedDay := map[string]bool{}
 	for _, st := range closedStays {
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, fromDate, toDate) {
 			if d.Before(fromDate) || !d.Before(toDate) {
 				continue
 			}
@@ -1159,9 +1178,7 @@ func (s *Store) ListDOWOccupancy(ctx context.Context, propertyID int64, fromDate
 		avail[int(d.Weekday())]++
 	}
 	for _, st := range stays {
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, fromDate, toDate) {
 			if d.Before(fromDate) || !d.Before(toDate) {
 				continue
 			}
@@ -1316,6 +1333,7 @@ func (s *Store) ListNetPerStay(ctx context.Context, propertyID int64, fromDate, 
 		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
 		  AND ns.stay_type = 'external'
 		  AND ns.manual_revenue_cents IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM named_stay_nights nsn WHERE nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id AND nsn.active = 1)
 		  AND NOT EXISTS (SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id)`, propertyID)
 	if err != nil {
 		return nil, err
@@ -1475,7 +1493,7 @@ func (s *Store) ListLengthOfStayBuckets(ctx context.Context, propertyID int64, f
 	}
 	m := map[string]int{}
 	for _, st := range stays {
-		nights := int(toDateStart(st.EndAt, time.UTC).Sub(toDateStart(st.StartAt, time.UTC)).Hours()/24 + 0.5)
+		nights := occupancyNightCount(st, time.UTC)
 		if nights < 1 {
 			continue
 		}
@@ -1501,11 +1519,15 @@ func (s *Store) ADRByDimension(ctx context.Context, propertyID int64, fromDate, 
 	}
 	// Load confirmed payouts with linked stay IDs.
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT named_stay_id, check_in_date, COALESCE(amount_cents, 0)
-		FROM finance_bookings
-		WHERE property_id = ? AND named_stay_id IS NOT NULL
-		  AND check_in_date IS NOT NULL
-		  AND check_in_date >= ? AND check_in_date < ?`,
+		SELECT fb.named_stay_id, fb.check_in_date, COALESCE(fb.amount_cents, 0)
+		FROM finance_bookings fb
+		JOIN named_stays ns ON ns.id = fb.named_stay_id AND ns.property_id = fb.property_id
+		WHERE fb.property_id = ? AND fb.named_stay_id IS NOT NULL
+		  AND fb.check_in_date IS NOT NULL
+		  AND fb.check_in_date >= ? AND fb.check_in_date < ?
+		  AND ns.status = 'active'
+		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
+		  AND EXISTS (SELECT 1 FROM named_stay_nights nsn WHERE nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id AND nsn.active = 1)`,
 		propertyID, fromDate.Format("2006-01-02"), toDate.Format("2006-01-02"))
 	if err != nil {
 		return nil, err
@@ -1534,6 +1556,7 @@ func (s *Store) ADRByDimension(ctx context.Context, propertyID int64, fromDate, 
 		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
 		  AND ns.stay_type = 'external'
 		  AND ns.manual_revenue_cents IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM named_stay_nights nsn WHERE nsn.named_stay_id = ns.id AND nsn.property_id = ns.property_id AND nsn.active = 1)
 		  AND ns.check_in_date >= ? AND ns.check_in_date < ?
 		  AND NOT EXISTS (SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id)`,
 		propertyID, fromDate.Format("2006-01-02"), toDate.Format("2006-01-02"))
@@ -1569,7 +1592,7 @@ func (s *Store) ADRByDimension(ctx context.Context, propertyID int64, fromDate, 
 		return v
 	}
 	for _, st := range stays {
-		nights := int(toDateStart(st.EndAt, loc).Sub(toDateStart(st.StartAt, loc)).Hours()/24 + 0.5)
+		nights := occupancyNightCount(st, loc)
 		if nights < 1 {
 			continue
 		}
@@ -1582,7 +1605,7 @@ func (s *Store) ADRByDimension(ctx context.Context, propertyID int64, fromDate, 
 			r.MatchedNights += nights
 		case "dow":
 			// Spread the gross proportionally across weekday nights.
-			for d := toDateStart(st.StartAt, loc); d.Before(toDateStart(st.EndAt, loc)); d = d.AddDate(0, 0, 1) {
+			for _, d := range occupancyNightDatesInRange(st, time.Date(1, 1, 1, 0, 0, 0, 0, loc), time.Date(9999, 1, 1, 0, 0, 0, 0, loc)) {
 				k := fmt.Sprintf("%d", int(d.Weekday()))
 				r := get(k)
 				r.GrossCents += gross / int64(nights)
@@ -1624,28 +1647,30 @@ func (s *Store) ListGapNights(ctx context.Context, propertyID int64, fromDate, t
 	if err != nil {
 		return nil, err
 	}
-	loc := fromDate.Location()
-	sort.Slice(stays, func(i, j int) bool { return stays[i].StartAt.Before(stays[j].StartAt) })
-	var out []GapNightRow
-	for i := 0; i < len(stays)-1; i++ {
-		a := stays[i]
-		b := stays[i+1]
-		aEnd := toDateStart(a.EndAt, loc)
-		bStart := toDateStart(b.StartAt, loc)
-		diff := int(bStart.Sub(aEnd).Hours()/24 + 0.5)
-		if diff != 1 {
-			continue // zero-gap or multi-night gap — not a single gap night
+	occupied := map[string]int64{}
+	for _, stay := range stays {
+		for _, night := range occupancyNightDatesInRange(stay, fromDate.AddDate(0, 0, -30), toDate.AddDate(0, 0, 30)) {
+			occupied[night.Format("2006-01-02")] = stay.ID
 		}
-		d := aEnd
-		if d.Before(fromDate) || !d.Before(toDate) {
+	}
+	var out []GapNightRow
+	for day := fromDate; day.Before(toDate); day = day.AddDate(0, 0, 1) {
+		if _, booked := occupied[day.Format("2006-01-02")]; booked {
+			continue
+		}
+		prevDay := day.AddDate(0, 0, -1)
+		nextDay := day.AddDate(0, 0, 1)
+		prevID, prevOK := occupied[prevDay.Format("2006-01-02")]
+		nextID, nextOK := occupied[nextDay.Format("2006-01-02")]
+		if !prevOK || !nextOK {
 			continue
 		}
 		out = append(out, GapNightRow{
-			Date:             d.Format("2006-01-02"),
-			PrevStayID:       a.ID,
-			NextStayID:       b.ID,
-			PrevCheckoutDate: aEnd.Format("2006-01-02"),
-			NextCheckinDate:  bStart.Format("2006-01-02"),
+			Date:             day.Format("2006-01-02"),
+			PrevStayID:       prevID,
+			NextStayID:       nextID,
+			PrevCheckoutDate: day.Format("2006-01-02"),
+			NextCheckinDate:  nextDay.Format("2006-01-02"),
 		})
 	}
 	return out, nil
@@ -1658,12 +1683,9 @@ func (s *Store) ListOrphanMidweek(ctx context.Context, propertyID int64, fromDat
 	if err != nil {
 		return nil, err
 	}
-	loc := fromDate.Location()
 	occupied := map[string]int64{}
 	for _, st := range stays {
-		sd := toDateStart(st.StartAt, loc)
-		ed := toDateStart(st.EndAt, loc)
-		for d := sd; d.Before(ed); d = d.AddDate(0, 0, 1) {
+		for _, d := range occupancyNightDatesInRange(st, fromDate.AddDate(0, 0, -7), toDate.AddDate(0, 0, 7)) {
 			occupied[d.Format("2006-01-02")] = st.ID
 		}
 	}

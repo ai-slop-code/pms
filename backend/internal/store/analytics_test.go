@@ -250,6 +250,102 @@ func TestAnalyticsStage9_NamedStaySemanticsExcludeRawAndUnfundedExternal(t *test
 	}
 }
 
+func TestAnalyticsUsesNamedStayNightsWhenStayRangeDiverges(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := seedAnalyticsProperty(t, st)
+	ctx := context.Background()
+	soldID := insertNamedStayForAnalytics(t, st, pid, "Diverged Booking", StayTypeBookingCom, "2026-08-01", "2026-08-04", nil, "confirmed")
+	closedID := insertNamedStayForAnalytics(t, st, pid, "Diverged Maintenance", StayTypeMaintenance, "2026-08-05", "2026-08-08", nil, "confirmed")
+	if _, err := st.DB.ExecContext(ctx, `DELETE FROM named_stay_nights WHERE named_stay_id = ? AND local_night_date = '2026-08-02'`, soldID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `DELETE FROM named_stay_nights WHERE named_stay_id = ? AND local_night_date = '2026-08-06'`, closedID); err != nil {
+		t.Fatal(err)
+	}
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
+	stays, err := st.ListActiveOccupanciesInDateRange(ctx, pid, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := NightsSoldInRange(stays, from, to); got != 2 {
+		t.Fatalf("sold nights=%d want 2 active night rows", got)
+	}
+	closed, err := st.ListClosedOccupanciesInDateRange(ctx, pid, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ClosedNightsInRange(closed, from, to); got != 2 {
+		t.Fatalf("closed nights=%d want 2 active night rows", got)
+	}
+}
+
+func TestAnalyticsBoundaryCrossingStayUsesCompleteNightSet(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := seedAnalyticsProperty(t, st)
+	ctx := context.Background()
+	revenue := int64(12000)
+	insertNamedStayForAnalytics(t, st, pid, "Boundary External", StayTypeExternal, "2026-07-30", "2026-08-03", &revenue, "confirmed")
+
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	stays, err := st.ListActiveOccupanciesInDateRange(ctx, pid, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stays) != 1 || len(stays[0].NightDates) != 4 {
+		t.Fatalf("stays=%+v want one stay with all 4 active nights", stays)
+	}
+	if got := NightsSoldInRange(stays, from, to); got != 2 {
+		t.Fatalf("sold nights=%d want 2 report-range nights", got)
+	}
+	if got := ExternalSaleRevenueCentsInRange(stays, from, to); got != 6000 {
+		t.Fatalf("partial-range external revenue=%d want 6000", got)
+	}
+
+	buckets, err := st.ListLengthOfStayBuckets(ctx, pid, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, bucket := range buckets {
+		counts[bucket.Bucket] = bucket.Count
+	}
+	if counts["4-5"] != 1 || counts["2"] != 0 {
+		t.Fatalf("length buckets=%v want boundary stay in 4-5", counts)
+	}
+}
+
+func TestADRByDimension_ExcludesNeedsReviewAndUsesNamedStayNights(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := seedAnalyticsProperty(t, st)
+	ctx := context.Background()
+
+	confirmedID := insertNamedStayForAnalytics(t, st, pid, "Confirmed Booking", StayTypeBookingCom, "2026-09-01", "2026-09-04", nil, "confirmed")
+	reviewID := insertNamedStayForAnalytics(t, st, pid, "Review Booking", StayTypeBookingCom, "2026-09-05", "2026-09-09", nil, "needs_review")
+	if _, err := st.DB.ExecContext(ctx, `DELETE FROM named_stay_nights WHERE named_stay_id = ? AND local_night_date = '2026-09-02'`, confirmedID); err != nil {
+		t.Fatal(err)
+	}
+	insertPayout(t, st, pid, "ADR-CONFIRMED", nil, "2026-09-01", "2026-09-10", 30000, 0, 0, 30000)
+	insertPayout(t, st, pid, "ADR-REVIEW", nil, "2026-09-05", "2026-09-10", 90000, 0, 0, 90000)
+	if _, err := st.DB.ExecContext(ctx, `UPDATE finance_bookings SET named_stay_id = ? WHERE property_id = ? AND reference_number = 'ADR-CONFIRMED'`, confirmedID, pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `UPDATE finance_bookings SET named_stay_id = ? WHERE property_id = ? AND reference_number = 'ADR-REVIEW'`, reviewID, pid); err != nil {
+		t.Fatal(err)
+	}
+
+	from := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	rows, err := st.ADRByDimension(ctx, pid, from, to, "month", time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Bucket != "2026-09" || rows[0].GrossCents != 30000 || rows[0].MatchedNights != 2 {
+		t.Fatalf("ADR rows=%+v want only confirmed revenue and its 2 active named-stay nights", rows)
+	}
+}
+
 func TestTrailingADR_ReturnsZeroBelowMinimumMatchedNights(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := seedAnalyticsProperty(t, st)
