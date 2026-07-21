@@ -1,0 +1,292 @@
+{
+  "mode": "dry_run",
+  "apply_implemented": true,
+  "allow_review_required": false,
+  "would_create": {
+    "raw_booking_blocks": 216,
+    "raw_booking_block_nights": 3,
+    "named_stays": 211,
+    "named_stay_nights": 197,
+    "stay_source_links": 50,
+    "property_availability_blocks": 1,
+    "occupancy_stay_migration_map": 418,
+    "auto_confirmed_named_stays": 161,
+    "review_required_named_stays": 50
+  },
+  "would_backfill_links": {
+    "nuki_access_codes_named_stay_id": 50,
+    "nuki_guest_daily_entries_named_stay_id": 37,
+    "cleaning_events_named_stay_id": 35,
+    "cleaning_events_raw_booking_block_id": 33,
+    "finance_bookings_named_stay_id": 207,
+    "invoices_named_stay_id": 0
+  },
+  "applied": {
+    "created": {
+      "raw_booking_blocks": 0,
+      "raw_booking_block_nights": 0,
+      "named_stays": 0,
+      "named_stay_nights": 0,
+      "stay_source_links": 0,
+      "property_availability_blocks": 0,
+      "occupancy_stay_migration_map": 0,
+      "auto_confirmed_named_stays": 0,
+      "review_required_named_stays": 0
+    },
+    "updated_links": {
+      "nuki_access_codes_named_stay_id": 0,
+      "nuki_guest_daily_entries_named_stay_id": 0,
+      "cleaning_events_named_stay_id": 0,
+      "cleaning_events_raw_booking_block_id": 0,
+      "finance_bookings_named_stay_id": 0,
+      "invoices_named_stay_id": 0
+    },
+    "skipped": {
+      "raw_booking_blocks": 0,
+      "raw_booking_block_nights": 0,
+      "named_stays": 0,
+      "named_stay_nights": 0,
+      "stay_source_links": 0,
+      "property_availability_blocks": 0,
+      "occupancy_stay_migration_map": 0,
+      "auto_confirmed_named_stays": 0,
+      "review_required_named_stays": 0
+    }
+  },
+  "conflicts": {
+    "named_stay_overlap_pairs": 0,
+    "existing_named_stay_night_collisions": 0,
+    "named_stay_availability_overlaps": 0,
+    "raw_block_overlap_pairs": 0,
+    "external_sale_rows": 1,
+    "active_closed_rows": 0
+  },
+  "unmapped": {
+    "finance_bookings_unmatched": 32,
+    "nuki_codes_without_named_like_occupancy": 0,
+    "cleaning_events_without_mapping_candidate": 8,
+    "invoices_without_named_like_occupancy": 0
+  },
+  "review_required": {
+    "finance_synthetic_named_stays": 129,
+    "finance_bookings_needs_review": 0,
+    "legacy_generated_night_rows": 201,
+    "non_reservation_named_stays": 50
+  },
+  "existing_new_model_rows": {
+    "raw_booking_blocks": 7,
+    "raw_booking_block_nights": 23,
+    "named_stays": 0,
+    "named_stay_nights": 0,
+    "stay_source_links": 0,
+    "property_availability_blocks": 0,
+    "occupancy_stay_migration_map": 0
+  },
+  "samples": {
+    "named_stay_overlaps": null,
+    "raw_block_overlaps": null,
+    "unmatched_finance_bookings": [
+      {
+        "property_id": 1,
+        "id": 247,
+        "start": "2025-04-04",
+        "end": "2025-04-05",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 248,
+        "start": "2025-04-28",
+        "end": "2025-04-29",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 249,
+        "start": "2025-05-21",
+        "end": "2025-05-22",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 250,
+        "start": "2025-06-02",
+        "end": "2025-06-03",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 251,
+        "start": "2025-06-24",
+        "end": "2025-06-25",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 252,
+        "start": "2025-06-30",
+        "end": "2025-07-01",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 253,
+        "start": "2025-06-30",
+        "end": "2025-07-01",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 254,
+        "start": "2025-07-09",
+        "end": "2025-07-10",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 255,
+        "start": "2025-07-17",
+        "end": "2025-07-18",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 256,
+        "start": "2025-07-17",
+        "end": "2025-07-20",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 257,
+        "start": "2025-07-18",
+        "end": "2025-07-20",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 258,
+        "start": "2025-07-19",
+        "end": "2025-07-20",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 259,
+        "start": "2025-07-21",
+        "end": "2025-07-24",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 260,
+        "start": "2025-08-11",
+        "end": "2025-08-12",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 261,
+        "start": "2025-09-01",
+        "end": "2025-09-02",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 262,
+        "start": "2025-11-15",
+        "end": "2025-11-16",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 263,
+        "start": "2025-12-06",
+        "end": "2025-12-07",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 264,
+        "start": "2025-12-15",
+        "end": "2025-12-16",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 265,
+        "start": "2025-12-16",
+        "end": "2025-12-17",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 270,
+        "start": "2026-01-08",
+        "end": "2026-01-09",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 271,
+        "start": "2026-01-09",
+        "end": "2026-01-10",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 275,
+        "start": "2026-01-22",
+        "end": "2026-01-23",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 284,
+        "start": "2026-02-08",
+        "end": "2026-02-09",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 295,
+        "start": "2026-02-26",
+        "end": "2026-02-27",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      },
+      {
+        "property_id": 1,
+        "id": 308,
+        "start": "2026-03-19",
+        "end": "2026-03-20",
+        "status": "CANCELLED",
+        "reason": "finance_unmatched"
+      }
+    ]
+  },
+  "idempotent_compared_with_prior_run": true
+}

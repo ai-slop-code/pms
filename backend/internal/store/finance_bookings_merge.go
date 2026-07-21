@@ -193,7 +193,19 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 			ptrToNullString(canonicalStatusForDB(b)),
 			now, existingID,
 		)
-		return existingID, err
+		if err != nil {
+			return existingID, err
+		}
+		var namedStayID sql.NullInt64
+		if err := s.DB.QueryRowContext(ctx, `SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND id = ?`, propertyID, existingID).Scan(&namedStayID); err != nil {
+			return existingID, err
+		}
+		if namedStayID.Valid {
+			if _, err := s.ConfirmNamedStayWithFinanceEvidence(ctx, propertyID, namedStayID.Int64); err != nil {
+				return existingID, err
+			}
+		}
+		return existingID, nil
 	}
 	netCents := 0
 	if b.NetCents != nil {

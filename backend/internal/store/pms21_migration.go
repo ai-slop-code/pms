@@ -52,12 +52,13 @@ type PMS21ApplyCounts struct {
 }
 
 type PMS21BackfillCounts struct {
-	NukiAccessCodes       int `json:"nuki_access_codes_named_stay_id"`
-	NukiGuestDailyEntries int `json:"nuki_guest_daily_entries_named_stay_id"`
-	CleaningEventsNamed   int `json:"cleaning_events_named_stay_id"`
-	CleaningEventsRaw     int `json:"cleaning_events_raw_booking_block_id"`
-	FinanceBookings       int `json:"finance_bookings_named_stay_id"`
-	Invoices              int `json:"invoices_named_stay_id"`
+	NukiAccessCodes              int `json:"nuki_access_codes_named_stay_id"`
+	NukiGuestDailyEntries        int `json:"nuki_guest_daily_entries_named_stay_id"`
+	CleaningEventsNamed          int `json:"cleaning_events_named_stay_id"`
+	CleaningEventsRaw            int `json:"cleaning_events_raw_booking_block_id"`
+	FinanceBookings              int `json:"finance_bookings_named_stay_id"`
+	Invoices                     int `json:"invoices_named_stay_id"`
+	NamedStaysConfirmedByFinance int `json:"named_stays_confirmed_by_finance"`
 }
 
 type PMS21ConflictCounts struct {
@@ -134,6 +135,7 @@ type pms21LegacyRow struct {
 	UpstreamEventUID     sql.NullString
 	RepresentationKind   sql.NullString
 	SourceDtstamp        sql.NullString
+	HasFinanceEvidence   bool
 }
 
 type pms21Classification struct {
@@ -407,6 +409,9 @@ func (s *Store) ApplyPMS21Migration(ctx context.Context, sampleLimit int, allowR
 	if err := backfillPMS21IntegrationLinks(ctx, tx, &actual.UpdatedLinks); err != nil {
 		return nil, err
 	}
+	if err := confirmPMS21NamedStaysWithFinanceEvidence(ctx, tx, &actual.UpdatedLinks); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -473,9 +478,11 @@ func classifyPMS21LegacyRow(row pms21LegacyRow) (pms21Classification, error) {
 	}
 	class.ReviewStatus = "needs_review"
 	class.ReviewReason = "legacy_non_reservation_stay"
-	if isFinanceReservation {
+	if isFinanceReservation || row.HasFinanceEvidence {
 		class.ReviewStatus = "confirmed"
 		class.ReviewReason = ""
+	}
+	if isFinanceReservation {
 		class.MigrationKind = "synthetic_finance"
 	}
 	class.SourceType = upstreamType
@@ -526,6 +533,17 @@ func financeStatusActive(row pms21FinanceRow) bool {
 		status = strings.ToUpper(strings.TrimSpace(row.ReservationStatus.String))
 	}
 	return status != "CANCELLED" && status != "CANCELLED_BY_GUEST" && status != "CANCELLED_BY_PARTNER"
+}
+
+func pms21NukiPendingEligible(status string, class pms21Classification, stayOutcome sql.NullString) bool {
+	if status != NamedStayStatusActive || !namedStayNukiEligible(class.StayType, class.ReviewStatus) {
+		return false
+	}
+	outcome := strings.TrimSpace(stayOutcome.String)
+	if outcome == StayOutcomeCancelledNonRefundable || outcome == StayOutcomeNoShow {
+		return false
+	}
+	return class.CheckOutDate >= time.Now().UTC().Format("2006-01-02")
 }
 
 func applyPMS21LegacyRow(ctx context.Context, tx *sql.Tx, row pms21LegacyRow, class pms21Classification, allowReview bool, counts *PMS21ApplyCounts) error {
@@ -603,7 +621,7 @@ func applyPMS21LegacyRow(ctx context.Context, tx *sql.Tx, row pms21LegacyRow, cl
 		}
 		cleaning := defaultCleaningRequired(class.StayType) && !row.CleaningExcluded
 		nukiStatus := NukiGenerationNotApplicable
-		if status == NamedStayStatusActive && namedStayNukiEligible(class.StayType, class.ReviewStatus) {
+		if pms21NukiPendingEligible(status, class, row.StayOutcome) {
 			nukiStatus = NukiGenerationPending
 		}
 		res, err := tx.ExecContext(ctx, `
@@ -695,7 +713,7 @@ func applyPMS21FinanceRow(ctx context.Context, tx *sql.Tx, row pms21FinanceRow, 
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	nukiStatus := NukiGenerationNotApplicable
-	if status == NamedStayStatusActive && namedStayNukiEligible(class.StayType, class.ReviewStatus) {
+	if pms21NukiPendingEligible(status, class, sql.NullString{}) {
 		nukiStatus = NukiGenerationPending
 	}
 	res, err := tx.ExecContext(ctx, `
@@ -769,6 +787,44 @@ func backfillPMS21IntegrationLinks(ctx context.Context, tx *sql.Tx, counts *PMS2
 	return nil
 }
 
+func confirmPMS21NamedStaysWithFinanceEvidence(ctx context.Context, tx *sql.Tx, counts *PMS21BackfillCounts) error {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE named_stays
+		SET review_status = 'confirmed',
+		    review_reason = NULL,
+		    nuki_generation_status = CASE
+		        WHEN status = 'active'
+		         AND stay_type IN ('booking_com', 'external')
+		         AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
+		         AND check_out_date >= ?
+		         AND COALESCE(nuki_generation_status, 'not_applicable') = 'not_applicable'
+		        THEN 'pending'
+		        ELSE nuki_generation_status
+		    END,
+		    updated_at = ?
+		WHERE review_status = 'needs_review'
+		  AND review_reason = 'legacy_non_reservation_stay'
+		  AND EXISTS (
+		      SELECT 1
+		      FROM finance_bookings fb
+		      WHERE fb.named_stay_id = named_stays.id
+		        AND fb.property_id = named_stays.property_id
+		        AND lower(trim(COALESCE(fb.source_channel, ''))) = 'booking_com'
+		        AND (fb.has_payout_data = 1 OR fb.has_statement_data = 1)
+		        AND upper(trim(COALESCE(fb.status, fb.reservation_status, ''))) NOT IN
+		            ('CANCELLED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_PARTNER')
+		  )`, time.Now().UTC().Format("2006-01-02"), time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	counts.NamedStaysConfirmedByFinance += int(n)
+	return nil
+}
+
 func loadPMS21LegacyRows(ctx context.Context, q queryer) ([]pms21LegacyRow, error) {
 	rows, err := q.QueryContext(ctx, `
 		SELECT o.id, o.property_id, COALESCE(p.timezone, 'UTC'), o.source_type, o.source_event_uid,
@@ -776,7 +832,17 @@ func loadPMS21LegacyRows(ctx context.Context, q queryer) ([]pms21LegacyRow, erro
 		       o.imported_at, o.last_synced_at, o.last_sync_run_id, o.closure_state,
 		       o.external_net_amount_cents, o.external_currency, o.external_channel, o.stay_outcome,
 		       COALESCE(o.cleaning_calendar_excluded, 0), o.upstream_source_type, o.upstream_event_uid,
-		       o.representation_kind, o.source_dtstamp
+		       o.representation_kind, o.source_dtstamp,
+		       EXISTS (
+		           SELECT 1
+		           FROM finance_bookings fb
+		           WHERE fb.property_id = o.property_id
+		             AND fb.occupancy_id = o.id
+		             AND lower(trim(COALESCE(fb.source_channel, ''))) = 'booking_com'
+		             AND (fb.has_payout_data = 1 OR fb.has_statement_data = 1)
+		             AND upper(trim(COALESCE(fb.status, fb.reservation_status, ''))) NOT IN
+		                 ('CANCELLED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_PARTNER')
+		       )
 		FROM occupancies o JOIN properties p ON p.id = o.property_id ORDER BY o.property_id, o.id`)
 	if err != nil {
 		return nil, err
@@ -785,13 +851,16 @@ func loadPMS21LegacyRows(ctx context.Context, q queryer) ([]pms21LegacyRow, erro
 	var out []pms21LegacyRow
 	for rows.Next() {
 		var row pms21LegacyRow
+		var hasFinanceEvidence int
 		if err := rows.Scan(&row.ID, &row.PropertyID, &row.PropertyTimezone, &row.SourceType, &row.SourceEventUID,
 			&row.StartAt, &row.EndAt, &row.Status, &row.RawSummary, &row.GuestDisplayName, &row.ContentHash,
 			&row.ImportedAt, &row.LastSyncedAt, &row.LastSyncRunID, &row.ClosureState,
 			&row.ExternalRevenueCents, &row.ExternalCurrency, &row.ExternalChannel, &row.StayOutcome,
-			&row.CleaningExcluded, &row.UpstreamSourceType, &row.UpstreamEventUID, &row.RepresentationKind, &row.SourceDtstamp); err != nil {
+			&row.CleaningExcluded, &row.UpstreamSourceType, &row.UpstreamEventUID, &row.RepresentationKind, &row.SourceDtstamp,
+			&hasFinanceEvidence); err != nil {
 			return nil, err
 		}
+		row.HasFinanceEvidence = hasFinanceEvidence != 0
 		out = append(out, row)
 	}
 	return out, rows.Err()
@@ -902,6 +971,36 @@ func (s *Store) populatePMS21Diagnostics(ctx context.Context, r *PMS21MigrationR
 		return err
 	}
 	if r.WouldBackfillLinks.FinanceBookings, err = countInt(ctx, s.DB, pendingMapBackfillSQL("finance_bookings", "fb", "named_stay_id", "fb.occupancy_id")); err != nil {
+		return err
+	}
+	if r.WouldBackfillLinks.NamedStaysConfirmedByFinance, err = countInt(ctx, s.DB, `
+		SELECT COUNT(*)
+		FROM named_stays ns
+		WHERE ns.review_status = 'needs_review'
+		  AND ns.review_reason = 'legacy_non_reservation_stay'
+		  AND EXISTS (
+		      SELECT 1
+		      FROM finance_bookings fb
+		      WHERE fb.property_id = ns.property_id
+		        AND lower(trim(COALESCE(fb.source_channel, ''))) = 'booking_com'
+		        AND (fb.has_payout_data = 1 OR fb.has_statement_data = 1)
+		        AND upper(trim(COALESCE(fb.status, fb.reservation_status, ''))) NOT IN
+		            ('CANCELLED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_PARTNER')
+		        AND (
+		            fb.named_stay_id = ns.id
+		            OR (
+		                fb.named_stay_id IS NULL
+		                AND fb.occupancy_id IS NOT NULL
+		                AND EXISTS (
+		                    SELECT 1
+		                    FROM occupancy_stay_migration_map osm
+		                    WHERE osm.property_id = fb.property_id
+		                      AND osm.old_occupancy_id = fb.occupancy_id
+		                      AND osm.named_stay_id = ns.id
+		                )
+		            )
+		        )
+		  )`); err != nil {
 		return err
 	}
 	if r.WouldBackfillLinks.Invoices, err = countInt(ctx, s.DB, pendingMapBackfillSQL("invoices", "i", "named_stay_id", "i.occupancy_id")); err != nil {

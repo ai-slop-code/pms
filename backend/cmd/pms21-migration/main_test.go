@@ -81,3 +81,30 @@ func TestAbsoluteSQLitePath(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareMigrationDatabaseAppliesEmbeddedSchemaOnlyForApply(t *testing.T) {
+	db, err := dbconn.Open("sqlite://" + filepath.Join(t.TempDir(), "schema.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := prepareMigrationDatabase(db, false); err != nil {
+		t.Fatal(err)
+	}
+	var tables int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 0 {
+		t.Fatal("dry-run preparation mutated the database")
+	}
+
+	if err := prepareMigrationDatabase(db, true); err != nil {
+		t.Fatal(err)
+	}
+	var version string
+	if err := db.QueryRow(`SELECT version FROM schema_migrations WHERE version = '000037_finance_evidence_confirms_named_stays'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+}

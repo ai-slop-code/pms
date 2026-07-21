@@ -64,6 +64,16 @@ identity, generated/manual split rows, source disappearance, duplicate active
 occupancy prevention, repair of existing bad rows, and July 2026 acceptance
 tests.
 
+### `PMS_21_Raw_Booking_Blocks_Named_Stays_Migration_Plan.md`
+Staged migration from the overloaded legacy occupancy model to first-class raw
+Booking.com blocks, named stays, stay nights, source links, and availability
+blocks.
+
+### `PMS_21_Legacy_Occupancy_Removal_Spec.md`
+Post-cutover cleanup contract for removing legacy occupancy writes, reads,
+routes, DTOs, UI, integration foreign keys, tables, flags, and transitional
+tooling while preserving source, business, integration, and audit history.
+
 ## Recommended Reading Order
 1. `PMS_00_Implementation_Prompt.md`
 2. `PMS_01_Architecture_and_Global_Spec.md`
@@ -77,22 +87,27 @@ tests.
 10. `PMS_17_Stay_Outcome_Overrides_Spec.md`
 11. `PMS_18_Cleaning_Event_Exclusion_Spec.md`
 12. `PMS_19_Booking_ICS_Reconciliation_Spec.md`
-13. `initial_prompt.md`
-14. `Prompt_answers.md`
+13. `PMS_21_Raw_Booking_Blocks_Named_Stays_Migration_Plan.md`
+14. `PMS_21_Legacy_Occupancy_Removal_Spec.md`
+15. `initial_prompt.md`
+16. `Prompt_answers.md`
 
 ## External API references
 - **Nuki Smart Lock API** (OpenAPI / Swagger UI): https://api.nuki.io/
 - **Google Calendar API**: https://developers.google.com/calendar/api
 
-## Important v1 Scope Note
-Direct Google Calendar integration is not part of v1. The intended v1 approach is:
+## Historical v1 Scope Note
+The following describes the original v1 scope and is not the current target after
+PMS 15 and PMS 21. Public occupancy export and n8n guidance are retired by the
+PMS 21 migration and cleanup specifications.
+
+Direct Google Calendar integration was not part of v1. The intended v1 approach was:
 - sync occupancies from ICS
 - expose occupancies through the authenticated JSON endpoint
 - use `n8n` externally if Google Calendar synchronization is needed
 
-When native Google Calendar cleaning-event sync is selected for a later phase,
-use `PMS_15_Google_Calendar_Cleaning_Events_Spec.md` as the implementation
-source of truth.
+Current Google Calendar cleaning behavior is specified by
+`PMS_15_Google_Calendar_Cleaning_Events_Spec.md` and the PMS 21 documents.
 
 ## Suggested Usage
 - Use `PMS_00_Implementation_Prompt.md` when starting implementation with an AI coding agent.

@@ -122,6 +122,106 @@ describe('OccupancyView', () => {
     expect(w.text()).not.toContain('n8n')
   })
 
+  it('hides raw promotion and create actions when the selected night already has a named stay', async () => {
+    seedProperty()
+    apiRouter({})
+    const w = mount(OccupancyView)
+    await flushPromises()
+
+    const rawBlock = {
+      id: 10,
+      property_id: 6,
+      source_type: 'booking_ics',
+      source_event_uid: 'raw-10',
+      check_in_date: '2026-07-19',
+      check_out_date: '2026-07-24',
+      status: 'active',
+      covered_nights: ['2026-07-20'],
+      cleaning_events: [],
+    }
+    const namedStay = {
+      id: 20,
+      property_id: 6,
+      display_name: 'Pipik1',
+      stay_type: 'booking_com',
+      check_in_date: '2026-07-20',
+      check_out_date: '2026-07-24',
+      status: 'active',
+      cleaning_required: true,
+      review_status: 'confirmed',
+      counts_as_sold: true,
+      has_finance_evidence: true,
+      nuki_generation_status: 'generated',
+      covered_nights: ['2026-07-20'],
+      source_links: [
+        {
+          id: 30,
+          source_type: 'booking_ics',
+          source_event_uid: 'raw-10',
+          linked_check_in_date: '2026-07-20',
+          linked_check_out_date: '2026-07-24',
+          link_status: 'source_deleted',
+          conflict_reason: 'raw_source_missing',
+        },
+      ],
+      cleaning_events: [],
+    }
+    const vm = w.vm as unknown as Record<string, unknown>
+    ;(vm.onCalendarV2CellClick as (payload: Record<string, unknown>) => void)({
+      dateKey: '2026-07-20',
+      rawBlocks: [rawBlock],
+      namedStays: [namedStay],
+      availabilityBlocks: [],
+    })
+    await flushPromises()
+
+    const dialog = document.body.querySelector<HTMLElement>('[aria-label="Calendar details for 2026-07-20"]')
+    expect(dialog?.textContent).toContain('Pipik1')
+    expect(dialog?.textContent).toContain('Finance confirmed')
+    expect(dialog?.textContent).toContain('payout or statement data confirms this stay')
+    expect(dialog?.textContent).not.toContain('Raw source issue')
+    expect(dialog?.textContent).not.toContain('Raw Booking.com blocks')
+    expect(dialog?.textContent).not.toContain('Promote to stay')
+    expect(dialog?.textContent).not.toContain('Create stay')
+    expect(dialog?.textContent).not.toContain('Block availability')
+    w.unmount()
+  })
+
+  it('keeps raw promotion and create actions on an unassigned leftover night', async () => {
+    seedProperty()
+    apiRouter({})
+    const w = mount(OccupancyView)
+    await flushPromises()
+
+    const vm = w.vm as unknown as Record<string, unknown>
+    ;(vm.onCalendarV2CellClick as (payload: Record<string, unknown>) => void)({
+      dateKey: '2026-07-19',
+      rawBlocks: [
+        {
+          id: 10,
+          property_id: 6,
+          source_type: 'booking_ics',
+          source_event_uid: 'raw-10',
+          check_in_date: '2026-07-19',
+          check_out_date: '2026-07-24',
+          status: 'active',
+          covered_nights: ['2026-07-19'],
+          cleaning_events: [],
+        },
+      ],
+      namedStays: [],
+      availabilityBlocks: [],
+    })
+    await flushPromises()
+
+    const dialog = document.body.querySelector<HTMLElement>('[aria-label="Calendar details for 2026-07-19"]')
+    expect(dialog?.textContent).toContain('Raw Booking.com blocks')
+    expect(dialog?.textContent).toContain('Promote to stay')
+    expect(dialog?.textContent).toContain('Create stay')
+    expect(dialog?.textContent).toContain('Block availability')
+    w.unmount()
+  })
+
   it.each([
     ['maintenance', false],
     ['personal_use', false],

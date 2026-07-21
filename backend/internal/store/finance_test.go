@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"pms/backend/internal/finance/statements"
 	"pms/backend/internal/testutil"
 )
 
@@ -39,6 +40,108 @@ func categoryIDByCode(t *testing.T, st *Store, pid int64, code string) int64 {
 	}
 	t.Fatalf("category %q not found", code)
 	return 0
+}
+
+func TestLinkBookingToNamedStayConfirmsOnlyMigrationReviewWithEligibleNukiState(t *testing.T) {
+	ctx := context.Background()
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	createStay := func(name, checkIn, checkOut, reason string) *NamedStay {
+		t.Helper()
+		stay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+			PropertyID: pid, DisplayName: name, StayType: StayTypeBookingCom,
+			CheckInDate: checkIn, CheckOutDate: checkOut,
+			ReviewStatus: "needs_review", ReviewReason: reason,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stay
+	}
+	insertBooking := func(reference, status string) int64 {
+		t.Helper()
+		res, err := st.DB.Exec(`INSERT INTO finance_bookings (property_id, reference_number, check_in_date, check_out_date, guest_name, net_cents, payout_date, created_at, updated_at, source_channel, has_payout_data, has_statement_data, status) VALUES (?, ?, '2099-01-01', '2099-01-02', ?, 10000, '2099-01-03', ?, ?, 'booking_com', 1, 1, ?)`, pid, reference, reference, now, now, status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	assertState := func(stayID int64, wantReview, wantReason, wantNuki string) {
+		t.Helper()
+		var review, reason, nuki string
+		if err := st.DB.QueryRow(`SELECT review_status, COALESCE(review_reason, ''), nuki_generation_status FROM named_stays WHERE id = ?`, stayID).Scan(&review, &reason, &nuki); err != nil {
+			t.Fatal(err)
+		}
+		if review != wantReview || reason != wantReason || nuki != wantNuki {
+			t.Fatalf("stay %d state=%q/%q/%q want %q/%q/%q", stayID, review, reason, nuki, wantReview, wantReason, wantNuki)
+		}
+	}
+
+	confirmed := createStay("Confirmed", "2099-01-01", "2099-01-02", "legacy_non_reservation_stay")
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("CONFIRMED", "OK"), confirmed.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertState(confirmed.ID, "confirmed", "", "pending")
+
+	cancelReview := createStay("Cancellation review", "2099-02-01", "2099-02-02", "finance_status_cancelled")
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("REVIEW", "OK"), cancelReview.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertState(cancelReview.ID, "needs_review", "finance_status_cancelled", "not_applicable")
+
+	cancelledBooking := createStay("Cancelled booking", "2099-03-01", "2099-03-02", "legacy_non_reservation_stay")
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("CANCELLED", "CANCELLED"), cancelledBooking.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertState(cancelledBooking.ID, "needs_review", "legacy_non_reservation_stay", "not_applicable")
+
+	historical := createStay("Historical", "2020-01-01", "2020-01-02", "legacy_non_reservation_stay")
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("HISTORICAL", "OK"), historical.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertState(historical.ID, "confirmed", "", "not_applicable")
+}
+
+func TestCanonicalFinanceEvidenceUpdateConfirmsAlreadyLinkedMigrationStay(t *testing.T) {
+	ctx := context.Background()
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	stay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Canonical update", StayType: StayTypeBookingCom,
+		CheckInDate: "2099-05-01", CheckOutDate: "2099-05-02",
+		ReviewStatus: "needs_review", ReviewReason: "legacy_non_reservation_stay",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := st.DB.Exec(`INSERT INTO finance_bookings (property_id, reference_number, net_cents, payout_date, named_stay_id, created_at, updated_at, source_channel) VALUES (?, 'CANONICAL', 10000, '2099-05-03', ?, ?, ?, 'booking_com')`, pid, stay.ID, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookingID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := "OK"
+	if _, err := st.UpsertFinanceBookingFromCanonical(ctx, pid, bookingID, statements.CanonicalBooking{
+		ReferenceNumber: "CANONICAL", SourceChannel: "booking_com", HasStatementData: true, Status: &status,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var reviewStatus, nukiStatus string
+	if err := st.DB.QueryRow(`SELECT review_status, nuki_generation_status FROM named_stays WHERE id = ?`, stay.ID).Scan(&reviewStatus, &nukiStatus); err != nil {
+		t.Fatal(err)
+	}
+	if reviewStatus != "confirmed" || nukiStatus != "pending" {
+		t.Fatalf("status=%q nuki=%q", reviewStatus, nukiStatus)
+	}
 }
 
 func TestOpenFinanceMonth_IsIdempotentForRecurringRules(t *testing.T) {

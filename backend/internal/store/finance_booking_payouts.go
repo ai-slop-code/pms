@@ -288,6 +288,10 @@ func (s *Store) UpdateBookingPayoutNamedStayMapping(ctx context.Context, propert
 		UPDATE finance_bookings
 		SET named_stay_id = ?, occupancy_id = ?, updated_at = ?
 		WHERE property_id = ? AND reference_number = ?`, stay, occ, now, propertyID, referenceNumber)
+	if err != nil || namedStayID == nil || *namedStayID <= 0 {
+		return err
+	}
+	_, err = s.ConfirmNamedStayWithFinanceEvidence(ctx, propertyID, *namedStayID)
 	return err
 }
 
@@ -306,7 +310,53 @@ func (s *Store) LinkBookingToNamedStay(ctx context.Context, propertyID, bookingI
 		UPDATE finance_bookings
 		SET named_stay_id = ?, occupancy_id = COALESCE(?, occupancy_id), updated_at = ?
 		WHERE property_id = ? AND id = ?`, namedStayID, nullInt64Value(legacy), now, propertyID, bookingID)
+	if err != nil {
+		return err
+	}
+	_, err = s.ConfirmNamedStayWithFinanceEvidence(ctx, propertyID, namedStayID)
 	return err
+}
+
+// ConfirmNamedStayWithFinanceEvidence upgrades only migration-created review
+// state. Operational review reasons such as a later cancellation remain intact.
+func (s *Store) ConfirmNamedStayWithFinanceEvidence(ctx context.Context, propertyID, namedStayID int64) (bool, error) {
+	if propertyID <= 0 || namedStayID <= 0 {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE named_stays
+		SET review_status = 'confirmed',
+		    review_reason = NULL,
+		    nuki_generation_status = CASE
+		        WHEN status = 'active'
+		         AND stay_type IN ('booking_com', 'external')
+		         AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
+		         AND check_out_date >= ?
+		         AND COALESCE(nuki_generation_status, 'not_applicable') = 'not_applicable'
+		        THEN 'pending'
+		        ELSE nuki_generation_status
+		    END,
+		    updated_at = ?
+		WHERE property_id = ?
+		  AND id = ?
+		  AND review_status = 'needs_review'
+		  AND review_reason = 'legacy_non_reservation_stay'
+		  AND EXISTS (
+		      SELECT 1
+		      FROM finance_bookings fb
+		      WHERE fb.property_id = named_stays.property_id
+		        AND fb.named_stay_id = named_stays.id
+		        AND lower(trim(COALESCE(fb.source_channel, ''))) = 'booking_com'
+		        AND (fb.has_payout_data = 1 OR fb.has_statement_data = 1)
+		        AND upper(trim(COALESCE(fb.status, fb.reservation_status, ''))) NOT IN
+		            ('CANCELLED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_PARTNER')
+		  )`, now.Format("2006-01-02"), now.Format(time.RFC3339), propertyID, namedStayID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := res.RowsAffected()
+	return rows > 0, err
 }
 
 func (s *Store) FindNamedStayForFinanceStayDates(ctx context.Context, propertyID int64, referenceNumber, checkInDate, checkOutDate, guestName string) (*NamedStay, error) {

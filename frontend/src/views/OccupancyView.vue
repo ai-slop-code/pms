@@ -277,6 +277,12 @@ const calendarDayDialogDate = ref('')
 const calendarDayRawBlocks = ref<CalendarRawBookingBlock[]>([])
 const calendarDayNamedStays = ref<CalendarNamedStay[]>([])
 const calendarDayAvailabilityBlocks = ref<CalendarAvailabilityBlock[]>([])
+const calendarDayHasAssignedNight = computed(
+  () => calendarDayNamedStays.value.length > 0 || calendarDayAvailabilityBlocks.value.length > 0,
+)
+const calendarDayPromotableRawBlocks = computed(() =>
+  calendarDayHasAssignedNight.value ? [] : calendarDayRawBlocks.value,
+)
 const promoteDialogOpen = ref(false)
 const promoteBusy = ref(false)
 const promoteError = ref('')
@@ -628,6 +634,22 @@ function cleaningSummary(events: { status: string; cleaning_kind: string }[]) {
   if (events.some((e) => e.status === 'synced')) return 'Cleaning: synced'
   if (events.some((e) => e.status === 'pending')) return 'Cleaning: pending'
   return 'Cleaning: tracked'
+}
+
+function actionableRawSourceIssueLinks(stay: CalendarNamedStay) {
+  return stay.source_links.filter(
+    (link) =>
+      link.link_status === 'conflict' ||
+      (link.link_status === 'source_deleted' && !stay.has_finance_evidence),
+  )
+}
+
+function hasActionableRawSourceIssue(stay: CalendarNamedStay) {
+  return actionableRawSourceIssueLinks(stay).length > 0
+}
+
+function hasFinanceConfirmedMissingSource(stay: CalendarNamedStay) {
+  return stay.has_finance_evidence && stay.source_links.some((link) => link.link_status === 'source_deleted')
 }
 
 function stayLabel(o: Occ) {
@@ -1335,15 +1357,15 @@ watch(
         size="md"
       >
         <div class="day-dialog__list">
-          <div class="calendar-detail__actions">
+          <div v-if="!calendarDayHasAssignedNight" class="calendar-detail__actions">
             <UiButton size="sm" variant="primary" @click="openManualStayDialog()">Create stay</UiButton>
             <UiButton size="sm" variant="ghost" @click="openAvailabilityDialog()"
               >Block availability</UiButton
             >
           </div>
-          <section v-if="calendarDayRawBlocks.length" class="calendar-detail">
+          <section v-if="calendarDayPromotableRawBlocks.length" class="calendar-detail">
             <h3>Raw Booking.com blocks</h3>
-            <article v-for="b in calendarDayRawBlocks" :key="b.id" class="day-dialog__item">
+            <article v-for="b in calendarDayPromotableRawBlocks" :key="b.id" class="day-dialog__item">
               <div class="day-dialog__row">
                 <div class="day-dialog__meta">
                   <div class="day-dialog__title">{{ b.check_in_date }} → {{ b.check_out_date }}</div>
@@ -1377,14 +1399,13 @@ watch(
                     </UiBadge>
                     <UiBadge v-if="s.nuki_generation_status === 'error'" tone="danger">Nuki error</UiBadge>
                     <UiBadge
-                      v-if="
-                        s.source_links.some(
-                          (l) => l.link_status === 'conflict' || l.link_status === 'source_deleted',
-                        )
-                      "
+                      v-if="hasActionableRawSourceIssue(s)"
                       tone="warning"
                       >Raw source issue</UiBadge
                     >
+                    <UiBadge v-if="hasFinanceConfirmedMissingSource(s)" tone="success">
+                      Finance confirmed
+                    </UiBadge>
                     <UiBadge :tone="s.cleaning_events.some((e) => e.status === 'error') ? 'danger' : 'neutral'">
                       {{ cleaningSummary(s.cleaning_events) }}
                     </UiBadge>
@@ -1392,12 +1413,13 @@ watch(
                   <p v-if="s.nuki_generation_error" class="calendar-detail__warning">
                     Nuki: {{ s.nuki_generation_error }}
                   </p>
-                  <p
-                    v-for="link in s.source_links.filter((l) => l.link_status === 'conflict' || l.link_status === 'source_deleted')"
-                    :key="link.id"
-                    class="calendar-detail__warning"
-                  >
-                    Raw source {{ link.link_status }}{{ link.conflict_reason ? `: ${link.conflict_reason}` : '' }}
+                  <template v-if="hasActionableRawSourceIssue(s)">
+                    <p v-for="link in actionableRawSourceIssueLinks(s)" :key="link.id" class="calendar-detail__warning">
+                      Raw source {{ link.link_status }}{{ link.conflict_reason ? `: ${link.conflict_reason}` : '' }}
+                    </p>
+                  </template>
+                  <p v-if="hasFinanceConfirmedMissingSource(s)" class="calendar-detail__note">
+                    Historical ICS source unavailable; payout or statement data confirms this stay.
                   </p>
                 </div>
                 <div class="calendar-detail__row-actions">
@@ -1987,6 +2009,11 @@ watch(
 .calendar-detail__warning {
   margin: var(--space-2) 0 0;
   color: var(--warning-fg);
+  font-size: var(--font-size-sm);
+}
+.calendar-detail__note {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-muted);
   font-size: var(--font-size-sm);
 }
 @media (max-width: 767.98px) {

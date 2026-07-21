@@ -139,6 +139,7 @@ export interface CalendarNamedStay {
   cleaning_required: boolean
   review_status: 'confirmed' | 'needs_review' | string
   counts_as_sold: boolean
+  has_finance_evidence: boolean
   nuki_generation_status: 'not_applicable' | 'pending' | 'generated' | 'error' | string
   nuki_generation_error?: string
   covered_nights: string[]

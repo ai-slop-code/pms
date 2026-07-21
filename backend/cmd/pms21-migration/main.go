@@ -5,7 +5,8 @@
 //	go run ./cmd/pms21-migration --db /absolute/path/to/pms.db --dry-run
 //	pms21-migration --db /data/pms.db --dry-run
 //
-// Apply is never the default. Run this only after the additive schema migration.
+// Apply is never the default. After explicit confirmation, apply first runs
+// pending additive schema migrations and then performs the Stage 2 backfill.
 package main
 
 import (
@@ -20,6 +21,7 @@ import (
 	"strings"
 
 	"pms/backend/internal/dbconn"
+	dbmigrate "pms/backend/internal/migrate"
 	"pms/backend/internal/store"
 )
 
@@ -70,6 +72,9 @@ func main() {
 	st := &store.Store{DB: db}
 	var report *store.PMS21MigrationReport
 	if *apply {
+		if err := prepareMigrationDatabase(db, true); err != nil {
+			log.Fatalf("apply schema migrations: %v", err)
+		}
 		report, err = st.ApplyPMS21Migration(context.Background(), *sampleLimit, *allowReview)
 	} else {
 		report, err = st.PlanPMS21Migration(context.Background(), *sampleLimit)
@@ -101,4 +106,11 @@ func openMigrationDatabase(databaseURL string, apply bool) (*sql.DB, error) {
 		return dbconn.Open(databaseURL)
 	}
 	return dbconn.OpenReadOnly(databaseURL)
+}
+
+func prepareMigrationDatabase(db *sql.DB, apply bool) error {
+	if !apply {
+		return nil
+	}
+	return dbmigrate.Up(db)
 }

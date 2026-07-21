@@ -41,6 +41,15 @@ func TestOccupancyCalendarViewStage5CombinesRawNamedAndAvailability(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.DB.ExecContext(ctx, `
+		INSERT INTO finance_bookings (
+			property_id, reference_number, check_in_date, check_out_date, guest_name,
+			net_cents, payout_date, named_stay_id, created_at, updated_at,
+			source_channel, has_payout_data, has_statement_data
+		) VALUES (?, 'CAL-FINANCE', '2026-07-10', '2026-07-12', 'Stage Five Guest',
+			10000, '2026-07-13', ?, ?, ?, 'booking_com', 1, 1)`, pid, stay.ID, now, now); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.MarkNamedStayNukiGeneration(ctx, pid, stay.ID, NukiGenerationError, "nuki_credentials_not_configured"); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +103,9 @@ func TestOccupancyCalendarViewStage5CombinesRawNamedAndAvailability(t *testing.T
 	}
 	if !calStay.CountsAsSold {
 		t.Fatal("confirmed Booking.com stay must count as sold")
+	}
+	if !calStay.HasFinanceEvidence {
+		t.Fatal("payout/statement-backed stay did not expose finance evidence")
 	}
 	if len(calStay.CoveredNights) != 2 {
 		t.Fatalf("named covered nights=%v want 2 nights", calStay.CoveredNights)
@@ -162,6 +174,9 @@ func TestCalendarNamedStayCountsAsSoldMatchesAnalyticsRules(t *testing.T) {
 	}
 	if byID[review.ID].CountsAsSold {
 		t.Fatal("review-required stay counted as sold")
+	}
+	if byID[review.ID].HasFinanceEvidence {
+		t.Fatal("review-required stay unexpectedly reported finance evidence")
 	}
 }
 

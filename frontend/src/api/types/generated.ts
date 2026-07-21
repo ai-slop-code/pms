@@ -5614,6 +5614,8 @@ export interface components {
             review_status: "confirmed" | "needs_review";
             /** @description Backend analytics sold-night eligibility for this stay. */
             counts_as_sold: boolean;
+            /** @description Booking.com payout or statement data independently confirms this stay. */
+            has_finance_evidence: boolean;
             /** @enum {string} */
             nuki_generation_status: "not_applicable" | "pending" | "generated" | "error";
             nuki_generation_error?: string;

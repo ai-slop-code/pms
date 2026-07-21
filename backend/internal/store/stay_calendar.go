@@ -43,6 +43,7 @@ type CalendarNamedStay struct {
 	CleaningRequired     bool                     `json:"cleaning_required"`
 	ReviewStatus         string                   `json:"review_status"`
 	CountsAsSold         bool                     `json:"counts_as_sold"`
+	HasFinanceEvidence   bool                     `json:"has_finance_evidence"`
 	NukiGenerationStatus string                   `json:"nuki_generation_status"`
 	NukiGenerationError  *string                  `json:"nuki_generation_error,omitempty"`
 	CoveredNights        []string                 `json:"covered_nights"`
@@ -200,6 +201,16 @@ func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, st
 		               )
 		           )
 		       ) THEN 1 ELSE 0 END,
+		       EXISTS (
+		           SELECT 1
+		           FROM finance_bookings fb
+		           WHERE fb.property_id = ns.property_id
+		             AND fb.named_stay_id = ns.id
+		             AND lower(trim(COALESCE(fb.source_channel, ''))) = 'booking_com'
+		             AND (fb.has_payout_data = 1 OR fb.has_statement_data = 1)
+		             AND upper(trim(COALESCE(fb.status, fb.reservation_status, ''))) NOT IN
+		                 ('CANCELLED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_PARTNER')
+		       ),
 		       ns.nuki_generation_status, ns.nuki_generation_error,
 		       osm.old_occupancy_id
 		FROM named_stays ns
@@ -217,15 +228,18 @@ func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, st
 		var stay CalendarNamedStay
 		var cleaningRequired int
 		var countsAsSold int
+		var hasFinanceEvidence int
 		var reviewStatus, nukiStatus, nukiError sql.NullString
 		var legacyOccupancyID sql.NullInt64
 		if err := rows.Scan(&stay.ID, &stay.PropertyID, &stay.DisplayName, &stay.StayType, &stay.CheckInDate, &stay.CheckOutDate,
-			&stay.Status, &cleaningRequired, &reviewStatus, &countsAsSold, &nukiStatus, &nukiError, &legacyOccupancyID); err != nil {
+			&stay.Status, &cleaningRequired, &reviewStatus, &countsAsSold, &hasFinanceEvidence,
+			&nukiStatus, &nukiError, &legacyOccupancyID); err != nil {
 			return nil, err
 		}
 		stay.CleaningRequired = cleaningRequired == 1
 		stay.ReviewStatus = nullStringDefault(reviewStatus, "confirmed")
 		stay.CountsAsSold = countsAsSold == 1
+		stay.HasFinanceEvidence = hasFinanceEvidence == 1
 		stay.NukiGenerationStatus = nullStringDefault(nukiStatus, NukiGenerationNotApplicable)
 		stay.NukiGenerationError = stringPtr(nukiError)
 		stay.LegacyOccupancyID = int64Ptr(legacyOccupancyID)

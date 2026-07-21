@@ -54,10 +54,31 @@ type CalendarCell = {
   rawBlocks: CalendarRawBookingBlock[]
   namedStays: CalendarNamedStay[]
   availabilityBlocks: CalendarAvailabilityBlock[]
-  sourceWarningCount: number
-  nukiErrorCount: number
   cleaningErrorCount: number
 }
+
+type CalendarStaySegment = {
+  stay: CalendarNamedStay
+  startColumn: number
+  endColumn: number
+  startDate: string
+  endDate: string
+  lane: number
+  continuesBefore: boolean
+  continuesAfter: boolean
+  sourceWarning: boolean
+  nukiError: boolean
+  cleaningError: boolean
+}
+
+type CalendarWeek = {
+  cells: CalendarCell[]
+  staySegments: CalendarStaySegment[]
+  laneCount: number
+}
+
+const stayLaneHeight = 28
+const stayBandTop = 30
 
 const emptyCell = (): CalendarCell => ({
   label: '',
@@ -71,8 +92,6 @@ const emptyCell = (): CalendarCell => ({
   rawBlocks: [],
   namedStays: [],
   availabilityBlocks: [],
-  sourceWarningCount: 0,
-  nukiErrorCount: 0,
   cleaningErrorCount: 0,
 })
 
@@ -95,10 +114,6 @@ const calendarCells = computed<CalendarCell[]>(() => {
       const availabilityBlocks = props.calendar.availability_blocks.filter(
         (b) => b.status === 'active' && b.covered_nights.includes(key),
       )
-      const sourceWarningCount = namedStays.filter((s) =>
-        s.source_links.some((l) => l.link_status === 'conflict' || l.link_status === 'source_deleted'),
-      ).length
-      const nukiErrorCount = namedStays.filter((s) => s.nuki_generation_status === 'error').length
       const cleaningErrorCount = [...rawBlocks, ...namedStays].filter((item) =>
         item.cleaning_events.some((e) => e.status === 'error'),
       ).length
@@ -116,8 +131,6 @@ const calendarCells = computed<CalendarCell[]>(() => {
         rawBlocks,
         namedStays,
         availabilityBlocks,
-        sourceWarningCount,
-        nukiErrorCount,
         cleaningErrorCount,
       })
       continue
@@ -187,10 +200,59 @@ function onCellKeydown(e: KeyboardEvent, c: CalendarCell) {
   }
 }
 
-const calendarWeeks = computed<CalendarCell[][]>(() => {
-  const weeks: CalendarCell[][] = []
+function buildStaySegments(cells: CalendarCell[]) {
+  const segments: CalendarStaySegment[] = []
+  for (let column = 0; column < cells.length; column++) {
+    for (const stay of cells[column]!.namedStays) {
+      if (column > 0 && cells[column - 1]!.namedStays.some((candidate) => candidate.id === stay.id)) continue
+      let endColumn = column
+      while (
+        endColumn + 1 < cells.length &&
+        cells[endColumn + 1]!.namedStays.some((candidate) => candidate.id === stay.id)
+      ) {
+        endColumn++
+      }
+      const startDate = cells[column]!.key
+      const endDate = cells[endColumn]!.key
+      if (!startDate || !endDate) continue
+      segments.push({
+        stay,
+        startColumn: column + 1,
+        endColumn: endColumn + 1,
+        startDate,
+        endDate,
+        lane: 0,
+        continuesBefore: stay.check_in_date < startDate,
+        continuesAfter: stay.check_out_date > adjacentDate(endDate, 1),
+        sourceWarning: stay.source_links.some(
+          (link) =>
+            link.link_status === 'conflict' ||
+            (link.link_status === 'source_deleted' && !stay.has_finance_evidence),
+        ),
+        nukiError: stay.nuki_generation_status === 'error',
+        cleaningError: stay.cleaning_events.some((event) => event.status === 'error'),
+      })
+    }
+  }
+
+  const laneEnds: number[] = []
+  for (const segment of segments) {
+    let lane = laneEnds.findIndex((endColumn) => endColumn < segment.startColumn)
+    if (lane === -1) lane = laneEnds.length
+    segment.lane = lane
+    laneEnds[lane] = segment.endColumn
+  }
+  return { staySegments: segments, laneCount: laneEnds.length }
+}
+
+const calendarWeeks = computed<CalendarWeek[]>(() => {
+  const weeks: CalendarWeek[] = []
   for (let i = 0; i < calendarCells.value.length; i += 7) {
-    weeks.push(calendarCells.value.slice(i, i + 7))
+    const cells = calendarCells.value.slice(i, i + 7)
+    const { staySegments, laneCount } = props.calendar
+      ? buildStaySegments(cells)
+      : { staySegments: [], laneCount: 0 }
+    weeks.push({ cells, staySegments, laneCount })
   }
   return weeks
 })
@@ -201,7 +263,7 @@ function cellAriaLabel(c: CalendarCell): string {
   if (props.calendar) {
     if (c.namedStays.length)
       parts.push(`${c.namedStays.length} named stay${c.namedStays.length > 1 ? 's' : ''}`)
-    if (c.rawBlocks.length)
+    if (c.rawBlocks.length && !c.namedStays.length)
       parts.push(`${c.rawBlocks.length} raw booking block${c.rawBlocks.length > 1 ? 's' : ''}`)
     if (c.availabilityBlocks.length)
       parts.push(
@@ -217,6 +279,56 @@ function cellAriaLabel(c: CalendarCell): string {
   if (c.cleaningExcludedCount) parts.push(`${c.cleaningExcludedCount} with no cleaning event`)
   if (c.checkIns) parts.push(`${c.checkIns} check-in${c.checkIns > 1 ? 's' : ''}`)
   return parts.join(', ')
+}
+
+function adjacentDate(dateKey: string, days: number) {
+  const date = new Date(`${dateKey}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+function stayChipLabel(s: CalendarNamedStay) {
+  const nights = dateNights(s.check_in_date, s.check_out_date)
+  return `${s.display_name} · ${nights} ${nights === 1 ? 'night' : 'nights'}`
+}
+
+function stayBandClass(segment: CalendarStaySegment) {
+  return {
+    [`calendar__stay-band--${segment.stay.stay_type}`]: true,
+    'calendar__stay-band--continues-before': segment.continuesBefore,
+    'calendar__stay-band--continues-after': segment.continuesAfter,
+    'calendar__stay-band--warning': segment.sourceWarning,
+    'calendar__stay-band--error': segment.nukiError || segment.cleaningError,
+  }
+}
+
+function stayBandStyle(segment: CalendarStaySegment) {
+  return {
+    gridColumn: `${segment.startColumn} / ${segment.endColumn + 1}`,
+    gridRow: '1',
+    marginTop: `${stayBandTop + segment.lane * stayLaneHeight}px`,
+  }
+}
+
+function stayBandTitle(segment: CalendarStaySegment) {
+  const issues = [
+    segment.sourceWarning ? 'raw source issue' : '',
+    segment.nukiError ? 'Nuki error' : '',
+    segment.cleaningError ? 'cleaning error' : '',
+  ].filter(Boolean)
+  const continuation = segment.continuesBefore || segment.continuesAfter ? 'continues across week boundary' : ''
+  return [
+    `${stayChipLabel(segment.stay)} · ${segment.stay.check_in_date} → ${segment.stay.check_out_date}`,
+    continuation,
+    ...issues,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function onStaySegmentClick(week: CalendarWeek, segment: CalendarStaySegment) {
+  const cell = week.cells.find((candidate) => candidate.key === segment.startDate)
+  if (cell) onCellClick(cell)
 }
 
 const staysInMonth = computed(() =>
@@ -398,11 +510,12 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
             {{ d }}
           </div>
         </div>
-        <div v-for="(week, wi) in calendarWeeks" :key="wi" class="calendar__row" role="row">
+        <div v-for="(week, wi) in calendarWeeks" :key="wi" class="calendar__row calendar__week" role="row">
           <div
-            v-for="(c, i) in week"
+            v-for="(c, i) in week.cells"
             :key="i"
             class="calendar__cell"
+            :style="{ gridColumn: i + 1, gridRow: '1' }"
             :role="c.label === '' ? 'presentation' : calendar || c.stayCount ? 'button' : 'gridcell'"
             :tabindex="calendar && c.label !== '' ? 0 : c.stayCount ? 0 : undefined"
             :aria-label="cellAriaLabel(c) || undefined"
@@ -422,29 +535,17 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
               <div class="calendar__day">{{ c.label }}</div>
               <template v-if="calendar">
                 <div
-                  v-if="c.rawBlocks.length"
-                  class="calendar__chip calendar__chip--raw"
-                  aria-hidden="true"
-                  :title="rawBlockTitle(c.rawBlocks)"
+                  class="calendar__band-space"
+                  :style="{ height: `${Math.max(1, week.laneCount) * stayLaneHeight}px` }"
                 >
-                  raw{{ c.rawBlocks.length > 1 ? ` ×${c.rawBlocks.length}` : '' }}
-                </div>
-                <div
-                  v-for="s in c.namedStays.slice(0, 2)"
-                  :key="s.id"
-                  class="calendar__chip calendar__chip--named"
-                  :class="`calendar__chip--stay-${s.stay_type}`"
-                  aria-hidden="true"
-                  :title="`${s.check_in_date} → ${s.check_out_date} · ${stayTypeLabel(s.stay_type)}`"
-                >
-                  {{ s.display_name }}
-                </div>
-                <div
-                  v-if="c.namedStays.length > 2"
-                  class="calendar__chip calendar__chip--named"
-                  aria-hidden="true"
-                >
-                  +{{ c.namedStays.length - 2 }} more
+                  <div
+                    v-if="c.rawBlocks.length && !c.namedStays.length"
+                    class="calendar__chip calendar__chip--raw"
+                    aria-hidden="true"
+                    :title="rawBlockTitle(c.rawBlocks)"
+                  >
+                    raw{{ c.rawBlocks.length > 1 ? ` ×${c.rawBlocks.length}` : '' }}
+                  </div>
                 </div>
                 <div
                   v-if="c.availabilityBlocks.length"
@@ -454,17 +555,7 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
                   blocked
                 </div>
                 <div
-                  v-if="c.sourceWarningCount"
-                  class="calendar__chip calendar__chip--warning"
-                  aria-hidden="true"
-                >
-                  Raw source issue
-                </div>
-                <div v-if="c.nukiErrorCount" class="calendar__chip calendar__chip--danger" aria-hidden="true">
-                  Nuki error
-                </div>
-                <div
-                  v-if="c.cleaningErrorCount"
+                  v-if="c.cleaningErrorCount && !c.namedStays.length"
                   class="calendar__chip calendar__chip--danger"
                   aria-hidden="true"
                 >
@@ -505,12 +596,28 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
               </template>
             </template>
           </div>
+          <button
+            v-for="segment in week.staySegments"
+            :key="`${segment.stay.id}-${segment.startDate}`"
+            type="button"
+            class="calendar__stay-band"
+            :class="stayBandClass(segment)"
+            :style="stayBandStyle(segment)"
+            :title="stayBandTitle(segment)"
+            :aria-label="stayBandTitle(segment)"
+            @click.stop="onStaySegmentClick(week, segment)"
+          >
+            <span v-if="segment.continuesBefore" class="calendar__stay-continuation" aria-hidden="true">‹</span>
+            <span class="calendar__stay-label">{{ stayChipLabel(segment.stay) }}</span>
+            <span v-if="segment.sourceWarning || segment.nukiError || segment.cleaningError" class="calendar__stay-alert" aria-hidden="true">!</span>
+            <span v-if="segment.continuesAfter" class="calendar__stay-continuation" aria-hidden="true">›</span>
+          </button>
         </div>
       </div>
       <p class="calendar__note">
         {{
           calendar
-            ? 'Cells distinguish raw Booking.com coverage from named stays. Raw-only nights are visible but do not count as occupied.'
+            ? 'Raw Booking.com coverage is shown until a named stay covers the night. Connected ribbons represent one continuous stay.'
             : 'Cells show nightly occupancy. One stay can span multiple nights.'
         }}
       </p>
@@ -582,14 +689,21 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
 .calendar {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
   gap: 4px;
   text-align: center;
   font-size: var(--font-size-sm);
 }
 .calendar__row {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  width: 100%;
+  min-width: 0;
   gap: 4px;
+}
+.calendar__week {
+  position: relative;
 }
 .calendar__head {
   font-weight: 600;
@@ -601,6 +715,7 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
 }
 .calendar__cell {
   min-height: 64px;
+  min-width: 0;
   padding: var(--space-2);
   background: var(--color-sunken);
   border-radius: var(--radius-sm);
@@ -660,6 +775,15 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
   font-weight: 500;
   color: var(--color-text);
 }
+.calendar__band-space {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  padding-top: 3px;
+  box-sizing: border-box;
+}
 .calendar__chip {
   font-size: var(--font-size-xs);
   color: var(--color-primary);
@@ -673,22 +797,92 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
   letter-spacing: 0.04em;
   font-weight: 700;
 }
-.calendar__chip--named {
-  max-width: 100%;
+.calendar__stay-band {
+  --stay-color: var(--success-fg);
+  --stay-fill: color-mix(in srgb, var(--stay-color) 16%, var(--color-surface, white));
+  z-index: 2;
+  align-self: start;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  min-width: 0;
+  margin-inline: 2px;
+  padding: 0 var(--space-2);
   overflow: hidden;
-  color: var(--success-fg);
+  color: var(--stay-color);
+  background: var(--stay-fill);
+  border: 2px solid color-mix(in srgb, var(--stay-color) 75%, transparent);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
   font-weight: 700;
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    filter 120ms ease,
+    box-shadow 120ms ease;
+}
+.calendar__stay-band:hover {
+  filter: brightness(0.97);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
+}
+.calendar__stay-band:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.calendar__stay-label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.calendar__chip--stay-maintenance {
-  color: var(--danger-fg, #b42318);
+.calendar__stay-continuation {
+  flex: 0 0 auto;
+  font-size: 1rem;
+  line-height: 1;
 }
-.calendar__chip--stay-personal_use {
-  color: var(--color-text-muted);
+.calendar__stay-alert {
+  display: inline-grid;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--color-surface, white);
+  background: var(--warning-fg, #b58400);
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
 }
-.calendar__chip--stay-external {
-  color: var(--success-fg);
+.calendar__stay-band--continues-before {
+  border-inline-start-style: dashed;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+.calendar__stay-band--continues-after {
+  border-inline-end-style: dashed;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+.calendar__stay-band--warning {
+  border-color: var(--warning-fg, #b58400);
+}
+.calendar__stay-band--error {
+  border-color: var(--danger-fg, #b42318);
+}
+.calendar__stay-band--error .calendar__stay-alert {
+  background: var(--danger-fg, #b42318);
+}
+.calendar__stay-band--maintenance {
+  --stay-color: var(--danger-fg, #b42318);
+}
+.calendar__stay-band--personal_use {
+  --stay-color: var(--color-text-muted);
+}
+.calendar__stay-band--external {
+  --stay-color: var(--success-fg);
 }
 .calendar__chip--warning {
   color: var(--warning-fg, #b58400);

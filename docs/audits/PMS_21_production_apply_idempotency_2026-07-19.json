@@ -1,0 +1,91 @@
+{
+  "mode": "apply",
+  "apply_implemented": true,
+  "allow_review_required": true,
+  "would_create": {
+    "raw_booking_blocks": 0,
+    "raw_booking_block_nights": 0,
+    "named_stays": 0,
+    "named_stay_nights": 0,
+    "stay_source_links": 0,
+    "property_availability_blocks": 0,
+    "occupancy_stay_migration_map": 0,
+    "auto_confirmed_named_stays": 0,
+    "review_required_named_stays": 0
+  },
+  "would_backfill_links": {
+    "nuki_access_codes_named_stay_id": 0,
+    "nuki_guest_daily_entries_named_stay_id": 0,
+    "cleaning_events_named_stay_id": 0,
+    "cleaning_events_raw_booking_block_id": 0,
+    "finance_bookings_named_stay_id": 0,
+    "invoices_named_stay_id": 0
+  },
+  "applied": {
+    "created": {
+      "raw_booking_blocks": 0,
+      "raw_booking_block_nights": 0,
+      "named_stays": 0,
+      "named_stay_nights": 0,
+      "stay_source_links": 0,
+      "property_availability_blocks": 0,
+      "occupancy_stay_migration_map": 0,
+      "auto_confirmed_named_stays": 0,
+      "review_required_named_stays": 0
+    },
+    "updated_links": {
+      "nuki_access_codes_named_stay_id": 0,
+      "nuki_guest_daily_entries_named_stay_id": 0,
+      "cleaning_events_named_stay_id": 0,
+      "cleaning_events_raw_booking_block_id": 0,
+      "finance_bookings_named_stay_id": 0,
+      "invoices_named_stay_id": 0
+    },
+    "skipped": {
+      "raw_booking_blocks": 229,
+      "raw_booking_block_nights": 0,
+      "named_stays": 179,
+      "named_stay_nights": 0,
+      "stay_source_links": 0,
+      "property_availability_blocks": 1,
+      "occupancy_stay_migration_map": 9,
+      "auto_confirmed_named_stays": 129,
+      "review_required_named_stays": 50
+    }
+  },
+  "conflicts": {
+    "named_stay_overlap_pairs": 0,
+    "existing_named_stay_night_collisions": 0,
+    "named_stay_availability_overlaps": 0,
+    "raw_block_overlap_pairs": 0,
+    "external_sale_rows": 1,
+    "active_closed_rows": 0
+  },
+  "unmapped": {
+    "finance_bookings_unmatched": 0,
+    "nuki_codes_without_named_like_occupancy": 0,
+    "cleaning_events_without_mapping_candidate": 8,
+    "invoices_without_named_like_occupancy": 0
+  },
+  "review_required": {
+    "finance_synthetic_named_stays": 129,
+    "finance_bookings_needs_review": 0,
+    "legacy_generated_night_rows": 201,
+    "non_reservation_named_stays": 0
+  },
+  "existing_new_model_rows": {
+    "raw_booking_blocks": 30,
+    "raw_booking_block_nights": 26,
+    "named_stays": 211,
+    "named_stay_nights": 197,
+    "stay_source_links": 50,
+    "property_availability_blocks": 1,
+    "occupancy_stay_migration_map": 418
+  },
+  "samples": {
+    "named_stay_overlaps": null,
+    "raw_block_overlaps": null,
+    "unmatched_finance_bookings": null
+  },
+  "idempotent_compared_with_prior_run": true
+}

@@ -19,6 +19,7 @@ What changed in the current remediation pass:
 - Committed all previously dirty PMS 21 code, docs, specs, migrations, generated types, and frontend/backend changes in the snapshot above so the worktree was clean after commit.
 - Added a shared Stage 2 classifier and guarded `--apply --confirm-apply` path with explicit `--allow-review-required`, idempotent mapping, integration relinking, conflict refusal, and preservation tests.
 - Added migration `000036_nuki_named_stay_primary`, preserving Nuki code/event/guest-entry IDs and values while allowing named-stay-primary rows without `occupancy_id`.
+- Added migration `000037_finance_evidence_confirms_named_stays`, which confirms payout/statement-backed stays that were initially classified before finance links were backfilled.
 - Added named-stay update/status Nuki reconciliation, raw source-link union health recomputation, backend calendar sold semantics, PMS 21 cleaning DTO identities, and strict `named_stay_nights` analytics.
 - Added complete backend route inventory in OpenAPI and a router/OpenAPI coverage regression test. Touched PMS 21 contracts have concrete schemas; entries marked `x-contract-status: route-only` identify remaining contract work.
 

@@ -130,6 +130,7 @@ Stage 11 remaining rollout/audit work:
 2026-07-18 remediation review:
 
 - Migration `000036_nuki_named_stay_primary` rebuilds Nuki access-code and guest-entry tables with nullable legacy occupancy identity while preserving row IDs, encrypted PIN values, external Nuki IDs, run links, event-log links, and historical attribution. Local preservation tests pass.
+- Migration `000037_finance_evidence_confirms_named_stays` upgrades payout/statement-backed stays whose only review reason is the Stage 2 `legacy_non_reservation_stay` classification; cancellation and other operational review reasons remain intact. Missing historical ICS remains provenance rather than an actionable warning, while true raw-coverage conflicts stay visible.
 - Named-stay patch/status flows reconcile Nuki generation/revocation after the database update and retain visible error state when external Nuki calls fail.
 - Raw sync recomputes source-link health from the union of active linked raw nights; missing, shrunken, recovered, adjacent, and gap coverage are locally tested without mutating named-stay business fields.
 - Calendar sold-night eligibility is backend-provided and follows analytics rules. Analytics active/closed day metrics consume active `named_stay_nights` and divergence tests pass.

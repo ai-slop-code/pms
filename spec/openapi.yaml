@@ -1928,6 +1928,7 @@ components:
           cleaning_required,
           review_status,
           counts_as_sold,
+          has_finance_evidence,
           nuki_generation_status,
           covered_nights,
           source_links,
@@ -1950,6 +1951,9 @@ components:
         counts_as_sold:
           type: boolean
           description: Backend analytics sold-night eligibility for this stay.
+        has_finance_evidence:
+          type: boolean
+          description: Booking.com payout or statement data independently confirms this stay.
         nuki_generation_status:
           { type: string, enum: [not_applicable, pending, generated, error] }
         nuki_generation_error: { type: string }

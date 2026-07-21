@@ -184,6 +184,95 @@ func TestApplyPMS21Migration_BackfillsUniqueIntegrationLinks(t *testing.T) {
 	}
 }
 
+func TestApplyPMS21Migration_FinanceEvidenceConfirmsLegacyICSStay(t *testing.T) {
+	ctx := context.Background()
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	propertyID := setupFinanceProperty(t, st)
+	legacyID := insertPMS21LegacyOccupancy(t, st, propertyID, "booking_ics", "finance-backed@booking.com", "2026-11-10T00:00:00Z", "2026-11-11T00:00:00Z", "Finance Guest", RepresentationNamedStay, "")
+	now := "2026-01-01T00:00:00Z"
+	if _, err := st.DB.Exec(`INSERT INTO finance_bookings (property_id, reference_number, check_in_date, check_out_date, guest_name, net_cents, payout_date, occupancy_id, created_at, updated_at, source_channel, has_payout_data, has_statement_data) VALUES (?, 'FIN-EVIDENCE', '2026-11-10', '2026-11-11', 'Finance Guest', 10000, '2026-11-12', ?, ?, ?, 'booking_com', 1, 1)`, propertyID, legacyID, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := st.PlanPMS21Migration(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.WouldCreate.AutoConfirmedNamedStays != 1 || plan.WouldCreate.ReviewRequiredNamedStays != 0 {
+		t.Fatalf("finance-backed classification: %+v", plan.WouldCreate)
+	}
+
+	first, err := st.ApplyPMS21Migration(ctx, 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stayID int64
+	var reviewStatus string
+	if err := st.DB.QueryRow(`SELECT ns.id, ns.review_status FROM named_stays ns JOIN occupancy_stay_migration_map osm ON osm.named_stay_id = ns.id WHERE osm.old_occupancy_id = ?`, legacyID).Scan(&stayID, &reviewStatus); err != nil {
+		t.Fatal(err)
+	}
+	if reviewStatus != "confirmed" {
+		t.Fatalf("review status=%q want confirmed", reviewStatus)
+	}
+	var linkedStayID int64
+	if err := st.DB.QueryRow(`SELECT named_stay_id FROM finance_bookings WHERE reference_number = 'FIN-EVIDENCE'`).Scan(&linkedStayID); err != nil {
+		t.Fatal(err)
+	}
+	if linkedStayID != stayID || first.Applied.UpdatedLinks.FinanceBookings != 1 {
+		t.Fatalf("finance link=%d stay=%d counts=%+v", linkedStayID, stayID, first.Applied.UpdatedLinks)
+	}
+
+	if _, err := st.DB.Exec(`UPDATE named_stays SET review_status = 'needs_review', review_reason = 'legacy_non_reservation_stay', nuki_generation_status = 'not_applicable' WHERE id = ?`, stayID); err != nil {
+		t.Fatal(err)
+	}
+	repair, err := st.ApplyPMS21Migration(ctx, 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repair.Applied.UpdatedLinks.FinanceBookings != 0 || repair.Applied.UpdatedLinks.NamedStaysConfirmedByFinance != 1 {
+		t.Fatalf("finance evidence repair counts: %+v", repair.Applied.UpdatedLinks)
+	}
+	var nukiStatus string
+	if err := st.DB.QueryRow(`SELECT review_status, nuki_generation_status FROM named_stays WHERE id = ?`, stayID).Scan(&reviewStatus, &nukiStatus); err != nil {
+		t.Fatal(err)
+	}
+	if reviewStatus != "confirmed" || nukiStatus != "pending" {
+		t.Fatalf("repaired status=%q nuki=%q", reviewStatus, nukiStatus)
+	}
+
+	third, err := st.ApplyPMS21Migration(ctx, 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Applied.UpdatedLinks.FinanceBookings != 0 || third.Applied.UpdatedLinks.NamedStaysConfirmedByFinance != 0 {
+		t.Fatalf("third apply was not idempotent: %+v", third.Applied.UpdatedLinks)
+	}
+}
+
+func TestPMS21NukiPendingEligibilityMatchesSyncSelection(t *testing.T) {
+	eligible := pms21Classification{StayType: StayTypeBookingCom, ReviewStatus: "confirmed", CheckOutDate: "2099-01-02"}
+	if !pms21NukiPendingEligible(NamedStayStatusActive, eligible, sql.NullString{}) {
+		t.Fatal("future confirmed Booking.com stay was not pending-eligible")
+	}
+	for name, tc := range map[string]struct {
+		status  string
+		class   pms21Classification
+		outcome sql.NullString
+	}{
+		"past":                        {status: NamedStayStatusActive, class: pms21Classification{StayType: StayTypeBookingCom, ReviewStatus: "confirmed", CheckOutDate: "2020-01-02"}},
+		"needs review":                {status: NamedStayStatusActive, class: pms21Classification{StayType: StayTypeBookingCom, ReviewStatus: "needs_review", CheckOutDate: "2099-01-02"}},
+		"cancelled":                   {status: NamedStayStatusCancelled, class: eligible},
+		"no show":                     {status: NamedStayStatusActive, class: eligible, outcome: sql.NullString{String: StayOutcomeNoShow, Valid: true}},
+		"non-refundable cancellation": {status: NamedStayStatusActive, class: eligible, outcome: sql.NullString{String: StayOutcomeCancelledNonRefundable, Valid: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if pms21NukiPendingEligible(tc.status, tc.class, tc.outcome) {
+				t.Fatal("unexpected pending eligibility")
+			}
+		})
+	}
+}
+
 func TestApplyPMS21Migration_BookingICSCivilDatesDoNotShiftWestOfUTC(t *testing.T) {
 	ctx := context.Background()
 	st := &Store{DB: testutil.OpenTestDB(t)}
