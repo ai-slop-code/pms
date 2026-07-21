@@ -167,4 +167,50 @@ describe('BookingPayoutsView', () => {
     expect(sourcesCell(2)).toContain('Payout')
     expect(sourcesCell(2)).toContain('Statement')
   })
+
+  it('sets manual revenue through a dialog for a mapped external stay', async () => {
+    seedProperty()
+    apiMock.mockImplementation((url: string, opts?: { method?: string; json?: unknown }) => {
+      if (url.includes('/finance/stay-candidates')) return Promise.resolve({ stays: [] })
+      if (url === '/api/properties/7/stays/42' && opts?.method === 'PATCH') return Promise.resolve({})
+      if (url.startsWith('/api/properties/7/finance/booking-payouts')) {
+        return Promise.resolve({
+          payouts: [
+            {
+              id: 1,
+              reference_number: 'EXT-42',
+              net_cents: 0,
+              payout_date: '2026-04-10',
+              currency: 'EUR',
+              named_stay_id: 42,
+              named_stay_type: 'external',
+            },
+          ],
+        })
+      }
+      return Promise.resolve({})
+    })
+
+    const w = mount(BookingPayoutsView, { global: { stubs: { Teleport: true } } })
+    await flushPromises()
+    const setRevenue = w.findAll('button').find((button) => button.text() === 'Set revenue')
+    expect(setRevenue).toBeTruthy()
+    await setRevenue!.trigger('click')
+
+    const dialog = w.get('[role="dialog"]')
+    await dialog.get('input').setValue('123,45')
+    const saveRevenue = dialog.findAll('button').find((button) => button.text() === 'Save revenue')
+    expect(saveRevenue).toBeTruthy()
+    await saveRevenue!.trigger('click')
+    await flushPromises()
+
+    expect(apiMock).toHaveBeenCalledWith('/api/properties/7/stays/42', {
+      method: 'PATCH',
+      json: {
+        manual_revenue_cents: 12345,
+        manual_revenue_currency: 'EUR',
+        manual_revenue_note: 'Manual revenue from finance row EXT-42',
+      },
+    })
+  })
 })

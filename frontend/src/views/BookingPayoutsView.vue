@@ -10,6 +10,7 @@ import UiInput from '@/components/ui/UiInput.vue'
 import UiSelect from '@/components/ui/UiSelect.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
+import UiDialog from '@/components/ui/UiDialog.vue'
 import UiInlineBanner from '@/components/ui/UiInlineBanner.vue'
 import UiEmptyState from '@/components/ui/UiEmptyState.vue'
 import { stayOutcomeLabel, stayOutcomeTone } from '@/views/occupancy/closure'
@@ -33,6 +34,10 @@ const success = ref('')
 const payouts = ref<BookingPayoutRow[]>([])
 const stayOptions = ref<StayOption[]>([])
 const mapInputByRef = ref<Record<string, string>>({})
+const manualRevenueDialogOpen = ref(false)
+const manualRevenuePayout = ref<BookingPayoutRow | null>(null)
+const manualRevenueAmount = ref('')
+const manualRevenueError = ref('')
 
 function prevMonth() { month.value = shiftMonth(month.value, -1) }
 function nextMonth() { month.value = shiftMonth(month.value, 1) }
@@ -167,13 +172,20 @@ async function createStayFromPayout(referenceNumber: string) {
   }
 }
 
-async function setManualRevenue(p: BookingPayoutRow) {
-  if (!pid.value || !p.named_stay_id) return
-  const raw = window.prompt('Manual revenue amount in EUR')
-  if (raw == null) return
-  const amount = Number(raw.replace(',', '.'))
+function openManualRevenueDialog(p: BookingPayoutRow) {
+  if (!p.named_stay_id) return
+  manualRevenuePayout.value = p
+  manualRevenueAmount.value = ''
+  manualRevenueError.value = ''
+  manualRevenueDialogOpen.value = true
+}
+
+async function saveManualRevenue() {
+  const p = manualRevenuePayout.value
+  if (!pid.value || !p?.named_stay_id) return
+  const amount = Number(manualRevenueAmount.value.replace(',', '.'))
   if (!Number.isFinite(amount) || amount < 0) {
-    error.value = 'Manual revenue must be a non-negative number.'
+    manualRevenueError.value = 'Enter a non-negative amount.'
     return
   }
   busy.value = true
@@ -189,6 +201,8 @@ async function setManualRevenue(p: BookingPayoutRow) {
       },
     })
     success.value = `Manual revenue saved for ${p.reference_number}.`
+    manualRevenueDialogOpen.value = false
+    manualRevenuePayout.value = null
     await load()
     await loadStayOptions()
   } catch (e) {
@@ -350,7 +364,7 @@ watch([pid, month], () => {
                   size="sm"
                   variant="secondary"
                   :disabled="busy"
-                  @click="setManualRevenue(p)"
+                  @click="openManualRevenueDialog(p)"
                 >Set revenue</UiButton>
               </div>
             </div>
@@ -358,6 +372,35 @@ watch([pid, month], () => {
         </tr>
       </UiTable>
     </template>
+
+    <UiDialog
+      v-model:open="manualRevenueDialogOpen"
+      title="Set manual revenue"
+      size="sm"
+    >
+      <form class="manual-revenue-form" @submit.prevent="saveManualRevenue">
+        <p v-if="manualRevenuePayout" class="manual-revenue-form__context">
+          Booking {{ manualRevenuePayout.reference_number }} ·
+          {{ manualRevenuePayout.currency || 'EUR' }}
+        </p>
+        <UiInput
+          v-model="manualRevenueAmount"
+          label="Revenue amount"
+          inputmode="decimal"
+          placeholder="0.00"
+          :error="manualRevenueError"
+          required
+        />
+      </form>
+      <template #footer>
+        <UiButton variant="ghost" :disabled="busy" @click="manualRevenueDialogOpen = false">
+          Cancel
+        </UiButton>
+        <UiButton variant="primary" :loading="busy" @click="saveManualRevenue">
+          Save revenue
+        </UiButton>
+      </template>
+    </UiDialog>
   </div>
 </template>
 
@@ -409,5 +452,14 @@ watch([pid, month], () => {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+.manual-revenue-form {
+  display: grid;
+  gap: var(--space-3);
+}
+.manual-revenue-form__context {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
 }
 </style>

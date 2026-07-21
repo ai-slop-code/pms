@@ -46,8 +46,8 @@ const category = ref('')
 const amountStr = ref('')
 const currency = ref('EUR')
 const channel = ref('')
-const checkIn = ref('')
-const checkOut = ref('')
+const selectedCheckIn = ref('')
+const selectedCheckOut = ref('')
 
 watch(
   () => props.open,
@@ -58,8 +58,8 @@ watch(
       amountStr.value = ''
       currency.value = 'EUR'
       channel.value = ''
-      checkIn.value = props.checkIn || ''
-      checkOut.value = props.checkOut || ''
+      selectedCheckIn.value = props.checkIn || ''
+      selectedCheckOut.value = props.checkOut || ''
     }
   },
 )
@@ -68,8 +68,8 @@ watch(
   () => [props.checkIn, props.checkOut],
   ([ci, co]) => {
     if (props.open) {
-      checkIn.value = ci || ''
-      checkOut.value = co || ''
+      selectedCheckIn.value = ci || ''
+      selectedCheckOut.value = co || ''
     }
   },
 )
@@ -87,7 +87,12 @@ const amountCents = computed(() => {
 const submitDisabled = computed(() => {
   if (props.busy) return true
   if (reason.value.length > 500) return true
-  if (props.mode === 'close' && checkIn.value && checkOut.value && checkOut.value <= checkIn.value) {
+  if (
+    props.mode === 'close' &&
+    selectedCheckIn.value &&
+    selectedCheckOut.value &&
+    selectedCheckOut.value <= selectedCheckIn.value
+  ) {
     return true
   }
   if (props.mode === 'external_sale') {
@@ -102,8 +107,8 @@ function onSubmit() {
     emit('submit', {
       reason: reason.value.trim(),
       category: category.value || undefined,
-      check_in: checkIn.value || undefined,
-      check_out: checkOut.value || undefined,
+      check_in: selectedCheckIn.value || undefined,
+      check_out: selectedCheckOut.value || undefined,
     })
     return
   }
@@ -125,8 +130,8 @@ function onSubmit() {
     <div class="closure-dialog__fields">
       <template v-if="props.mode === 'close'">
         <div class="closure-dialog__grid">
-          <UiInput v-model="checkIn" type="date" label="First night" :min="props.minDate" :max="props.maxDate" />
-          <UiInput v-model="checkOut" type="date" label="Check-out" :min="checkIn" :max="props.maxDate" />
+          <UiInput v-model="selectedCheckIn" type="date" label="First night" :min="props.minDate" :max="props.maxDate" />
+          <UiInput v-model="selectedCheckOut" type="date" label="Check-out" :min="selectedCheckIn" :max="props.maxDate" />
         </div>
         <UiSelect v-model="category" label="Category (optional)">
           <option value="">—</option>
