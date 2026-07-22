@@ -142,6 +142,49 @@ func TestApplyPMS21Migration_RefusesNamedStayOverlap(t *testing.T) {
 	}
 }
 
+func TestApplyPMS21Migration_ArchivesSupersededDuplicate(t *testing.T) {
+	ctx := context.Background()
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	propertyID := setupFinanceProperty(t, st)
+	activeID := insertPMS21LegacyOccupancy(t, st, propertyID, "booking_payout", "payout-active", "2026-10-01T00:00:00Z", "2026-10-04T00:00:00Z", "One", RepresentationSyntheticFinance, "")
+	supersededID := insertPMS21LegacyOccupancy(t, st, propertyID, "booking_statement", "statement-superseded", "2026-10-01T00:00:00Z", "2026-10-04T00:00:00Z", "Duplicate", RepresentationSyntheticFinance, "")
+	repair, err := st.OccupancyRepairApply(ctx, propertyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repair.DuplicatesResolved != 3 {
+		t.Fatalf("repair duplicate nights=%d want 3", repair.DuplicatesResolved)
+	}
+
+	report, err := st.ApplyPMS21Migration(ctx, 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Conflicts.NamedStayOverlapPairs != 0 {
+		t.Fatalf("overlap pairs=%d", report.Conflicts.NamedStayOverlapPairs)
+	}
+	if report.Applied.Created.NamedStayNights != 3 {
+		t.Fatalf("named stay nights=%d want 3", report.Applied.Created.NamedStayNights)
+	}
+
+	for legacyID, wantStatus := range map[int64]string{
+		activeID:     NamedStayStatusActive,
+		supersededID: NamedStayStatusArchived,
+	} {
+		var status string
+		if err := st.DB.QueryRow(`
+			SELECT ns.status
+			FROM occupancy_stay_migration_map m
+			JOIN named_stays ns ON ns.id = m.named_stay_id
+			WHERE m.old_occupancy_id = ?`, legacyID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != wantStatus {
+			t.Fatalf("legacy occupancy %d status=%q want %q", legacyID, status, wantStatus)
+		}
+	}
+}
+
 func TestApplyPMS21Migration_BackfillsUniqueIntegrationLinks(t *testing.T) {
 	ctx := context.Background()
 	st := &Store{DB: testutil.OpenTestDB(t)}

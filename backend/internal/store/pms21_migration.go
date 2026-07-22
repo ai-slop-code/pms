@@ -135,6 +135,7 @@ type pms21LegacyRow struct {
 	UpstreamEventUID     sql.NullString
 	RepresentationKind   sql.NullString
 	SourceDtstamp        sql.NullString
+	SupersededAt         sql.NullString
 	HasFinanceEvidence   bool
 }
 
@@ -237,7 +238,7 @@ func (s *Store) planPMS21Migration(ctx context.Context, sampleLimit int, allowRe
 			}
 		case pms21KindNamed:
 			r.WouldCreate.NamedStays++
-			if legacyStatusActive(row.Status) {
+			if legacyRowActive(row) {
 				r.WouldCreate.NamedStayNights += len(nights)
 			}
 			r.WouldCreate.MigrationMapRows++
@@ -253,13 +254,13 @@ func (s *Store) planPMS21Migration(ctx context.Context, sampleLimit int, allowRe
 			if err := addPMS21CandidateLinkCounts(ctx, s.DB, row.ID, class, &r.WouldBackfillLinks); err != nil {
 				return nil, err
 			}
-			if legacyStatusActive(row.Status) {
+			if legacyRowActive(row) {
 				namedCandidates = append(namedCandidates, pms21CandidateRange{PropertyID: row.PropertyID, ID: row.ID, Kind: "occupancy", Start: class.CheckInDate, End: class.CheckOutDate})
 			}
 		case pms21KindAvailability:
 			r.WouldCreate.PropertyAvailabilityBlocks++
 			r.WouldCreate.MigrationMapRows++
-			if legacyStatusActive(row.Status) {
+			if legacyRowActive(row) {
 				availabilityCandidates = append(availabilityCandidates, pms21CandidateRange{PropertyID: row.PropertyID, ID: row.ID, Kind: "occupancy", Start: class.CheckInDate, End: class.CheckOutDate})
 			}
 		case pms21KindUnmapped:
@@ -305,7 +306,7 @@ func plannedPMS21RawCreates(ctx context.Context, db *sql.DB, row pms21LegacyRow,
 	var rawID int64
 	err := db.QueryRowContext(ctx, `SELECT id FROM raw_booking_blocks WHERE property_id = ? AND source_type = ? AND source_event_uid = ?`, row.PropertyID, class.SourceType, class.SourceUID).Scan(&rawID)
 	if errors.Is(err, sql.ErrNoRows) {
-		if legacyStatusActive(row.Status) {
+		if legacyRowActive(row) {
 			return 1, len(nights), nil
 		}
 		return 1, 0, nil
@@ -313,7 +314,7 @@ func plannedPMS21RawCreates(ctx context.Context, db *sql.DB, row pms21LegacyRow,
 	if err != nil {
 		return 0, 0, err
 	}
-	if !legacyStatusActive(row.Status) {
+	if !legacyRowActive(row) {
 		return 0, 0, nil
 	}
 	missing := 0
@@ -563,7 +564,7 @@ func applyPMS21LegacyRow(ctx context.Context, tx *sql.Tx, row pms21LegacyRow, cl
 	switch class.Kind {
 	case pms21KindRaw:
 		status := "deleted_from_source"
-		if legacyStatusActive(row.Status) {
+		if legacyRowActive(row) {
 			status = "active"
 		}
 		var rawID int64
@@ -607,7 +608,7 @@ func applyPMS21LegacyRow(ctx context.Context, tx *sql.Tx, row pms21LegacyRow, cl
 		counts.Created.MigrationMapRows++
 	case pms21KindNamed:
 		status := NamedStayStatusArchived
-		if legacyStatusActive(row.Status) {
+		if legacyRowActive(row) {
 			status = NamedStayStatusActive
 		} else if strings.EqualFold(row.Status, "cancelled") {
 			status = NamedStayStatusCancelled
@@ -674,7 +675,7 @@ func applyPMS21LegacyRow(ctx context.Context, tx *sql.Tx, row pms21LegacyRow, cl
 		}
 	case pms21KindAvailability:
 		status := "archived"
-		if legacyStatusActive(row.Status) {
+		if legacyRowActive(row) {
 			status = "active"
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO property_availability_blocks (property_id, block_type, start_date, end_date, reason, source_occupancy_id, status, created_at, updated_at) VALUES (?, 'closed', ?, ?, ?, ?, ?, ?, ?)`, row.PropertyID, class.CheckInDate, class.CheckOutDate, nullStringArg(row.RawSummary), row.ID, status, now, now)
@@ -832,7 +833,7 @@ func loadPMS21LegacyRows(ctx context.Context, q queryer) ([]pms21LegacyRow, erro
 		       o.imported_at, o.last_synced_at, o.last_sync_run_id, o.closure_state,
 		       o.external_net_amount_cents, o.external_currency, o.external_channel, o.stay_outcome,
 		       COALESCE(o.cleaning_calendar_excluded, 0), o.upstream_source_type, o.upstream_event_uid,
-		       o.representation_kind, o.source_dtstamp,
+		       o.representation_kind, o.source_dtstamp, o.superseded_at,
 		       EXISTS (
 		           SELECT 1
 		           FROM finance_bookings fb
@@ -856,7 +857,7 @@ func loadPMS21LegacyRows(ctx context.Context, q queryer) ([]pms21LegacyRow, erro
 			&row.StartAt, &row.EndAt, &row.Status, &row.RawSummary, &row.GuestDisplayName, &row.ContentHash,
 			&row.ImportedAt, &row.LastSyncedAt, &row.LastSyncRunID, &row.ClosureState,
 			&row.ExternalRevenueCents, &row.ExternalCurrency, &row.ExternalChannel, &row.StayOutcome,
-			&row.CleaningExcluded, &row.UpstreamSourceType, &row.UpstreamEventUID, &row.RepresentationKind, &row.SourceDtstamp,
+			&row.CleaningExcluded, &row.UpstreamSourceType, &row.UpstreamEventUID, &row.RepresentationKind, &row.SourceDtstamp, &row.SupersededAt,
 			&hasFinanceEvidence); err != nil {
 			return nil, err
 		}
@@ -1107,10 +1108,10 @@ func namedPredicate(alias string) string {
 	return fmt.Sprintf(`(COALESCE(%[1]s.representation_kind, '') IN ('named_stay','synthetic_finance','external_sale') OR COALESCE(TRIM(%[1]s.guest_display_name), '') <> '' OR %[1]s.source_type IN ('booking_payout','booking_statement') OR COALESCE(%[1]s.closure_state, '') = 'external_sale')`, alias)
 }
 func overlapPairsSQL(leftPredicate, rightPredicate string) string {
-	return `SELECT COUNT(*) FROM occupancies a JOIN occupancies b ON a.property_id = b.property_id AND a.id < b.id WHERE a.status IN ('active','updated') AND b.status IN ('active','updated') AND ` + leftPredicate + ` AND ` + rightPredicate + ` AND a.start_at < b.end_at AND b.start_at < a.end_at`
+	return `SELECT COUNT(*) FROM occupancies a JOIN occupancies b ON a.property_id = b.property_id AND a.id < b.id WHERE a.status IN ('active','updated') AND b.status IN ('active','updated') AND a.superseded_at IS NULL AND b.superseded_at IS NULL AND ` + leftPredicate + ` AND ` + rightPredicate + ` AND a.start_at < b.end_at AND b.start_at < a.end_at`
 }
 func overlapSamplesSQL(leftPredicate, rightPredicate string) string {
-	return `SELECT a.property_id, a.id, b.id, a.start_at, a.end_at, b.start_at, b.end_at FROM occupancies a JOIN occupancies b ON a.property_id = b.property_id AND a.id < b.id WHERE a.status IN ('active','updated') AND b.status IN ('active','updated') AND ` + leftPredicate + ` AND ` + rightPredicate + ` AND a.start_at < b.end_at AND b.start_at < a.end_at ORDER BY a.property_id, a.start_at, a.id LIMIT ?`
+	return `SELECT a.property_id, a.id, b.id, a.start_at, a.end_at, b.start_at, b.end_at FROM occupancies a JOIN occupancies b ON a.property_id = b.property_id AND a.id < b.id WHERE a.status IN ('active','updated') AND b.status IN ('active','updated') AND a.superseded_at IS NULL AND b.superseded_at IS NULL AND ` + leftPredicate + ` AND ` + rightPredicate + ` AND a.start_at < b.end_at AND b.start_at < a.end_at ORDER BY a.property_id, a.start_at, a.id LIMIT ?`
 }
 
 func insertPMS21Map(ctx context.Context, tx *sql.Tx, row pms21LegacyRow, kind string, rawID, stayID, availabilityID int64, now string) error {
@@ -1135,6 +1136,9 @@ func incrementPMS21Skipped(class pms21Classification, counts *PMS21ApplyCounts) 
 	}
 }
 func legacyStatusActive(status string) bool { return status == "active" || status == "updated" }
+func legacyRowActive(row pms21LegacyRow) bool {
+	return legacyStatusActive(row.Status) && !row.SupersededAt.Valid
+}
 func legacyPropertyDates(row pms21LegacyRow) (string, string, error) {
 	startAt, err := time.Parse(time.RFC3339, row.StartAt)
 	if err != nil {
