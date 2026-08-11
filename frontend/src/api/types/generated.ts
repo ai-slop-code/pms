@@ -1530,6 +1530,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/properties/{id}/finance/revenue-recognition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List payout-backed gross revenue recognized across stay nights. */
+        get: {
+            parameters: {
+                query?: {
+                    month?: string;
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Monthly gross revenue recognition report. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinanceRevenueRecognitionResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/properties/{id}/finance/stay-candidates": {
         parameters: {
             query?: never;
@@ -5237,6 +5280,42 @@ export interface components {
             has_payout_data: boolean;
             has_statement_data: boolean;
         };
+        FinanceRevenueRecognitionResponse: {
+            month: string;
+            /** Format: int64 */
+            gross_revenue_cents: number;
+            bookings: components["schemas"]["FinanceRevenueRecognitionBooking"][];
+            excluded_bookings: components["schemas"]["FinanceRevenueRecognitionIssue"][];
+        };
+        FinanceRevenueRecognitionBooking: {
+            /** Format: int64 */
+            booking_id: number;
+            reference_number: string;
+            guest_name: string;
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+            /** Format: int64 */
+            gross_cents: number;
+            stay_nights: number;
+            recognized_nights: number;
+            /** Format: int64 */
+            recognized_gross_cents: number;
+            unmatched: boolean;
+            cancelled: boolean;
+            no_show: boolean;
+        };
+        FinanceRevenueRecognitionIssue: {
+            /** Format: int64 */
+            booking_id: number;
+            reference_number: string;
+            guest_name: string;
+            check_in_date?: string;
+            check_out_date?: string;
+            /** @enum {string} */
+            reason: "missing_check_in" | "missing_check_out" | "invalid_check_in" | "invalid_check_out" | "invalid_stay_window";
+        };
         FinanceNamedStayCandidate: {
             /** Format: int64 */
             id: number;
@@ -5457,6 +5536,7 @@ export interface components {
                 incoming: number;
                 outgoing: number;
                 net: number;
+                recognized_gross: number;
             };
             recent_invoices?: components["schemas"]["DashboardInvoice"][];
         };

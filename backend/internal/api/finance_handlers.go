@@ -168,6 +168,37 @@ type financeSummaryResponse struct {
 	GeneratedEntrySync         financeGeneratedEntrySyncRow `json:"generated_entry_sync"`
 }
 
+type financeRevenueRecognitionBookingRow struct {
+	BookingID            int64  `json:"booking_id"`
+	ReferenceNumber      string `json:"reference_number"`
+	GuestName            string `json:"guest_name"`
+	CheckInDate          string `json:"check_in_date"`
+	CheckOutDate         string `json:"check_out_date"`
+	GrossCents           int    `json:"gross_cents"`
+	StayNights           int    `json:"stay_nights"`
+	RecognizedNights     int    `json:"recognized_nights"`
+	RecognizedGrossCents int    `json:"recognized_gross_cents"`
+	Unmatched            bool   `json:"unmatched"`
+	Cancelled            bool   `json:"cancelled"`
+	NoShow               bool   `json:"no_show"`
+}
+
+type financeRevenueRecognitionIssueRow struct {
+	BookingID       int64  `json:"booking_id"`
+	ReferenceNumber string `json:"reference_number"`
+	GuestName       string `json:"guest_name"`
+	CheckInDate     string `json:"check_in_date,omitempty"`
+	CheckOutDate    string `json:"check_out_date,omitempty"`
+	Reason          string `json:"reason"`
+}
+
+type financeRevenueRecognitionResponse struct {
+	Month             string                                `json:"month"`
+	GrossRevenueCents int                                   `json:"gross_revenue_cents"`
+	Bookings          []financeRevenueRecognitionBookingRow `json:"bookings"`
+	ExcludedBookings  []financeRevenueRecognitionIssueRow   `json:"excluded_bookings"`
+}
+
 type financeGeneratedEntrySyncResponse struct {
 	OK                      bool                                `json:"ok"`
 	GeneratedEntrySync      financeGeneratedEntrySyncRow        `json:"generated_entry_sync"`
@@ -408,6 +439,71 @@ func (s *Server) listFinanceBookingPayouts(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	WriteJSON(w, http.StatusOK, financeBookingPayoutsResponse{Month: month, MappedOnly: mappedOnlyRaw, Payouts: out})
+}
+
+func (s *Server) getFinanceRevenueRecognition(w http.ResponseWriter, r *http.Request) {
+	_, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Finance, permissions.LevelRead)
+	if !ok {
+		return
+	}
+	prop, err := s.Store.GetProperty(r.Context(), pid)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "property not found")
+		return
+	}
+	loc, err := time.LoadLocation(prop.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	month, _, _ := s.parseMonthInPropertyTZ(r, loc)
+	if month == "" {
+		WriteError(w, http.StatusBadRequest, "month must be YYYY-MM")
+		return
+	}
+	monthStart, err := time.ParseInLocation("2006-01", month, loc)
+	if err != nil || monthStart.Format("2006-01") != month {
+		WriteError(w, http.StatusBadRequest, "month must be YYYY-MM")
+		return
+	}
+	report, err := s.Store.ComputeFinanceRevenueRecognition(r.Context(), pid, month, loc)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	bookings := make([]financeRevenueRecognitionBookingRow, 0, len(report.Bookings))
+	for _, row := range report.Bookings {
+		bookings = append(bookings, financeRevenueRecognitionBookingRow{
+			BookingID:            row.BookingID,
+			ReferenceNumber:      row.ReferenceNumber,
+			GuestName:            fixCSVMojibake(row.GuestName),
+			CheckInDate:          row.CheckInDate,
+			CheckOutDate:         row.CheckOutDate,
+			GrossCents:           row.GrossCents,
+			StayNights:           row.StayNights,
+			RecognizedNights:     row.RecognizedNights,
+			RecognizedGrossCents: row.RecognizedGrossCents,
+			Unmatched:            row.Unmatched,
+			Cancelled:            row.Cancelled,
+			NoShow:               row.NoShow,
+		})
+	}
+	issues := make([]financeRevenueRecognitionIssueRow, 0, len(report.ExcludedBookings))
+	for _, row := range report.ExcludedBookings {
+		issues = append(issues, financeRevenueRecognitionIssueRow{
+			BookingID:       row.BookingID,
+			ReferenceNumber: row.ReferenceNumber,
+			GuestName:       fixCSVMojibake(row.GuestName),
+			CheckInDate:     row.CheckInDate,
+			CheckOutDate:    row.CheckOutDate,
+			Reason:          row.Reason,
+		})
+	}
+	WriteJSON(w, http.StatusOK, financeRevenueRecognitionResponse{
+		Month:             report.Month,
+		GrossRevenueCents: report.GrossRevenueCents,
+		Bookings:          bookings,
+		ExcludedBookings:  issues,
+	})
 }
 
 func (s *Server) listFinanceStayCandidates(w http.ResponseWriter, r *http.Request) {

@@ -139,9 +139,10 @@ type cleaningMonthWidget struct {
 }
 
 type financeMonthWidget struct {
-	Incoming int `json:"incoming"`
-	Outgoing int `json:"outgoing"`
-	Net      int `json:"net"`
+	Incoming        int `json:"incoming"`
+	Outgoing        int `json:"outgoing"`
+	Net             int `json:"net"`
+	RecognizedGross int `json:"recognized_gross"`
 }
 
 type dashboardInvoiceRow struct {

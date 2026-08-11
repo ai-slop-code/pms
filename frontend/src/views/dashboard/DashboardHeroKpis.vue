@@ -36,9 +36,9 @@ const upcoming7DayCount = computed(() => {
     />
     <UiKpiCard
       v-if="finance"
-      label="Gross revenue (month)"
-      :value="eur(finance.incoming)"
-      :hint="`Outgoing ${eur(finance.outgoing)}`"
+      label="Recognized gross (month)"
+      :value="eur(finance.recognized_gross)"
+      hint="Allocated across occupied nights"
     />
     <UiKpiCard
       v-if="upcomingStays"

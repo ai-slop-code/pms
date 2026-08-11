@@ -254,6 +254,22 @@ func TestDashboardSummary_IncludesOnlyAuthorizedWidgets(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	financeNow := time.Now().UTC()
+	financeCheckIn := time.Date(financeNow.Year(), financeNow.Month(), 1, 0, 0, 0, 0, time.UTC)
+	if err := st.CreateBookingPayout(ctx, &store.FinanceBookingPayout{
+		PropertyID:      prop.ID,
+		ReferenceNumber: "DASHBOARD-REVENUE",
+		CheckInDate:     sql.NullString{String: financeCheckIn.Format("2006-01-02"), Valid: true},
+		CheckOutDate:    sql.NullString{String: financeCheckIn.AddDate(0, 0, 1).Format("2006-01-02"), Valid: true},
+		AmountCents:     sql.NullInt64{Int64: 45678, Valid: true},
+		NetCents:        40000,
+		PayoutDate:      financeNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `UPDATE finance_bookings SET has_payout_data = 1 WHERE property_id = ? AND reference_number = 'DASHBOARD-REVENUE'`, prop.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := &Server{Store: st, SessionTTL: time.Hour}
 	ts := httptest.NewServer(srv.Routes())
@@ -307,6 +323,9 @@ func TestDashboardSummary_IncludesOnlyAuthorizedWidgets(t *testing.T) {
 	}
 	if got := int(financeWidget["net"].(float64)); got != 12345 {
 		t.Fatalf("finance net=%d want 12345", got)
+	}
+	if got := int(financeWidget["recognized_gross"].(float64)); got != 45678 {
+		t.Fatalf("recognized gross=%d want 45678", got)
 	}
 }
 

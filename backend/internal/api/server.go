@@ -221,6 +221,7 @@ func (s *Server) Routes() chi.Router {
 				r.Post("/properties/{id}/finance/months/{month}/open", s.openFinanceMonth)
 				r.Post("/properties/{id}/finance/months/{month}/sync-generated", s.syncFinanceGeneratedEntries)
 				r.Get("/properties/{id}/finance/summary", s.getFinanceSummary)
+				r.Get("/properties/{id}/finance/revenue-recognition", s.getFinanceRevenueRecognition)
 				r.Get("/properties/{id}/finance/categories", s.listFinanceCategories)
 				r.Post("/properties/{id}/finance/categories", s.postFinanceCategory)
 				r.Get("/properties/{id}/finance/recurring-rules", s.listFinanceRecurringRules)
@@ -1032,6 +1033,9 @@ func (s *Server) getDashboardSummary(w http.ResponseWriter, r *http.Request) {
 				Incoming: sum.MonthlyIncomingCents,
 				Outgoing: sum.MonthlyOutgoingCents,
 				Net:      sum.MonthlyNetCents,
+			}
+			if revenue, err := s.Store.ComputeFinanceRevenueRecognition(r.Context(), pid, month, loc); err == nil && revenue != nil {
+				widget.RecognizedGross = revenue.GrossRevenueCents
 			}
 			widgets.FinanceMonth = widget
 		}

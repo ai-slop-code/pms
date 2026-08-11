@@ -87,7 +87,7 @@ describe('DashboardView', () => {
           },
         ],
         cleaning_month: { counted_days: 3, salary_draft: 7500 },
-        finance_month: { incoming: 100000, outgoing: 25000, net: 75000 },
+        finance_month: { incoming: 100000, outgoing: 25000, net: 75000, recognized_gross: 140000 },
         recent_invoices: [],
         active_nuki_codes: [],
       },
@@ -96,6 +96,8 @@ describe('DashboardView', () => {
     await flushPromises()
     expect(apiMock).toHaveBeenCalledWith('/api/properties/4/dashboard')
     expect(w.text()).toContain('Jane Guest')
+    expect(w.text()).toContain('Recognized gross (month)')
+    expect(w.text()).toContain('1,400')
   })
 
   it('surfaces an error banner when the dashboard endpoint rejects', async () => {

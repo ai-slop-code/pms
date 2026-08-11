@@ -18,6 +18,7 @@ import UiDialog from '@/components/ui/UiDialog.vue'
 import UiSelect from '@/components/ui/UiSelect.vue'
 import { monthKey, shiftMonth } from '@/utils/month'
 import FinanceOverviewTab from '@/views/finance/FinanceOverviewTab.vue'
+import FinanceRevenueTab from '@/views/finance/FinanceRevenueTab.vue'
 import FinanceTransactionsTab from '@/views/finance/FinanceTransactionsTab.vue'
 import FinanceRecurringTab from '@/views/finance/FinanceRecurringTab.vue'
 import FinanceCategoriesTab from '@/views/finance/FinanceCategoriesTab.vue'
@@ -30,6 +31,7 @@ import type {
   FinanceResetPreview,
   FinanceResetResult,
   FinanceSummary,
+  FinanceRevenueRecognitionResponse,
 } from '@/api/types/finance'
 
 const { pid } = useCurrentProperty()
@@ -69,6 +71,12 @@ const categories = ref<FinanceCategory[]>([])
 const transactions = ref<FinanceTransaction[]>([])
 const recurringRules = ref<RecurringRule[]>([])
 const summary = ref<FinanceSummary | null>(null)
+const revenueRecognition = ref<FinanceRevenueRecognitionResponse>({
+  month: month.value,
+  gross_revenue_cents: 0,
+  bookings: [],
+  excluded_bookings: [],
+})
 
 const txFilterDirection = ref<'' | 'incoming' | 'outgoing'>('')
 const txFilterCategory = ref<number>(0)
@@ -228,7 +236,7 @@ async function loadAll() {
   loading.value = true
   error.value = ''
   try {
-    const [cats, txs, sum, rules] = await Promise.all([
+    const [cats, txs, sum, rules, revenue] = await Promise.all([
       api<{ categories: FinanceCategory[] }>(`/api/properties/${pid.value}/finance/categories`),
       api<{ transactions: FinanceTransaction[] }>(
         `/api/properties/${pid.value}/finance/transactions?month=${encodeURIComponent(month.value)}`,
@@ -237,11 +245,20 @@ async function loadAll() {
         `/api/properties/${pid.value}/finance/summary?month=${encodeURIComponent(month.value)}`,
       ),
       api<{ rules: RecurringRule[] }>(`/api/properties/${pid.value}/finance/recurring-rules`),
+      api<FinanceRevenueRecognitionResponse>(
+        `/api/properties/${pid.value}/finance/revenue-recognition?month=${encodeURIComponent(month.value)}`,
+      ),
     ])
     categories.value = cats.categories
     transactions.value = txs.transactions
     summary.value = sum
     recurringRules.value = rules.rules
+    revenueRecognition.value = {
+      month: revenue.month || month.value,
+      gross_revenue_cents: revenue.gross_revenue_cents || 0,
+      bookings: revenue.bookings || [],
+      excluded_bookings: revenue.excluded_bookings || [],
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load finance data'
   } finally {
@@ -675,7 +692,13 @@ watch(
         @update:model-value="(v) => (tab = v as FinanceTab)"
       />
 
-      <FinanceOverviewTab v-if="tab === 'overview'" :summary="summary" />
+      <FinanceOverviewTab
+        v-if="tab === 'overview'"
+        :summary="summary"
+        :recognized-gross-cents="revenueRecognition.gross_revenue_cents"
+      />
+
+      <FinanceRevenueTab v-if="tab === 'revenue'" :report="revenueRecognition" />
 
       <FinanceTransactionsTab
         v-if="tab === 'transactions'"

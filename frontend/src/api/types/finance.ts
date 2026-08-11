@@ -73,6 +73,37 @@ export interface FinanceSummary {
   generated_entry_sync: FinanceGeneratedEntrySync
 }
 
+export interface FinanceRevenueRecognitionBooking {
+  booking_id: number
+  reference_number: string
+  guest_name: string
+  check_in_date: string
+  check_out_date: string
+  gross_cents: number
+  stay_nights: number
+  recognized_nights: number
+  recognized_gross_cents: number
+  unmatched: boolean
+  cancelled: boolean
+  no_show: boolean
+}
+
+export interface FinanceRevenueRecognitionIssue {
+  booking_id: number
+  reference_number: string
+  guest_name: string
+  check_in_date?: string
+  check_out_date?: string
+  reason: string
+}
+
+export interface FinanceRevenueRecognitionResponse {
+  month: string
+  gross_revenue_cents: number
+  bookings: FinanceRevenueRecognitionBooking[]
+  excluded_bookings: FinanceRevenueRecognitionIssue[]
+}
+
 export interface FinanceResetDeleteCounts {
   finance_transactions: number
   finance_recurring_rules: number

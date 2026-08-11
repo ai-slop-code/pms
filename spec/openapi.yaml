@@ -753,6 +753,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/FinanceBookingPayoutsResponse" }
 
+  /properties/{id}/finance/revenue-recognition:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Finance]
+      summary: List payout-backed gross revenue recognized across stay nights.
+      parameters:
+        - in: query
+          name: month
+          schema: { type: string, pattern: "^\\d{4}-\\d{2}$" }
+      responses:
+        "200":
+          description: Monthly gross revenue recognition report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceRevenueRecognitionResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /properties/{id}/finance/stay-candidates:
     parameters:
       - $ref: "#/components/parameters/IdPath"
@@ -1421,6 +1439,49 @@ components:
         has_payout_data: { type: boolean }
         has_statement_data: { type: boolean }
 
+    FinanceRevenueRecognitionResponse:
+      type: object
+      required: [month, gross_revenue_cents, bookings, excluded_bookings]
+      properties:
+        month: { type: string, pattern: "^\\d{4}-\\d{2}$" }
+        gross_revenue_cents: { type: integer, format: int64 }
+        bookings:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceRevenueRecognitionBooking" }
+        excluded_bookings:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceRevenueRecognitionIssue" }
+
+    FinanceRevenueRecognitionBooking:
+      type: object
+      required: [booking_id, reference_number, guest_name, check_in_date, check_out_date, gross_cents, stay_nights, recognized_nights, recognized_gross_cents, unmatched, cancelled, no_show]
+      properties:
+        booking_id: { type: integer, format: int64 }
+        reference_number: { type: string }
+        guest_name: { type: string }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+        gross_cents: { type: integer, format: int64 }
+        stay_nights: { type: integer, minimum: 1 }
+        recognized_nights: { type: integer, minimum: 0 }
+        recognized_gross_cents: { type: integer, format: int64 }
+        unmatched: { type: boolean }
+        cancelled: { type: boolean }
+        no_show: { type: boolean }
+
+    FinanceRevenueRecognitionIssue:
+      type: object
+      required: [booking_id, reference_number, guest_name, reason]
+      properties:
+        booking_id: { type: integer, format: int64 }
+        reference_number: { type: string }
+        guest_name: { type: string }
+        check_in_date: { type: string }
+        check_out_date: { type: string }
+        reason:
+          type: string
+          enum: [missing_check_in, missing_check_out, invalid_check_in, invalid_check_out, invalid_stay_window]
+
     FinanceNamedStayCandidate:
       type: object
       required: [id, display_name, stay_type, check_in_date, check_out_date, status, has_finance_data]
@@ -1727,11 +1788,12 @@ components:
             salary_draft: { type: integer }
         finance_month:
           type: object
-          required: [incoming, outgoing, net]
+          required: [incoming, outgoing, net, recognized_gross]
           properties:
             incoming: { type: integer }
             outgoing: { type: integer }
             net: { type: integer }
+            recognized_gross: { type: integer }
         recent_invoices:
           type: array
           items: { $ref: "#/components/schemas/DashboardInvoice" }

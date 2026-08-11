@@ -1,7 +1,8 @@
-export type FinanceTab = 'overview' | 'transactions' | 'recurring' | 'categories' | 'breakdown'
+export type FinanceTab = 'overview' | 'revenue' | 'transactions' | 'recurring' | 'categories' | 'breakdown'
 
 export const FINANCE_TABS: Array<{ id: string; label: string }> = [
   { id: 'overview', label: 'Overview' },
+  { id: 'revenue', label: 'Revenue' },
   { id: 'transactions', label: 'Transactions' },
   { id: 'recurring', label: 'Recurring rules' },
   { id: 'categories', label: 'Categories' },

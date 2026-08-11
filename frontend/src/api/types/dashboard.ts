@@ -38,6 +38,7 @@ export interface FinanceMonthWidget {
   incoming: number
   outgoing: number
   net: number
+  recognized_gross: number
 }
 
 export interface RecentInvoiceWidget {
