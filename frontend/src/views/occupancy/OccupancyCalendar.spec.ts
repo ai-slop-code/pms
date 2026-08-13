@@ -55,7 +55,6 @@ const calendar: OccupancyCalendarView = {
       nuki_generation_status: 'error',
       nuki_generation_error: 'credentials missing',
       covered_nights: ['2026-07-10', '2026-07-11'],
-      legacy_occupancy_id: 200,
       source_links: [
         {
           id: 30,
@@ -95,7 +94,7 @@ const calendar: OccupancyCalendarView = {
 describe('OccupancyCalendar Stage 5 combined model', () => {
   it('shows raw-only nights and renders a promoted multi-night stay as one connected ribbon', () => {
     const w = mount(OccupancyCalendar, {
-      props: { month: '2026-07', occupancies: [], calendar },
+      props: { month: '2026-07', calendar },
     })
 
     const rawOnlyCell = w
@@ -147,7 +146,7 @@ describe('OccupancyCalendar Stage 5 combined model', () => {
       ],
     }
     const w = mount(OccupancyCalendar, {
-      props: { month: '2026-07', occupancies: [], calendar: crossWeekCalendar },
+      props: { month: '2026-07', calendar: crossWeekCalendar },
     })
     const bands = w.find('.calendar').findAll('.calendar__stay-band')
 
@@ -181,7 +180,7 @@ describe('OccupancyCalendar Stage 5 combined model', () => {
       ],
     }
     const w = mount(OccupancyCalendar, {
-      props: { month: '2026-07', occupancies: [], calendar: financeConfirmedCalendar },
+      props: { month: '2026-07', calendar: financeConfirmedCalendar },
     })
     const band = w.find('.calendar__stay-band')
 
@@ -203,7 +202,7 @@ describe('OccupancyCalendar Stage 5 combined model', () => {
       ],
     }
     const w = mount(OccupancyCalendar, {
-      props: { month: '2026-07', occupancies: [], calendar: conflictingCalendar },
+      props: { month: '2026-07', calendar: conflictingCalendar },
     })
     const band = w.find('.calendar__stay-band')
 
@@ -213,7 +212,7 @@ describe('OccupancyCalendar Stage 5 combined model', () => {
 
   it('opens the existing day detail flow when a stay band is clicked', async () => {
     const w = mount(OccupancyCalendar, {
-      props: { month: '2026-07', occupancies: [], calendar },
+      props: { month: '2026-07', calendar },
     })
 
     await w.find('.calendar__stay-band').trigger('click')
@@ -230,7 +229,7 @@ describe('OccupancyCalendar Stage 5 combined model', () => {
 
   it('emits calendar-cell-click for empty nights so manual stays can be created', async () => {
     const w = mount(OccupancyCalendar, {
-      props: { month: '2026-07', occupancies: [], calendar },
+      props: { month: '2026-07', calendar },
     })
     const emptyCell = w
       .findAll('.calendar__cell')

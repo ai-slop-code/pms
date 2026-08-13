@@ -19,6 +19,7 @@ func TestImportBookingPayoutRow_AtomicOnFailure(t *testing.T) {
 	ctx := context.Background()
 	pid := setupFinanceProperty(t, st)
 	catID := categoryIDByCode(t, st, pid, "booking_income")
+	stay := createFinanceNamedStay(t, st, pid, "REF-1", "2026-01-01", "2026-01-02")
 
 	// Seed a first payout row so a second insert with the same reference fails.
 	firstTx := &FinanceTransaction{
@@ -36,6 +37,7 @@ func TestImportBookingPayoutRow_AtomicOnFailure(t *testing.T) {
 		ReferenceNumber: "REF-1",
 		NetCents:        1000,
 		PayoutDate:      time.Now().UTC(),
+		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}
 	if _, err := st.ImportBookingPayoutRow(ctx, firstTx, first, 0); err != nil {
 		t.Fatalf("seed import: %v", err)
@@ -59,6 +61,7 @@ func TestImportBookingPayoutRow_AtomicOnFailure(t *testing.T) {
 		ReferenceNumber: "REF-1",
 		NetCents:        2000,
 		PayoutDate:      time.Now().UTC(),
+		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}
 	if _, err := st.ImportBookingPayoutRow(ctx, dupTx, dupPayout, 0); err == nil {
 		t.Fatal("expected duplicate import to fail")
@@ -78,6 +81,7 @@ func TestImportBookingPayoutRow_ReusesExistingTransaction(t *testing.T) {
 	ctx := context.Background()
 	pid := setupFinanceProperty(t, st)
 	catID := categoryIDByCode(t, st, pid, "booking_income")
+	stay := createFinanceNamedStay(t, st, pid, "REF-42", "2026-02-01", "2026-02-02")
 
 	// Create a standalone transaction first, then import the payout only.
 	created, err := st.CreateFinanceTransaction(ctx, &FinanceTransaction{
@@ -100,6 +104,7 @@ func TestImportBookingPayoutRow_ReusesExistingTransaction(t *testing.T) {
 		ReferenceNumber: "REF-42",
 		NetCents:        3000,
 		PayoutDate:      time.Now().UTC(),
+		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}
 	txID, err := st.ImportBookingPayoutRow(ctx, nil, payout, created.ID)
 	if err != nil {
@@ -193,6 +198,7 @@ func TestBackfillBookingPayoutTransaction_LinksOrphan(t *testing.T) {
 	ctx := context.Background()
 	pid := setupFinanceProperty(t, st)
 	catID := categoryIDByCode(t, st, pid, "booking_income")
+	stay := createFinanceNamedStay(t, st, pid, "REF-ORPHAN", "2026-05-05", "2026-05-07")
 
 	// Seed an orphan booking row (no linked transaction).
 	orphan := &FinanceBookingPayout{
@@ -200,6 +206,7 @@ func TestBackfillBookingPayoutTransaction_LinksOrphan(t *testing.T) {
 		ReferenceNumber: "REF-ORPHAN",
 		NetCents:        4242,
 		PayoutDate:      time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC),
+		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}
 	if err := st.CreateBookingPayout(ctx, orphan); err != nil {
 		t.Fatalf("seed orphan: %v", err)

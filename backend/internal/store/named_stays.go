@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -44,11 +43,17 @@ type NamedStay struct {
 	ManualRevenueNote       sql.NullString `json:"-"`
 	ReviewStatus            sql.NullString `json:"-"`
 	ReviewReason            sql.NullString `json:"-"`
+	ReviewActorUserID       sql.NullInt64  `json:"-"`
+	ReviewedAt              sql.NullTime   `json:"-"`
 	StayOutcome             sql.NullString `json:"-"`
+	StayOutcomeReason       sql.NullString `json:"-"`
+	StayOutcomeActorUserID  sql.NullInt64  `json:"-"`
+	StayOutcomeMarkedAt     sql.NullTime   `json:"-"`
 	NukiGenerationStatus    sql.NullString `json:"-"`
 	NukiGenerationError     sql.NullString `json:"-"`
 	NukiGenerationUpdatedAt sql.NullTime   `json:"-"`
-	LegacyOccupancyID       sql.NullInt64  `json:"legacy_occupancy_id,omitempty"`
+	FirstKnownAt            time.Time      `json:"first_known_at"`
+	CancellationEffectiveAt sql.NullTime   `json:"-"`
 	CreatedAt               time.Time      `json:"created_at"`
 	UpdatedAt               time.Time      `json:"updated_at"`
 }
@@ -98,7 +103,7 @@ type NamedStayFinanceCandidate struct {
 func (s *Store) ListNamedStayFinanceCandidates(ctx context.Context, propertyID int64, month string, limit, offset int) ([]NamedStayFinanceCandidate, error) {
 	query := `
 		SELECT ns.id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
-		       ns.review_status, ns.manual_revenue_cents,
+		       COALESCE(ns.review_resolution, ns.review_status), ns.manual_revenue_cents,
 		       CASE WHEN EXISTS (SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id) THEN 1 ELSE 0 END
 		FROM named_stays ns
 		WHERE ns.property_id = ? AND ns.status = 'active' AND ns.stay_type IN ('booking_com', 'external')`
@@ -167,6 +172,13 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 	if reviewStatus == "" {
 		reviewStatus = "confirmed"
 	}
+	if reviewStatus != "confirmed" && reviewStatus != "needs_review" {
+		return nil, ErrNamedStayInvalidRange
+	}
+	var reviewResolution interface{}
+	if reviewStatus == "confirmed" {
+		reviewResolution = "confirmed"
+	}
 	nukiStatus := NukiGenerationNotApplicable
 	if namedStayNukiEligible(stayType, reviewStatus) {
 		nukiStatus = NukiGenerationPending
@@ -195,19 +207,25 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 	if err := namedStayRangeAvailableTx(ctx, tx, in.PropertyID, 0, ci, co); err != nil {
 		return nil, err
 	}
+	firstKnownAt := nowStr
+	if raw != nil {
+		if importedAt := parseNamedStayTime(raw.importedAt); !importedAt.IsZero() && importedAt.Before(now) {
+			firstKnownAt = raw.importedAt
+		}
+	}
 
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO named_stays (
 			property_id, display_name, stay_type, check_in_date, check_out_date, status,
 			cleaning_required, cleaning_override_reason, source_channel, source_reference,
-			review_status, review_reason, nuki_generation_status, created_by_user_id, updated_by_user_id,
-			created_at, updated_at
+			review_status, review_resolution, review_reason, nuki_generation_status, created_by_user_id, updated_by_user_id,
+			first_known_at, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.PropertyID, displayName, stayType, ci.Format("2006-01-02"), co.Format("2006-01-02"), boolInt(cleaningRequired),
 		nullableString(strings.TrimSpace(in.CleaningOverrideReason)), nullableString(strings.TrimSpace(in.SourceChannel)), nullableString(sourceReference),
-		reviewStatus, nullableString(strings.TrimSpace(in.ReviewReason)), nukiStatus,
-		nullableInt64(in.CreatedByUserID), nullableInt64(in.CreatedByUserID), nowStr, nowStr)
+		reviewStatus, reviewResolution, nullableString(strings.TrimSpace(in.ReviewReason)), nukiStatus,
+		nullableInt64(in.CreatedByUserID), nullableInt64(in.CreatedByUserID), firstKnownAt, nowStr, nowStr)
 	if err != nil {
 		return nil, err
 	}
@@ -227,33 +245,6 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 			VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
 			in.PropertyID, stayID, raw.id, raw.sourceType, raw.sourceEventUID, ci.Format("2006-01-02"), co.Format("2006-01-02"), nowStr, nowStr); err != nil {
 			return nil, err
-		}
-	}
-	if !s.OccupancyLegacyWriteDisabled {
-		legacyOccID, err := s.upsertLegacyOccupancyForNamedStayTx(ctx, tx, legacyNamedStayRow{
-			ID:               stayID,
-			PropertyID:       in.PropertyID,
-			DisplayName:      displayName,
-			StayType:         stayType,
-			CheckInDate:      ci.Format("2006-01-02"),
-			CheckOutDate:     co.Format("2006-01-02"),
-			Status:           NamedStayStatusActive,
-			CleaningRequired: cleaningRequired,
-			Raw:              raw,
-		}, now)
-		if err != nil {
-			return nil, err
-		}
-		if err := upsertOccupancyStayMigrationMapTx(ctx, tx, in.PropertyID, legacyOccID, stayID, nowStr); err != nil {
-			return nil, err
-		}
-		if err := s.reconcileLegacyRawCoverageForNamedStayTx(ctx, tx, in.PropertyID, raw, now); err != nil {
-			return nil, err
-		}
-		if raw != nil && raw.legacyOccupancyID.Valid && in.RequireWithinRawBlock && ci.Format("2006-01-02") == raw.checkInDate && co.Format("2006-01-02") == raw.checkOutDate {
-			if _, err := s.MoveFinanceMappingTx(ctx, tx, in.PropertyID, raw.legacyOccupancyID.Int64, legacyOccID); err != nil {
-				return nil, err
-			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -286,10 +277,6 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 	}
 	defer tx.Rollback()
 	current, err := getNamedStayTx(ctx, tx, propertyID, stayID)
-	if err != nil {
-		return nil, err
-	}
-	linkedRaw, err := getActiveLinkedRawForStayTx(ctx, tx, propertyID, stayID)
 	if err != nil {
 		return nil, err
 	}
@@ -377,28 +364,6 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 	if _, err := recomputeSourceLinkHealthTx(ctx, tx, propertyID, nowStr); err != nil {
 		return nil, err
 	}
-	if !s.OccupancyLegacyWriteDisabled {
-		legacyOccID, err := s.upsertLegacyOccupancyForNamedStayTx(ctx, tx, legacyNamedStayRow{
-			ID:               stayID,
-			PropertyID:       propertyID,
-			DisplayName:      displayName,
-			StayType:         stayType,
-			CheckInDate:      ci.Format("2006-01-02"),
-			CheckOutDate:     co.Format("2006-01-02"),
-			Status:           current.Status,
-			CleaningRequired: cleaningRequired,
-			Raw:              linkedRaw,
-		}, now)
-		if err != nil {
-			return nil, err
-		}
-		if err := upsertOccupancyStayMigrationMapTx(ctx, tx, propertyID, legacyOccID, stayID, nowStr); err != nil {
-			return nil, err
-		}
-		if err := s.reconcileLegacyRawCoverageForNamedStayTx(ctx, tx, propertyID, linkedRaw, now); err != nil {
-			return nil, err
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -421,10 +386,6 @@ func (s *Store) UpdateNamedStayStatus(ctx context.Context, propertyID, stayID in
 	if err != nil {
 		return nil, err
 	}
-	linkedRaw, err := getActiveLinkedRawForStayTx(ctx, tx, propertyID, stayID)
-	if err != nil {
-		return nil, err
-	}
 	ci, co, err := parseNamedStayRange(current.CheckInDate, current.CheckOutDate)
 	if err != nil {
 		return nil, err
@@ -434,42 +395,82 @@ func (s *Store) UpdateNamedStayStatus(ctx context.Context, propertyID, stayID in
 			return nil, err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE named_stays SET status = ?, updated_by_user_id = ?, updated_at = ? WHERE property_id = ? AND id = ?`, status, nullableInt64(userID), nowStr, propertyID, stayID); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE named_stays
+		SET status = ?,
+			cancellation_effective_at = CASE
+				WHEN ? = 'cancelled' THEN COALESCE(cancellation_effective_at, ?)
+				WHEN ? = 'active' AND status <> 'active' THEN NULL
+				ELSE cancellation_effective_at
+			END,
+			updated_by_user_id = ?, updated_at = ?
+		WHERE property_id = ? AND id = ?`, status, status, nowStr, status, nullableInt64(userID), nowStr, propertyID, stayID); err != nil {
 		return nil, err
 	}
 	active := status == NamedStayStatusActive
 	if err := replaceNamedStayNightsTx(ctx, tx, propertyID, stayID, nightsUTC(ci, co), active, nowStr); err != nil {
 		return nil, err
 	}
-	if !s.OccupancyLegacyWriteDisabled {
-		legacyOccID, err := s.upsertLegacyOccupancyForNamedStayTx(ctx, tx, legacyNamedStayRow{
-			ID:               stayID,
-			PropertyID:       propertyID,
-			DisplayName:      current.DisplayName,
-			StayType:         current.StayType,
-			CheckInDate:      current.CheckInDate,
-			CheckOutDate:     current.CheckOutDate,
-			Status:           status,
-			CleaningRequired: current.CleaningRequired,
-			Raw:              linkedRaw,
-		}, now)
-		if err != nil {
-			return nil, err
-		}
-		if !active {
-			if err := deactivateOccupancyNightsTx(ctx, tx, legacyOccID); err != nil {
-				return nil, err
-			}
-		}
-		if err := upsertOccupancyStayMigrationMapTx(ctx, tx, propertyID, legacyOccID, stayID, nowStr); err != nil {
-			return nil, err
-		}
-		if err := s.reconcileLegacyRawCoverageForNamedStayTx(ctx, tx, propertyID, linkedRaw, now); err != nil {
-			return nil, err
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	return s.GetNamedStay(ctx, propertyID, stayID)
+}
+
+func (s *Store) UpdateNamedStayOutcome(ctx context.Context, propertyID, stayID, userID int64, outcome *string, reason string) (*NamedStay, error) {
+	var value interface{}
+	if outcome != nil {
+		v := strings.TrimSpace(*outcome)
+		if v != StayOutcomeCancelledNonRefundable && v != StayOutcomeNoShow {
+			return nil, ErrNamedStayInvalidRange
+		}
+		value = v
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	reason = strings.TrimSpace(reason)
+	var reasonValue, actorValue, markedAt interface{}
+	if value != nil {
+		reasonValue = nullableString(reason)
+		actorValue = nullableInt64(userID)
+		markedAt = now
+	}
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE named_stays
+		SET stay_outcome = ?, stay_outcome_reason = ?, stay_outcome_actor_user_id = ?,
+			stay_outcome_marked_at = ?,
+			updated_by_user_id = ?, updated_at = ?
+		WHERE property_id = ? AND id = ?`, value, reasonValue, actorValue, markedAt,
+		nullableInt64(userID), now, propertyID, stayID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetNamedStay(ctx, propertyID, stayID)
+}
+
+func (s *Store) UpdateNamedStayReview(ctx context.Context, propertyID, stayID, userID int64, reviewStatus, reason string) (*NamedStay, error) {
+	reviewStatus = strings.TrimSpace(reviewStatus)
+	if reviewStatus != "confirmed" && reviewStatus != "rejected" {
+		return nil, ErrNamedStayInvalidRange
+	}
+	storedStatus := "confirmed"
+	if reviewStatus == "rejected" {
+		storedStatus = "needs_review"
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE named_stays
+		SET review_status = ?, review_resolution = ?, review_reason = ?, review_actor_user_id = ?, reviewed_at = ?,
+			updated_by_user_id = ?, updated_at = ?
+		WHERE property_id = ? AND id = ?`, storedStatus, reviewStatus, nullableString(strings.TrimSpace(reason)),
+		nullableInt64(userID), now, nullableInt64(userID), now, propertyID, stayID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, sql.ErrNoRows
 	}
 	return s.GetNamedStay(ctx, propertyID, stayID)
 }
@@ -487,24 +488,6 @@ func (s *Store) MarkNamedStayNukiGeneration(ctx context.Context, propertyID, sta
 	return err
 }
 
-func (s *Store) LinkNukiCodeToNamedStayByOccupancy(ctx context.Context, propertyID, occupancyID, stayID int64) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE nuki_access_codes SET named_stay_id = ? WHERE property_id = ? AND occupancy_id = ?`, stayID, propertyID, occupancyID)
-	return err
-}
-
-func (s *Store) ResolveNamedStayIDForOccupancy(ctx context.Context, propertyID, occupancyID int64) (int64, error) {
-	var stayID int64
-	err := s.DB.QueryRowContext(ctx, `
-		SELECT named_stay_id
-		FROM occupancy_stay_migration_map
-		WHERE property_id = ? AND old_occupancy_id = ? AND named_stay_id IS NOT NULL
-		LIMIT 1`, propertyID, occupancyID).Scan(&stayID)
-	if err != nil {
-		return 0, err
-	}
-	return stayID, nil
-}
-
 func NamedStayNukiEligible(stayType, reviewStatus string) bool {
 	return namedStayNukiEligible(stayType, reviewStatus)
 }
@@ -513,11 +496,12 @@ const namedStaySelectSQL = `
 	SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
 	       ns.cleaning_required, ns.cleaning_override_reason, ns.source_channel, ns.source_reference,
 	       ns.manual_revenue_cents, ns.manual_revenue_currency, ns.manual_revenue_note,
-	       ns.review_status, ns.review_reason, ns.stay_outcome, ns.nuki_generation_status, ns.nuki_generation_error, ns.nuki_generation_updated_at,
-	       ns.created_at, ns.updated_at,
-	       osm.old_occupancy_id
-	FROM named_stays ns
-	LEFT JOIN occupancy_stay_migration_map osm ON osm.named_stay_id = ns.id AND osm.migration_kind = 'named_stay'`
+	       COALESCE(ns.review_resolution, ns.review_status),
+	       ns.review_reason, ns.review_actor_user_id, ns.reviewed_at,
+	       ns.stay_outcome, ns.stay_outcome_reason, ns.stay_outcome_actor_user_id, ns.stay_outcome_marked_at,
+	       ns.nuki_generation_status, ns.nuki_generation_error, ns.nuki_generation_updated_at,
+	       COALESCE(ns.first_known_at, ns.created_at), ns.cancellation_effective_at, ns.created_at, ns.updated_at
+	FROM named_stays ns`
 
 func scanNamedStays(rows *sql.Rows) ([]NamedStay, error) {
 	defer rows.Close()
@@ -525,18 +509,24 @@ func scanNamedStays(rows *sql.Rows) ([]NamedStay, error) {
 	for rows.Next() {
 		var n NamedStay
 		var cleaning int
-		var created, updated string
-		var nukiUpdated sql.NullString
+		var firstKnown, created, updated string
+		var reviewed, outcomeMarked, nukiUpdated, cancelled sql.NullString
 		if err := rows.Scan(&n.ID, &n.PropertyID, &n.DisplayName, &n.StayType, &n.CheckInDate, &n.CheckOutDate, &n.Status,
 			&cleaning, &n.CleaningOverrideReason, &n.SourceChannel, &n.SourceReference,
 			&n.ManualRevenueCents, &n.ManualRevenueCurrency, &n.ManualRevenueNote,
-			&n.ReviewStatus, &n.ReviewReason, &n.StayOutcome, &n.NukiGenerationStatus, &n.NukiGenerationError, &nukiUpdated,
-			&created, &updated, &n.LegacyOccupancyID); err != nil {
+			&n.ReviewStatus, &n.ReviewReason, &n.ReviewActorUserID, &reviewed,
+			&n.StayOutcome, &n.StayOutcomeReason, &n.StayOutcomeActorUserID, &outcomeMarked,
+			&n.NukiGenerationStatus, &n.NukiGenerationError, &nukiUpdated,
+			&firstKnown, &cancelled, &created, &updated); err != nil {
 			return nil, err
 		}
 		n.CleaningRequired = cleaning == 1
 		n.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		n.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
+		n.FirstKnownAt = parseNamedStayTime(firstKnown)
+		n.ReviewedAt = parseNamedStayNullTime(reviewed)
+		n.StayOutcomeMarkedAt = parseNamedStayNullTime(outcomeMarked)
+		n.CancellationEffectiveAt = parseNamedStayNullTime(cancelled)
 		if nukiUpdated.Valid && nukiUpdated.String != "" {
 			if parsed, err := time.Parse(time.RFC3339, nukiUpdated.String); err == nil {
 				n.NukiGenerationUpdatedAt = sql.NullTime{Time: parsed, Valid: true}
@@ -545,6 +535,23 @@ func scanNamedStays(rows *sql.Rows) ([]NamedStay, error) {
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+func parseNamedStayNullTime(value sql.NullString) sql.NullTime {
+	if !value.Valid || value.String == "" {
+		return sql.NullTime{}
+	}
+	parsed, err := time.Parse(time.RFC3339, value.String)
+	return sql.NullTime{Time: parsed, Valid: err == nil}
+}
+
+func parseNamedStayTime(value string) time.Time {
+	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
 
 func getNamedStayTx(ctx context.Context, tx *sql.Tx, propertyID, stayID int64) (*NamedStay, error) {
@@ -563,45 +570,25 @@ func getNamedStayTx(ctx context.Context, tx *sql.Tx, propertyID, stayID int64) (
 }
 
 type rawBookingBlockForStay struct {
-	id                int64
-	sourceType        string
-	sourceEventUID    string
-	checkInDate       string
-	checkOutDate      string
-	rawSummary        sql.NullString
-	legacyOccupancyID sql.NullInt64
+	id             int64
+	sourceType     string
+	sourceEventUID string
+	checkInDate    string
+	checkOutDate   string
+	rawSummary     sql.NullString
+	importedAt     string
 }
 
 func getActiveRawBookingBlockTx(ctx context.Context, tx *sql.Tx, propertyID, rawBlockID int64) (*rawBookingBlockForStay, error) {
 	var r rawBookingBlockForStay
 	err := tx.QueryRowContext(ctx, `
-		SELECT rb.id, rb.source_type, rb.source_event_uid, rb.check_in_date, rb.check_out_date, rb.raw_summary, o.id
+		SELECT rb.id, rb.source_type, rb.source_event_uid, rb.check_in_date, rb.check_out_date, rb.raw_summary, rb.imported_at
 		FROM raw_booking_blocks rb
-		LEFT JOIN occupancies o ON o.property_id = rb.property_id AND o.source_event_uid = rb.source_event_uid
 		WHERE rb.property_id = ? AND rb.id = ? AND rb.status = 'active'`, propertyID, rawBlockID).
-		Scan(&r.id, &r.sourceType, &r.sourceEventUID, &r.checkInDate, &r.checkOutDate, &r.rawSummary, &r.legacyOccupancyID)
+		Scan(&r.id, &r.sourceType, &r.sourceEventUID, &r.checkInDate, &r.checkOutDate, &r.rawSummary, &r.importedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUpstreamBlockNotFound
-		}
-		return nil, err
-	}
-	return &r, nil
-}
-
-func getActiveLinkedRawForStayTx(ctx context.Context, tx *sql.Tx, propertyID, stayID int64) (*rawBookingBlockForStay, error) {
-	var r rawBookingBlockForStay
-	err := tx.QueryRowContext(ctx, `
-		SELECT rb.id, rb.source_type, rb.source_event_uid, rb.check_in_date, rb.check_out_date, rb.raw_summary, o.id
-		FROM stay_source_links l
-		JOIN raw_booking_blocks rb ON rb.id = l.raw_booking_block_id
-		LEFT JOIN occupancies o ON o.property_id = rb.property_id AND o.source_event_uid = rb.source_event_uid
-		WHERE l.property_id = ? AND l.named_stay_id = ? AND l.link_status = 'active' AND rb.status = 'active'
-		ORDER BY l.id ASC LIMIT 1`, propertyID, stayID).
-		Scan(&r.id, &r.sourceType, &r.sourceEventUID, &r.checkInDate, &r.checkOutDate, &r.rawSummary, &r.legacyOccupancyID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
 		}
 		return nil, err
 	}
@@ -641,6 +628,18 @@ func namedStayNukiEligible(stayType, reviewStatus string) bool {
 }
 
 func namedStayRangeAvailableTx(ctx context.Context, tx *sql.Tx, propertyID, stayID int64, ci, co time.Time) error {
+	startDate := ci.Format("2006-01-02")
+	endDate := co.Format("2006-01-02")
+	var blockCount int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM property_availability_blocks
+		WHERE property_id = ? AND status = 'active' AND start_date < ? AND end_date > ?`, propertyID, endDate, startDate).Scan(&blockCount); err != nil {
+		return err
+	}
+	if blockCount > 0 {
+		return ErrNamedStayOverlap
+	}
 	for _, night := range nightsUTC(ci, co) {
 		var cnt int
 		if err := tx.QueryRowContext(ctx, `
@@ -685,111 +684,6 @@ func ensureNamedStayWithinActiveLinksTx(ctx context.Context, tx *sql.Tx, propert
 		return ErrNamedStayOutsideBlock
 	}
 	return nil
-}
-
-type legacyNamedStayRow struct {
-	ID               int64
-	PropertyID       int64
-	DisplayName      string
-	StayType         string
-	CheckInDate      string
-	CheckOutDate     string
-	Status           string
-	CleaningRequired bool
-	Raw              *rawBookingBlockForStay
-}
-
-func (s *Store) upsertLegacyOccupancyForNamedStayTx(ctx context.Context, tx *sql.Tx, row legacyNamedStayRow, now time.Time) (int64, error) {
-	ci, co, err := parseNamedStayRange(row.CheckInDate, row.CheckOutDate)
-	if err != nil {
-		return 0, err
-	}
-	uid := fmt.Sprintf("named_stay:%d", row.ID)
-	contentHash := fmt.Sprintf("named-stay:%d:%s:%s:%s:%s:%t", row.ID, row.DisplayName, row.StayType, row.CheckInDate, row.CheckOutDate, row.CleaningRequired)
-	status := "active"
-	if row.Status == NamedStayStatusCancelled {
-		status = "cancelled"
-	} else if row.Status == NamedStayStatusArchived {
-		status = StatusDeletedFromSource
-	}
-	representationKind := RepresentationNamedStay
-	var closureState interface{}
-	if row.StayType == StayTypeMaintenance || row.StayType == StayTypePersonalUse {
-		closureState = ClosureStateClosed
-		representationKind = RepresentationManualClosure
-	}
-	var upstreamSource, upstreamUID interface{}
-	var rawSummary interface{}
-	if row.Raw != nil {
-		upstreamSource = row.Raw.sourceType
-		upstreamUID = row.Raw.sourceEventUID
-		if row.Raw.rawSummary.Valid {
-			rawSummary = row.Raw.rawSummary.String
-		}
-	}
-	nights := nightsUTC(ci, co)
-	nowStr := now.UTC().Format(time.RFC3339)
-	res, err := tx.ExecContext(ctx, `
-		INSERT INTO occupancies (
-			property_id, source_type, source_event_uid, start_at, end_at, status,
-			raw_summary, guest_display_name, content_hash, imported_at, last_synced_at,
-			upstream_source_type, upstream_event_uid, representation_kind, representation_date,
-			closure_state, cleaning_calendar_excluded
-		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(property_id, source_event_uid) DO UPDATE SET
-			start_at = excluded.start_at,
-			end_at = excluded.end_at,
-			status = excluded.status,
-			raw_summary = excluded.raw_summary,
-			guest_display_name = excluded.guest_display_name,
-			content_hash = excluded.content_hash,
-			last_synced_at = excluded.last_synced_at,
-			upstream_source_type = excluded.upstream_source_type,
-			upstream_event_uid = excluded.upstream_event_uid,
-			representation_kind = excluded.representation_kind,
-			representation_date = excluded.representation_date,
-			closure_state = excluded.closure_state,
-			cleaning_calendar_excluded = excluded.cleaning_calendar_excluded,
-			superseded_at = NULL,
-			superseded_reason = NULL`,
-		row.PropertyID, manualSplitSourceType, uid, ci.Format(time.RFC3339), co.Format(time.RFC3339), status,
-		rawSummary, row.DisplayName, contentHash, nowStr, nowStr,
-		upstreamSource, upstreamUID, representationKind, nullableRepresentationDate(nights), closureState, boolInt(!row.CleaningRequired))
-	if err != nil {
-		return 0, err
-	}
-	occID, _ := res.LastInsertId()
-	if occID == 0 {
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM occupancies WHERE property_id = ? AND source_event_uid = ?`, row.PropertyID, uid).Scan(&occID); err != nil {
-			return 0, err
-		}
-	}
-	return occID, nil
-}
-
-func (s *Store) reconcileLegacyRawCoverageForNamedStayTx(ctx context.Context, tx *sql.Tx, propertyID int64, raw *rawBookingBlockForStay, now time.Time) error {
-	if raw == nil || strings.TrimSpace(raw.sourceEventUID) == "" || strings.TrimSpace(raw.checkInDate) == "" || strings.TrimSpace(raw.checkOutDate) == "" {
-		return nil
-	}
-	ci, co, err := parseNamedStayRange(raw.checkInDate, raw.checkOutDate)
-	if err != nil {
-		return err
-	}
-	loc := s.propertyLocationTx(ctx, tx, propertyID)
-	return s.reconcileUpstreamCoverageTx(ctx, tx, propertyID, raw.sourceEventUID, nightsUTC(ci, co), now, loc, nil)
-}
-
-func upsertOccupancyStayMigrationMapTx(ctx context.Context, tx *sql.Tx, propertyID, legacyOccID, stayID int64, nowStr string) error {
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
-		VALUES (?, ?, ?, 'named_stay', 'stage4_legacy_compat', ?)
-		ON CONFLICT(old_occupancy_id) DO UPDATE SET
-			property_id = excluded.property_id,
-			named_stay_id = excluded.named_stay_id,
-			migration_kind = excluded.migration_kind,
-			notes = excluded.notes`, legacyOccID, propertyID, stayID, nowStr)
-	return err
 }
 
 func boolInt(v bool) int {

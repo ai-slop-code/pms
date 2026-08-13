@@ -146,7 +146,7 @@ describe('CleaningView', () => {
         events: [
           {
             id: 9,
-            occupancy_id: 3,
+            named_stay_id: 3,
             google_calendar_id: 'cleaning@example.com',
             cleaning_date: '2026-04-02',
             starts_at: '2026-04-02T09:00:00Z',

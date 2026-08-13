@@ -44,7 +44,6 @@ type CalendarEventPayload struct {
 	End          time.Time
 	TimeZone     string
 	PropertyID   int64
-	OccupancyID  int64
 	NamedStayID  int64
 	RawBlockID   int64
 	Identity     string
@@ -203,6 +202,13 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 				if err := s.Store.MarkCleaningCalendarEventRemoved(ctx, ev.PropertyID, ev.ID, nil); err != nil {
 					return finish(err)
 				}
+				action := "delete"
+				if ev.CleaningKind == store.CleaningKindProvisionalBlock {
+					action = "cleaning_provisional_removed"
+					stats.ProvisionalRemoved++
+					_ = s.Store.InsertAuditLog(ctx, nil, action, "cleaning_calendar_event", fmt.Sprintf("%d", ev.ID), "removed; Google event reused", "system", "cleaning_sync")
+				}
+				insertLog(s.Store, ctx, ev.PropertyID, ev.ID, runID, action, "removed; Google event reused")
 				stats.EventsRemoved++
 				continue
 			}
@@ -211,8 +217,7 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 			ev.GoogleEventID = sql.NullString{String: matchedID, Valid: true}
 			_ = s.Store.MarkCleaningCalendarEventGoogleSeen(ctx, ev.PropertyID, ev.ID, matchedID)
 		}
-		removalReason := s.removalReason(ctx, propertyID, ev.OccupancyID)
-		if err := s.syncDelete(ctx, &ev, runID, removalReason); err != nil {
+		if err := s.syncDelete(ctx, &ev, runID); err != nil {
 			msg := err.Error()
 			runErr = &msg
 			continue
@@ -225,10 +230,6 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 	return finish(nil)
 }
 
-func cleaningIdentityKey(upstreamUID, checkoutDate, kind string) string {
-	return upstreamUID + "\x00" + checkoutDate + "\x00" + kind
-}
-
 func cleaningEventKey(event *store.CleaningCalendarEvent) string {
 	if event == nil {
 		return ""
@@ -236,20 +237,10 @@ func cleaningEventKey(event *store.CleaningCalendarEvent) string {
 	if event.CleaningIdentity.Valid && strings.TrimSpace(event.CleaningIdentity.String) != "" {
 		return "identity:" + strings.TrimSpace(event.CleaningIdentity.String)
 	}
-	if event.UpstreamEventUID.Valid && event.CheckoutDate.Valid {
-		return "legacy:" + cleaningIdentityKey(event.UpstreamEventUID.String, event.CheckoutDate.String, event.CleaningKind)
-	}
 	return fmt.Sprintf("event:%d", event.ID)
 }
 
 func (s *Service) buildDesiredEvents(ctx context.Context, propertyID int64, settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, fromDate, toDate string) ([]*store.CleaningCalendarEvent, error) {
-	hasNewModel, err := s.Store.PropertyHasPMS21CleaningSources(ctx, propertyID, fromDate, toDate)
-	if err != nil {
-		return nil, err
-	}
-	if !hasNewModel {
-		return s.buildLegacyDesiredEvents(ctx, propertyID, settings, profile, timezone, loc, fromDate, toDate)
-	}
 	out := []*store.CleaningCalendarEvent{}
 	rawTargets, err := s.Store.ListCleaningRawProvisionalTargets(ctx, propertyID, fromDate, toDate)
 	if err != nil {
@@ -276,44 +267,6 @@ func (s *Service) buildDesiredEvents(ctx context.Context, propertyID int64, sett
 	return out, nil
 }
 
-func (s *Service) buildLegacyDesiredEvents(ctx context.Context, propertyID int64, settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, fromDate, toDate string) ([]*store.CleaningCalendarEvent, error) {
-	from, err := time.ParseInLocation("2006-01-02", fromDate, loc)
-	if err != nil {
-		return nil, err
-	}
-	to, err := time.ParseInLocation("2006-01-02", toDate, loc)
-	if err != nil {
-		return nil, err
-	}
-	candidates, err := s.Store.ListCleaningEligibleOccupancies(ctx, propertyID, from.AddDate(0, 0, -1).UTC(), to.AddDate(0, 0, 1).UTC())
-	if err != nil {
-		return nil, err
-	}
-	hasCoverage, err := s.Store.PropertyHasOccupancyNights(ctx, propertyID)
-	if err != nil {
-		return nil, err
-	}
-	out := []*store.CleaningCalendarEvent{}
-	for _, occ := range candidates {
-		if !occ.UpstreamEventUID.Valid || strings.TrimSpace(occ.UpstreamEventUID.String) == "" {
-			continue
-		}
-		dates, kind := s.Store.CleaningCheckoutDatesForOccupancy(ctx, &occ, hasCoverage)
-		for _, d := range dates {
-			if d < fromDate || d > toDate {
-				continue
-			}
-			event, err := s.buildEvent(ctx, settings, profile, timezone, loc, occ, d, kind)
-			if err != nil {
-				return nil, err
-			}
-			event.DesiredHash = sql.NullString{String: desiredHash(event, timezone), Valid: true}
-			out = append(out, event)
-		}
-	}
-	return out, nil
-}
-
 func (s *Service) buildRawProvisionalEvent(settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, propertyID int64, target store.CleaningRawProvisionalTarget) (*store.CleaningCalendarEvent, error) {
 	cd, err := time.ParseInLocation("2006-01-02", target.CheckoutDate, loc)
 	if err != nil {
@@ -324,9 +277,7 @@ func (s *Service) buildRawProvisionalEvent(settings *store.GoogleCleaningSetting
 	ends := starts.Add(time.Duration(settings.DefaultDurationMinutes) * time.Minute)
 	event := &store.CleaningCalendarEvent{
 		PropertyID:        propertyID,
-		OccupancyID:       nullInt64Value(target.LegacyOccupancyID),
-		RawBookingBlockID: target.RawBookingBlockID,
-		UpstreamEventUID:  target.UpstreamEventUID,
+		RawBookingBlockID: sql.NullInt64{Int64: target.RawBookingBlockID, Valid: true},
 		CheckoutDate:      sql.NullString{String: target.CheckoutDate, Valid: true},
 		CleaningKind:      store.CleaningKindProvisionalBlock,
 		CleaningIdentity:  sql.NullString{String: store.RawProvisionalCleaningIdentity(propertyID, target.CheckoutDate), Valid: true},
@@ -356,11 +307,9 @@ func (s *Service) buildNamedStayEvent(ctx context.Context, settings *store.Googl
 	if err != nil {
 		return nil, err
 	}
-	var nextID sql.NullInt64
 	var warning sql.NullString
 	sameDay := next != nil
 	if sameDay {
-		nextID = next.LegacyOccupancyID
 		ends = time.Date(cd.Year(), cd.Month(), cd.Day(), inH, inM, 0, 0, loc).Add(-time.Hour)
 		if !ends.After(starts) {
 			ends = starts.Add(minimalConflictDuration)
@@ -369,7 +318,6 @@ func (s *Service) buildNamedStayEvent(ctx context.Context, settings *store.Googl
 	}
 	event := &store.CleaningCalendarEvent{
 		PropertyID:       target.PropertyID,
-		OccupancyID:      nullInt64Value(target.LegacyOccupancyID),
 		NamedStayID:      sql.NullInt64{Int64: target.NamedStayID, Valid: true},
 		CheckoutDate:     sql.NullString{String: target.CheckOutDate, Valid: true},
 		CleaningKind:     store.CleaningKindNamedStay,
@@ -379,7 +327,6 @@ func (s *Service) buildNamedStayEvent(ctx context.Context, settings *store.Googl
 		StartsAt:         starts.UTC(),
 		EndsAt:           ends.UTC(),
 		SameDayArrival:   sameDay,
-		NextOccupancyID:  nextID,
 		Title:            renderTitle(settings, sameDay),
 		Status:           store.CleaningCalendarStatusPending,
 		WarningMessage:   warning,
@@ -392,11 +339,6 @@ func (s *Service) buildNamedStayEvent(ctx context.Context, settings *store.Googl
 func (s *Service) lookupExistingDesiredEvent(ctx context.Context, event *store.CleaningCalendarEvent) *store.CleaningCalendarEvent {
 	if event.CleaningIdentity.Valid && strings.TrimSpace(event.CleaningIdentity.String) != "" {
 		if existing, err := s.Store.GetCleaningCalendarEventByCleaningIdentity(ctx, event.CleaningIdentity.String); err == nil {
-			return existing
-		}
-	}
-	if event.UpstreamEventUID.Valid && event.CheckoutDate.Valid {
-		if existing, err := s.Store.GetCleaningCalendarEventByIdentity(ctx, event.PropertyID, event.UpstreamEventUID.String, event.CheckoutDate.String, event.CleaningKind); err == nil {
 			return existing
 		}
 	}
@@ -425,7 +367,6 @@ func desiredHash(event *store.CleaningCalendarEvent, timezone string) string {
 		timezone,
 		event.CleaningKind,
 		nullStringValue(event.CleaningIdentity),
-		fmt.Sprintf("occ:%d", event.OccupancyID),
 		fmt.Sprintf("stay:%d", nullInt64Value(event.NamedStayID)),
 		fmt.Sprintf("raw:%d", nullInt64Value(event.RawBookingBlockID)),
 		fmt.Sprintf("same:%t", event.SameDayArrival),
@@ -455,7 +396,6 @@ type googleEventIndex struct {
 	byIdentity     map[string]GoogleCalendarEvent
 	byNamedStayDay map[string]GoogleCalendarEvent
 	byRawBlockDay  map[string]GoogleCalendarEvent
-	bySummaryDay   map[string]GoogleCalendarEvent
 }
 
 func newGoogleEventIndex(events []GoogleCalendarEvent, propertyID int64, loc *time.Location) googleEventIndex {
@@ -466,7 +406,6 @@ func newGoogleEventIndex(events []GoogleCalendarEvent, propertyID int64, loc *ti
 		byIdentity:     map[string]GoogleCalendarEvent{},
 		byNamedStayDay: map[string]GoogleCalendarEvent{},
 		byRawBlockDay:  map[string]GoogleCalendarEvent{},
-		bySummaryDay:   map[string]GoogleCalendarEvent{},
 	}
 	propID := fmt.Sprintf("%d", propertyID)
 	for _, ev := range events {
@@ -475,27 +414,31 @@ func newGoogleEventIndex(events []GoogleCalendarEvent, propertyID int64, loc *ti
 		}
 		idx.byID[ev.ID] = ev
 		day := ev.Start.In(loc).Format("2006-01-02")
-		if strings.TrimSpace(ev.Summary) != "" {
-			idx.bySummaryDay[day+"\x00"+strings.TrimSpace(ev.Summary)] = ev
-		}
 		priv := ev.PrivateProperties
 		if priv == nil || strings.TrimSpace(priv["pms_property_id"]) != propID {
 			continue
 		}
 		if v := strings.TrimSpace(priv["pms_cleaning_event_id"]); v != "" {
-			idx.byCleaningID[v] = ev
+			indexGoogleEvent(idx.byCleaningID, v, ev)
 		}
 		if v := strings.TrimSpace(priv["pms_cleaning_identity"]); v != "" {
-			idx.byIdentity[v] = ev
+			indexGoogleEvent(idx.byIdentity, v, ev)
 		}
 		if v := strings.TrimSpace(priv["pms_named_stay_id"]); v != "" {
-			idx.byNamedStayDay[v+"\x00"+day] = ev
+			indexGoogleEvent(idx.byNamedStayDay, v+"\x00"+day, ev)
 		}
 		if v := strings.TrimSpace(priv["pms_raw_booking_block_id"]); v != "" {
-			idx.byRawBlockDay[v+"\x00"+day] = ev
+			indexGoogleEvent(idx.byRawBlockDay, v+"\x00"+day, ev)
 		}
 	}
 	return idx
+}
+
+func indexGoogleEvent(index map[string]GoogleCalendarEvent, key string, event GoogleCalendarEvent) {
+	current, exists := index[key]
+	if !exists || event.ID < current.ID {
+		index[key] = event
+	}
 }
 
 func (idx googleEventIndex) match(desired, existing *store.CleaningCalendarEvent) string {
@@ -537,11 +480,6 @@ func (idx googleEventIndex) match(desired, existing *store.CleaningCalendarEvent
 			return ev.ID
 		}
 	}
-	if desired != nil {
-		if ev, ok := idx.bySummaryDay[desired.CleaningDate+"\x00"+strings.TrimSpace(desired.Title)]; ok {
-			return ev.ID
-		}
-	}
 	return ""
 }
 
@@ -576,59 +514,13 @@ func (s *Service) RetryEvent(ctx context.Context, propertyID, eventID int64) err
 		return err
 	}
 	if event.Status == store.CleaningCalendarStatusRemoved {
-		return s.syncDelete(ctx, event, 0, nil)
+		return s.syncDelete(ctx, event, 0)
 	}
 	prop, err := s.Store.GetProperty(ctx, propertyID)
 	if err != nil {
 		return err
 	}
 	return s.syncUpsert(ctx, event, prop.Timezone, 0)
-}
-
-func (s *Service) buildEvent(ctx context.Context, settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, occ store.Occupancy, checkoutDate, kind string) (*store.CleaningCalendarEvent, error) {
-	cd, err := time.ParseInLocation("2006-01-02", checkoutDate, loc)
-	if err != nil {
-		return nil, err
-	}
-	dayStart := time.Date(cd.Year(), cd.Month(), cd.Day(), 0, 0, 0, 0, loc)
-	dayEnd := dayStart.AddDate(0, 0, 1)
-	next, err := s.Store.FindCleaningCalendarSameDayArrival(ctx, occ.PropertyID, occ.ID, dayStart.UTC(), dayEnd.UTC())
-	if err != nil {
-		return nil, err
-	}
-	outH, outM := parseHM(profile.DefaultCheckOutTime, 10, 0)
-	inH, inM := parseHM(profile.DefaultCheckInTime, 14, 0)
-	starts := time.Date(cd.Year(), cd.Month(), cd.Day(), outH, outM, 0, 0, loc)
-	ends := starts.Add(time.Duration(settings.DefaultDurationMinutes) * time.Minute)
-	sameDay := next != nil
-	var nextID sql.NullInt64
-	var warning sql.NullString
-	if sameDay {
-		nextID = sql.NullInt64{Int64: next.ID, Valid: true}
-		ends = time.Date(cd.Year(), cd.Month(), cd.Day(), inH, inM, 0, 0, loc).Add(-time.Hour)
-		if !ends.After(starts) {
-			ends = starts.Add(minimalConflictDuration)
-			warning = sql.NullString{String: "same-day check-in leaves less than one hour after checkout", Valid: true}
-		}
-	}
-	title := renderTitle(settings, sameDay)
-	return &store.CleaningCalendarEvent{
-		PropertyID:       occ.PropertyID,
-		OccupancyID:      occ.ID,
-		UpstreamEventUID: occ.UpstreamEventUID,
-		CheckoutDate:     sql.NullString{String: checkoutDate, Valid: true},
-		CleaningKind:     kind,
-		GoogleCalendarID: strings.TrimSpace(settings.CalendarID.String),
-		CleaningDate:     dayStart.Format("2006-01-02"),
-		StartsAt:         starts.UTC(),
-		EndsAt:           ends.UTC(),
-		SameDayArrival:   sameDay,
-		NextOccupancyID:  nextID,
-		Title:            title,
-		Status:           store.CleaningCalendarStatusPending,
-		WarningMessage:   warning,
-		ErrorMessage:     sql.NullString{},
-	}, nil
 }
 
 func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarEvent, timezone string, runID int64) error {
@@ -646,7 +538,6 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 		End:          event.EndsAt,
 		TimeZone:     timezone,
 		PropertyID:   event.PropertyID,
-		OccupancyID:  event.OccupancyID,
 		NamedStayID:  nullInt64Value(event.NamedStayID),
 		RawBlockID:   nullInt64Value(event.RawBookingBlockID),
 		Identity:     nullStringValue(event.CleaningIdentity),
@@ -670,7 +561,7 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 	return nil
 }
 
-func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarEvent, runID int64, removalReason *string) error {
+func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarEvent, runID int64) error {
 	if event.GoogleEventID.Valid && strings.TrimSpace(event.GoogleEventID.String) != "" && (s.Client == nil || !s.Client.Configured()) {
 		msg := "google calendar client not configured"
 		_ = s.Store.UpdateCleaningCalendarEventGoogleResult(ctx, event.PropertyID, event.ID, "", store.CleaningCalendarStatusError, &msg)
@@ -685,35 +576,16 @@ func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarE
 			return err
 		}
 	}
-	if err := s.Store.MarkCleaningCalendarEventRemoved(ctx, event.PropertyID, event.ID, removalReason); err != nil {
+	if err := s.Store.MarkCleaningCalendarEventRemoved(ctx, event.PropertyID, event.ID, nil); err != nil {
 		return err
 	}
 	message := "removed"
-	if removalReason != nil && strings.TrimSpace(*removalReason) != "" {
-		message = strings.TrimSpace(*removalReason)
-	}
 	action := "delete"
 	if event.CleaningKind == store.CleaningKindProvisionalBlock {
 		action = "cleaning_provisional_removed" // PMS_19 §11B
 		_ = s.Store.InsertAuditLog(ctx, nil, action, "cleaning_calendar_event", fmt.Sprintf("%d", event.ID), message, "system", "cleaning_sync")
 	}
 	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, action, message)
-	return nil
-}
-
-func (s *Service) removalReason(ctx context.Context, propertyID, occupancyID int64) *string {
-	occ, err := s.Store.GetOccupancyByID(ctx, propertyID, occupancyID)
-	if err != nil {
-		return nil
-	}
-	if occ.StayOutcome.Valid {
-		msg := "stay outcome: " + occ.StayOutcome.String
-		return &msg
-	}
-	if occ.CleaningCalendarExcluded {
-		msg := "manual cleaning calendar exclusion"
-		return &msg
-	}
 	return nil
 }
 

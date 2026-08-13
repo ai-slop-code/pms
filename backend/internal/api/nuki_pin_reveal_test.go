@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,11 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"pms/backend/internal/auth"
 	"pms/backend/internal/store"
 )
 
-// setupNukiPinFixture provisions an owner user, a property, one occupancy, a
+// setupNukiPinFixture provisions an owner user, a property, one named stay, a
 // generated Nuki access code with a plaintext PIN, and returns everything the
 // test needs to exercise reveal-PIN paths end-to-end.
 func setupNukiPinFixture(t *testing.T) (*store.Store, *httptest.Server, int64, int64, string, string) {
@@ -35,22 +33,6 @@ func setupNukiPinFixture(t *testing.T) (*store.Store, *httptest.Server, int64, i
 	}
 	start := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 	end := start.Add(48 * time.Hour)
-	occRunID, err := st.StartOccupancySyncRun(ctx, prop.ID, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.UpsertOccupancy(ctx, &store.Occupancy{
-		PropertyID: prop.ID, SourceType: "booking_ics", SourceEventUID: "nuki-pin-occ", StartAt: start, EndAt: end, Status: "active", RawSummary: sql.NullString{String: "Guest X", Valid: true}, ContentHash: "h1",
-	}, occRunID); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.FinishOccupancySyncRun(ctx, occRunID, "success", nil, nil, 1, 1); err != nil {
-		t.Fatal(err)
-	}
-	occ, err := st.GetOccupancyBySourceEventUID(ctx, prop.ID, "nuki-pin-occ")
-	if err != nil || occ == nil {
-		t.Fatalf("expected occupancy, err=%v", err)
-	}
 	nowText := time.Now().UTC().Format(time.RFC3339)
 	res, err := st.DB.ExecContext(ctx, `
 		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
@@ -63,18 +45,12 @@ func setupNukiPinFixture(t *testing.T) (*store.Store, *httptest.Server, int64, i
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DB.ExecContext(ctx, `
-		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
-		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, occ.ID, prop.ID, stayID, nowText); err != nil {
-		t.Fatal(err)
-	}
 	nukiRunID, err := st.StartNukiSyncRun(ctx, prop.ID, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpsertNukiCode(ctx, &store.NukiAccessCode{
 		PropertyID:        prop.ID,
-		OccupancyID:       sql.NullInt64{Int64: occ.ID, Valid: true},
 		NamedStayID:       sql.NullInt64{Int64: stayID, Valid: true},
 		CodeLabel:         "booking-pin-reveal",
 		AccessCodeMasked:  sql.NullString{String: "98**", Valid: true},
@@ -90,7 +66,7 @@ func setupNukiPinFixture(t *testing.T) (*store.Store, *httptest.Server, int64, i
 	if err := st.FinishNukiSyncRun(ctx, nukiRunID, "success", nil, 1, 1, 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	code, err := st.GetNukiCodeByOccupancyID(ctx, prop.ID, occ.ID)
+	code, err := st.GetNukiCodeByNamedStayID(ctx, prop.ID, stayID)
 	if err != nil || code == nil {
 		t.Fatalf("expected nuki code, err=%v", err)
 	}
@@ -127,6 +103,12 @@ func TestListNukiUpcomingStaysDoesNotLeakPIN(t *testing.T) {
 	}
 	if bytes.Contains(body, []byte(`"generated_pin"`)) {
 		t.Fatalf("list response still includes generated_pin field: %s", string(body))
+	}
+	if bytes.Contains(body, []byte(`"occupancy_id"`)) || bytes.Contains(body, []byte(`"legacy_occupancy_id"`)) {
+		t.Fatalf("list response includes a legacy stay identity: %s", string(body))
+	}
+	if bytes.Contains(body, []byte(`"occupancy_status"`)) || !bytes.Contains(body, []byte(`"stay_status":"active"`)) {
+		t.Fatalf("list response does not expose canonical stay_status: %s", string(body))
 	}
 	if !bytes.Contains(body, []byte(`"generated_masked":"98**"`)) {
 		t.Fatalf("expected masked code in response: %s", string(body))
@@ -196,123 +178,5 @@ func TestRevealNukiCodePIN_ReadOnlyUserForbidden(t *testing.T) {
 	url := fmt.Sprintf("%s/api/properties/%d/nuki/codes/%d/reveal-pin", ts.URL, pid, codeID)
 	if status := doAuthedJSONRequest(t, &http.Client{}, http.MethodGet, url, cookies, nil, nil); status != http.StatusForbidden {
 		t.Fatalf("status=%d want 403", status)
-	}
-}
-
-// ----- H2 occupancy-export header vs. query token -----
-
-func setupOccupancyExportFixture(t *testing.T) (*httptest.Server, int64, string) {
-	t.Helper()
-	st := testDB(t)
-	ctx := context.Background()
-	hash := testPasswordHash(t, "secret123")
-	owner, err := st.CreateUser(ctx, "export-owner@example.com", hash, "owner")
-	if err != nil {
-		t.Fatal(err)
-	}
-	prop, err := st.CreateProperty(ctx, owner.ID, "Villa Export", "UTC", "en")
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, h, err := auth.NewSessionToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.CreateOccupancyAPIToken(ctx, prop.ID, h, nil); err != nil {
-		t.Fatal(err)
-	}
-	srv := &Server{Store: st, SessionTTL: time.Hour}
-	ts := httptest.NewServer(srv.Routes())
-	t.Cleanup(ts.Close)
-	return ts, prop.ID, raw
-}
-
-func TestOccupancyExport_AuthorizationBearerSucceeds(t *testing.T) {
-	ts, pid, tok := setupOccupancyExportFixture(t)
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/properties/%d/occupancy-export", ts.URL, pid), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer "+tok)
-	res, err := (&http.Client{}).Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status=%d want 200", res.StatusCode)
-	}
-	if res.Header.Get("Deprecation") != "true" {
-		t.Fatalf("Deprecation header = %q, want true", res.Header.Get("Deprecation"))
-	}
-	if res.Header.Get("Warning") == "" {
-		t.Fatalf("deprecated export must emit Warning header")
-	}
-	var payload struct {
-		Occupancies []interface{} `json:"occupancies"`
-	}
-	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestOccupancyExport_XExportTokenSucceeds(t *testing.T) {
-	ts, pid, tok := setupOccupancyExportFixture(t)
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/properties/%d/occupancy-export", ts.URL, pid), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("X-Export-Token", tok)
-	res, err := (&http.Client{}).Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status=%d want 200", res.StatusCode)
-	}
-}
-
-func TestOccupancyExport_QueryTokenEmitsWarning(t *testing.T) {
-	ts, pid, tok := setupOccupancyExportFixture(t)
-	url := fmt.Sprintf("%s/api/properties/%d/occupancy-export?token=%s", ts.URL, pid, tok)
-	res, err := http.Get(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status=%d want 401 (legacy ?token= must be rejected per PMS_11/T2.6)", res.StatusCode)
-	}
-}
-
-func TestOccupancyExport_NoTokenReturns401(t *testing.T) {
-	ts, pid, _ := setupOccupancyExportFixture(t)
-	res, err := http.Get(fmt.Sprintf("%s/api/properties/%d/occupancy-export", ts.URL, pid))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status=%d want 401", res.StatusCode)
-	}
-}
-
-func TestOccupancyExport_DisabledReturnsGone(t *testing.T) {
-	st := testDB(t)
-	srv := &Server{Store: st, SessionTTL: time.Hour, OccupancyExportDisabled: true}
-	ts := httptest.NewServer(srv.Routes())
-	t.Cleanup(ts.Close)
-
-	res, err := http.Get(fmt.Sprintf("%s/api/properties/1/occupancy-export", ts.URL))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusGone {
-		t.Fatalf("status=%d want 410", res.StatusCode)
-	}
-	if res.Header.Get("Deprecation") != "true" {
-		t.Fatalf("Deprecation header = %q, want true", res.Header.Get("Deprecation"))
 	}
 }

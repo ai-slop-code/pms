@@ -5,28 +5,17 @@ import UiTable from '@/components/ui/UiTable.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 import { displayStatus, statusTone } from './status'
-import type { OccupancySyncRun as Run, OccupancyRepairReport } from '@/api/types/occupancy'
-
-function deletionTitle(r: Run): string {
-  const parts = [`${r.representations_deleted_from_source ?? 0} rows deleted from source`]
-  if (r.named_stays_deleted_from_source) parts.push(`${r.named_stays_deleted_from_source} named`)
-  if (r.duplicate_nights_resolved) parts.push(`${r.duplicate_nights_resolved} duplicate nights resolved`)
-  return parts.join(' · ')
-}
+import type { OccupancySyncRun as Run } from '@/api/types/occupancy'
 
 defineProps<{
   source: { active: boolean; source_type: string } | null
   runs: Run[]
   syncing: boolean
-  repairBusy: boolean
-  repairReport: OccupancyRepairReport | null
 }>()
 
 const emit = defineEmits<{
   toggleSource: []
   runSync: []
-  repairDryRun: []
-  repairApply: []
 }>()
 </script>
 
@@ -38,7 +27,9 @@ const emit = defineEmits<{
     >
       <UiCard>
         <div v-if="source" class="source-row">
-          <span>Source type: <code>{{ source.source_type }}</code></span>
+          <span
+            >Source type: <code>{{ source.source_type }}</code></span
+          >
           <UiBadge :tone="source.active ? 'success' : 'warning'" dot>
             {{ source.active ? 'Active' : 'Paused' }}
           </UiBadge>
@@ -54,46 +45,18 @@ const emit = defineEmits<{
       </UiCard>
     </UiSection>
 
-    <UiSection
-      title="ICS reconciliation repair"
-      description="Dry-run duplicate and source-disappearance repairs before applying them. Repair never hard-deletes occupancy rows."
-    >
-      <UiCard>
-        <div class="sync-actions">
-          <UiButton variant="secondary" :loading="repairBusy" @click="emit('repairDryRun')">
-            Dry-run repair
-          </UiButton>
-          <UiButton variant="primary" :loading="repairBusy" :disabled="!repairReport" @click="emit('repairApply')">
-            Apply repair
-          </UiButton>
-        </div>
-        <div v-if="repairReport" class="repair-report">
-          <UiBadge
-            :tone="(repairReport.duplicates_resolved || repairReport.rows_deleted_from_source) ? 'warning' : 'success'"
-          >
-            {{ (repairReport.duplicates_resolved || repairReport.rows_deleted_from_source) ? 'Repair needed' : 'No repair needed' }}
-          </UiBadge>
-          <span>{{ repairReport.nights_resolved }} nights resolved</span>
-          <span>{{ repairReport.duplicates_resolved }} duplicate rows</span>
-          <span>{{ repairReport.rows_deleted_from_source ?? 0 }} deleted-from-source rows</span>
-        </div>
-        <ul v-if="repairReport?.resolutions?.length" class="repair-list">
-          <li v-for="r in repairReport.resolutions.slice(0, 5)" :key="`${r.local_night}-${r.winner_occupancy_id}`">
-            {{ r.local_night }}: keep #{{ r.winner_occupancy_id }} ({{ r.reason }}), supersede {{ r.loser_occupancy_ids.join(', ') }}
-          </li>
-        </ul>
-      </UiCard>
-    </UiSection>
-
     <UiSection title="Sync history">
       <UiTable :empty="!runs.length" empty-text="No sync runs yet.">
         <template #head>
           <tr>
             <th>Started</th>
             <th>Status</th>
-            <th class="num">Events</th>
-            <th class="num">Upserted</th>
-            <th>Deletion</th>
+            <th class="num">Events seen</th>
+            <th class="num">Raw blocks inserted</th>
+            <th class="num">Raw blocks updated</th>
+            <th class="num">Raw blocks unchanged</th>
+            <th class="num">Raw blocks deleted from source</th>
+            <th class="num">Raw block conflicts</th>
             <th>Trigger</th>
             <th>Error</th>
           </tr>
@@ -102,26 +65,21 @@ const emit = defineEmits<{
           <td>{{ r.started_at }}</td>
           <td>
             <UiBadge :tone="statusTone(r.status)" dot>{{ displayStatus(r.status) }}</UiBadge>
-            <div v-if="r.status === 'partial_no_mutation'" class="sync-note">No occupancy changes applied.</div>
+            <div v-if="r.status === 'partial_no_mutation'" class="sync-note">
+              No raw-block changes applied.
+            </div>
           </td>
           <td class="num">{{ r.events_seen }}</td>
-          <td class="num">{{ r.occupancies_upserted }}</td>
-          <td>
-            <template v-if="r.deletion_enabled === false">
-              <UiBadge tone="neutral">Skipped</UiBadge>
-            </template>
-            <template v-else>
-              <span :title="deletionTitle(r)">
-                {{ (r.representations_deleted_from_source ?? 0) }} deleted
-              </span>
-            </template>
-          </td>
+          <td class="num">{{ r.raw_blocks_inserted }}</td>
+          <td class="num">{{ r.raw_blocks_updated }}</td>
+          <td class="num">{{ r.raw_blocks_unchanged }}</td>
+          <td class="num">{{ r.raw_blocks_deleted_from_source }}</td>
+          <td class="num">{{ r.raw_block_conflicts }}</td>
           <td>{{ displayStatus(r.trigger) }}</td>
           <td class="error-cell">{{ r.error_message || '—' }}</td>
         </tr>
       </UiTable>
     </UiSection>
-
   </div>
 </template>
 
@@ -138,21 +96,6 @@ const emit = defineEmits<{
   gap: var(--space-2);
   margin-top: var(--space-2);
   flex-wrap: wrap;
-}
-.repair-report {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin-top: var(--space-3);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-.repair-list {
-  margin: var(--space-3) 0 0;
-  padding-left: var(--space-5);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
 }
 .muted {
   color: var(--color-text-muted);

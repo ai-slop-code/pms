@@ -49,12 +49,11 @@ function seedProperty(id = 7) {
   return id
 }
 
-/** Route API calls by URL prefix; falls back to `{ payouts: [], occupancies: [] }`. */
+/** Route API calls by URL prefix. */
 function apiRouter(handlers: Record<string, (opts?: { method?: string }) => unknown>) {
   apiMock.mockImplementation((url: string, opts?: { method?: string }) => {
     const match = Object.keys(handlers).find((key) => url.startsWith(key))
     if (match) return Promise.resolve(handlers[match]!(opts))
-    if (url.includes('/occupancies')) return Promise.resolve({ occupancies: [] })
     if (url.includes('/booking-payouts')) return Promise.resolve({ payouts: [] })
     return Promise.resolve({})
   })
@@ -82,6 +81,7 @@ describe('BookingPayoutsView', () => {
           {
             id: 1,
             reference_number: 'BK-123',
+            named_stay_id: 11,
             net_cents: 12345,
             payout_date: '2026-04-10',
             guest_name: 'Jane Guest',
@@ -91,6 +91,7 @@ describe('BookingPayoutsView', () => {
           {
             id: 2,
             reference_number: 'BK-456',
+            named_stay_id: 12,
             net_cents: 6789,
             payout_date: '2026-04-12',
           },
@@ -114,7 +115,7 @@ describe('BookingPayoutsView', () => {
       if (url.startsWith('/api/properties/7/finance/booking-payouts')) {
         return Promise.reject(new Error('upstream 503'))
       }
-      return Promise.resolve({ occupancies: [] })
+      return Promise.resolve({})
     })
     const w = mount(BookingPayoutsView)
     await flushPromises()
@@ -129,6 +130,7 @@ describe('BookingPayoutsView', () => {
           {
             id: 1,
             reference_number: 'BK-PAYOUT-ONLY',
+            named_stay_id: 11,
             net_cents: 1000,
             payout_date: '2026-04-10',
             has_payout_data: true,
@@ -137,6 +139,7 @@ describe('BookingPayoutsView', () => {
           {
             id: 2,
             reference_number: 'BK-STATEMENT-ONLY',
+            named_stay_id: 12,
             net_cents: 2000,
             payout_date: '2026-04-11',
             has_payout_data: false,
@@ -145,6 +148,7 @@ describe('BookingPayoutsView', () => {
           {
             id: 3,
             reference_number: 'BK-MERGED',
+            named_stay_id: 13,
             net_cents: 3000,
             payout_date: '2026-04-12',
             has_payout_data: true,
@@ -212,5 +216,51 @@ describe('BookingPayoutsView', () => {
         manual_revenue_note: 'Manual revenue from finance row EXT-42',
       },
     })
+  })
+
+  it('remaps a payout only to a valid named stay', async () => {
+    seedProperty()
+    apiMock.mockImplementation((url: string, opts?: { method?: string; json?: unknown }) => {
+      if (url.includes('/finance/stay-candidates')) return Promise.resolve({ stays: [] })
+      if (url.endsWith('/booking-payouts/BK-REMAP/map') && opts?.method === 'PATCH') {
+        return Promise.resolve({ ok: true, reference_number: 'BK-REMAP', named_stay_id: 22 })
+      }
+      if (url.includes('/finance/booking-payouts')) {
+        return Promise.resolve({
+          payouts: [{
+            id: 1,
+            reference_number: 'BK-REMAP',
+            named_stay_id: 11,
+            net_cents: 1000,
+            payout_date: '2026-04-10',
+            has_payout_data: true,
+            has_statement_data: false,
+          }],
+        })
+      }
+      return Promise.resolve({})
+    })
+
+    const w = mount(BookingPayoutsView)
+    await flushPromises()
+    const input = w.get('.map-cell__input')
+    const save = w.findAll('button').find((button) => button.text() === 'Save')
+    expect(save).toBeTruthy()
+    await input.setValue('')
+    await save!.trigger('click')
+    expect(w.text()).toContain('Select a valid named stay.')
+    expect(apiMock.mock.calls.some(([url]) => typeof url === 'string' && url.endsWith('/map'))).toBe(false)
+
+    await input.setValue('22')
+    await save!.trigger('click')
+    await flushPromises()
+
+    expect(apiMock).toHaveBeenCalledWith('/api/properties/7/finance/booking-payouts/BK-REMAP/map', {
+      method: 'PATCH',
+      json: { named_stay_id: 22 },
+    })
+    expect(w.text()).not.toContain('Create stay')
+    expect(w.text()).not.toContain('Clear')
+    expect(w.text()).not.toContain('Auto-match unmapped')
   })
 })

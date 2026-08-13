@@ -3,6 +3,12 @@
 ## Document Purpose
 This document defines the global architecture, cross-cutting rules, data boundaries, and implementation order for a Property Management System (PMS) web application. It is written for a single AI coding agent that will implement the system module by module.
 
+**Current authority:** PMS 21 replaces the original occupancy-as-stay model.
+`PMS_21_Legacy_Occupancy_Removal_Spec.md` and ADR-007 govern availability,
+stay identity, integration ownership, and final compatibility removal. Earlier
+v1 wording is historical where it conflicts with the final model. This target
+architecture does not assert that gated production cleanup has executed.
+
 This specification is based on:
 - `initial_prompt.md`
 - `Prompt_answers.md`
@@ -11,7 +17,8 @@ This specification is based on:
 Build a multi-user web application for managing short-term rental properties. The system must support:
 - property-based multi-tenancy
 - role-based access control
-- occupancy synchronization from ICS sources
+- Booking.com availability synchronization from ICS sources
+- operator-owned named stays and stay-night capacity
 - Nuki access management
 - cleaner activity and salary analytics
 - finance tracking
@@ -31,9 +38,11 @@ The following points are important for a correct implementation and should be tr
 ### 1. SQLite is valid for v1, but the code must be migration-friendly
 SQLite is acceptable for the initial deployment, but the backend must avoid SQLite-specific assumptions in repository code, migrations, and transaction handling. Schema design should use types and constraints that can move to PostgreSQL later with minimal rewrite.
 
-### 2. ICS data is not enough for all downstream workflows
+### 2. ICS data is not enough for downstream stay workflows
 ICS feeds usually provide stay dates and summary text, but often do not provide complete guest identity or billing information. Therefore:
-- occupancy sync can drive calendars, Nuki codes, and generic messages
+- ICS sync records raw unavailable blocks and source evidence
+- operators or deterministic approved business evidence establish named stays
+- Nuki codes and guest messages require a named stay
 - invoice generation cannot rely on ICS alone
 - invoice creation must require manual customer detail entry
 
@@ -55,11 +64,11 @@ The cleaner module calculates operational salary continuously from Nuki events a
 - finance should create or update one linked monthly expense entry per property/month
 - the user must be able to apply a manual override, for example a bonus
 
-### 6. Direct Google Calendar integration is intentionally excluded from v1
-Native Google Calendar sync requires OAuth or service-account based integration, token storage, sync reconciliation, and failure handling. This adds extra implementation and operational complexity that is not needed for the first release. The v1 approach is:
-- build a robust JSON occupancy endpoint first
-- let n8n push data to Google Calendar if needed
-- defer direct Google Calendar integration until a later phase
+### 6. Google Calendar cleaning is a native integration
+The original v1 n8n/export recommendation is historical. PMS-managed cleaning
+events use the native Google Calendar integration and are owned by exactly one
+named stay or raw booking block. Public occupancy export and its token store
+are not part of the final architecture.
 
 ### 7. Messages are generic and not guest-personalized
 Because guest identity is not guaranteed from ICS, customer messages must be designed as generic arrival instructions with inserted stay dates, property details, Nuki code, and check-in/check-out rules.
@@ -72,9 +81,9 @@ Because guest identity is not guaranteed from ICS, customer messages must be des
 - per-property permissions by module
 - backend/API logging
 - property management
-- occupancy sync from configurable ICS URL
-- occupancy calendar and list views
-- JSON occupancy endpoint secured via token
+- Booking.com raw-block sync from configurable ICS URL
+- combined availability and named-stay calendar
+- named-stay lifecycle and property availability blocks
 - Nuki access code generation and cleanup
 - cleaner log and monthly salary analytics
 - finance ledger with recurring expenses
@@ -90,7 +99,7 @@ Because guest identity is not guaranteed from ICS, customer messages must be des
 - multi-unit property hierarchy
 - multiple cleaners per property as a fully supported workflow
 - email or WhatsApp delivery of generated messages
-- native Google Calendar sync
+- general-purpose calendar export (cleaning-calendar sync is supported)
 
 ## Target Users and Roles
 
@@ -110,7 +119,7 @@ Minimum permission dimensions:
 
 Suggested modules for permissioning:
 - property settings
-- occupancy
+- occupancy/availability
 - Nuki access
 - cleaning log
 - finance
@@ -137,7 +146,7 @@ Vue.js single-page application with:
 - property switcher
 - module-based navigation
 - reusable tables/forms/dialogs
-- calendar page for occupancy
+- combined availability and stay calendar
 - dashboard widgets
 
 ### Persistence
@@ -192,7 +201,7 @@ Jobs must be safe to rerun.
 ### Idempotency Rules
 The following operations must be idempotent:
 - ICS import for unchanged events
-- Nuki code creation for already-processed occupancies
+- Nuki code creation for already-processed named stays
 - recurring expense generation for a month already initialized
 - monthly cleaner finance expense synchronization
 
@@ -212,12 +221,16 @@ The following data model is the recommended baseline.
 - `property_localizations`
 - `property_secrets`
 
-### Occupancy
+### Availability Sources And Stays
 - `occupancy_sources`
 - `occupancy_raw_events`
-- `occupancies`
 - `occupancy_sync_runs`
-- `occupancy_api_tokens`
+- `raw_booking_blocks`
+- `raw_booking_block_nights`
+- `named_stays`
+- `named_stay_nights`
+- `stay_source_links`
+- `property_availability_blocks`
 
 ### Nuki
 - `nuki_access_codes`
@@ -286,20 +299,17 @@ Must include:
 - nuki_api_key or token
 - nuki_auth_id
 
-### `occupancies`
-Must include:
-- id
-- property_id
-- source_type
-- source_event_uid
-- start_at
-- end_at
-- status
-- raw_summary
-- guest_display_name optional
-- imported_at
-- last_synced_at
-- hash or fingerprint for change detection
+### Booking.com source and stay ownership
+- Raw blocks retain property, source UID, half-open local date range, source
+  status, summary/evidence, content hash, and sync timestamps.
+- Named stays retain property, half-open check-in/check-out dates, display
+  name, stay type, lifecycle/review/outcome state, canonical first-known and
+  cancellation-effective timestamps, and active stay-night coverage.
+- Source links relate named stays to raw blocks without making ICS the owner of
+  business stay state.
+- Property availability blocks represent maintenance, personal use, and other
+  non-stay reductions in bookable inventory.
+- At most one active named stay owns a property-local night.
 
 ### `cleaner_fee_history`
 Must include:
@@ -389,7 +399,7 @@ Must include:
 Must include:
 - id
 - property_id
-- occupancy_id
+- named_stay_id
 - code_label
 - access_code_masked
 - external_nuki_id
@@ -412,11 +422,15 @@ Must include:
 
 ## Derived Business Rules
 
-### Occupancy-Derived Rules
-- one occupancy/stay is the primary cross-module record
-- Nuki code generation references one occupancy
-- check-in message generation references one occupancy
-- invoice may optionally be linked to one occupancy
+### Availability And Stay Rules
+- raw booking blocks are source-owned availability evidence, not guest stays
+- named stays are the only cross-module stay identity
+- named-stay nights are the capacity and stay analytics truth
+- Nuki codes and guest messages reference one named stay
+- finance bookings and invoices require one same-property named stay
+- cleaning events have exactly one named-stay or raw-block owner
+- non-stay closures use property availability blocks
+- no active API accepts `occupancy_id` as a named-stay alias
 
 ### Cleaner Salary Rules
 - only the first valid Nuki entry per day counts
@@ -456,8 +470,8 @@ Must include:
 - integration status/errors panel
 
 ### Module Screens
-- occupancy calendar
-- occupancy list
+- combined availability and named-stay calendar
+- named-stay lifecycle and source-health views
 - Nuki access overview
 - cleaning log analytics page
 - finance ledger
@@ -474,11 +488,13 @@ Must include:
 5. property management
 6. audit logging
 
-### Phase 2: Occupancy as the core record
+### Phase 2: Historical v1 occupancy foundation
+This phase records the original build order. PMS 21 supersedes its normalized
+occupancy and export target.
 1. ICS source configuration
-2. raw sync and normalized occupancies
-3. occupancy calendar and list UI
-4. authenticated occupancy JSON endpoint
+2. raw sync and normalized occupancies (historical legacy model)
+3. occupancy calendar and list UI (historical legacy model)
+4. authenticated occupancy JSON endpoint (retired final target)
 
 ### Phase 3: Operational automations
 1. Nuki integration

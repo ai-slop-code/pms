@@ -59,7 +59,7 @@ function apiRouter(handlers: Record<string, () => unknown>) {
     if (url.includes('/invoice-sequence/next-preview')) {
       return Promise.resolve({ next_number: 'INV-2026-0001', year: 2026, sequence: 1 })
     }
-    if (url.includes('/invoices/occupancy-candidates')) return Promise.resolve({ occupancies: [] })
+    if (url.includes('/invoices/stay-candidates')) return Promise.resolve({ stays: [] })
     if (url.includes('/invoices/payout-link-candidates')) return Promise.resolve({ payouts: [] })
     if (url.includes('/invoices')) return Promise.resolve({ invoices: [] })
     return Promise.resolve({})
@@ -112,11 +112,42 @@ describe('InvoicesView', () => {
     expect(w.text()).toContain('invoices api down')
   })
 
+  it('loads named-stay invoice candidates from the stay endpoint', async () => {
+    seedProperty()
+    apiRouter({})
+    mount(InvoicesView)
+    await flushPromises()
+
+    expect(
+      apiMock.mock.calls.some(([url]) => String(url).includes('/invoices/stay-candidates?limit=120')),
+    ).toBe(true)
+    expect(apiMock.mock.calls.some(([url]) => String(url).includes('/invoices/occupancy-candidates'))).toBe(
+      false,
+    )
+  })
+
+  it('requires a named stay before creating an invoice', async () => {
+    seedProperty()
+    apiRouter({})
+    const w = mount(InvoicesView)
+    await flushPromises()
+
+    const vm = w.vm as unknown as Record<string, unknown>
+    await (vm.saveInvoice as () => Promise<void>)()
+
+    expect(w.text()).toContain('Select a named stay.')
+    expect(
+      apiMock.mock.calls.filter(
+        ([url, options]) => String(url).endsWith('/invoices') && options?.method === 'POST',
+      ),
+    ).toHaveLength(0)
+  })
+
   it('downloads invoices through the configured API origin', async () => {
     seedProperty()
     const invoice = {
       id: 101,
-      occupancy_id: null,
+      named_stay_id: 55,
       booking_payout_id: null,
       invoice_number: 'INV-2026-0007',
       sequence_year: 2026,
@@ -155,6 +186,8 @@ describe('InvoicesView', () => {
     const downloadLink = w.find('a.ui-btn')
 
     expect(apiUrlMock).toHaveBeenCalledWith('/api/properties/7/invoices/101/download')
-    expect(downloadLink.attributes('href')).toBe('https://api.example.test/api/properties/7/invoices/101/download')
+    expect(downloadLink.attributes('href')).toBe(
+      'https://api.example.test/api/properties/7/invoices/101/download',
+    )
   })
 })

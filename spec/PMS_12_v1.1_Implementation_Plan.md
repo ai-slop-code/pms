@@ -1,5 +1,17 @@
 # PMS v1.1 — Implementation Plan
 
+> **Status: historical and superseded for occupancy/stay identity.** This file
+> records what v1.1 implemented and why. PMS 21 final cleanup does not rewrite
+> that evidence, but `PMS_21_Legacy_Occupancy_Removal_Spec.md` and ADR-007
+> supersede every active instruction here that uses `occupancies`,
+> `occupancy_id`, public occupancy export, synthetic finance occupancies, or
+> occupancy-keyed Nuki/cleaning/message/invoice behavior. Do not implement new
+> code from those historical contracts.
+>
+> The check marks below are v1.1 delivery claims only. They do not assert PMS
+> 21 Release A/B windows, exception closure, restore-drill completion, or
+> destructive cleanup.
+
 ## Scope
 Incremental release on top of v1.0. Tracks all work items targeted for the
 v1.1 milestone. Each task lists the user-facing outcome, the surfaces that

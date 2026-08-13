@@ -26,6 +26,13 @@ func TestFinanceRevenueRecognitionEndpoint_ReturnsProratedGross(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stay, err := st.CreateNamedStayRecord(ctx, store.NamedStayCreateInput{
+		PropertyID: prop.ID, DisplayName: "Revenue Guest", StayType: store.StayTypeBookingCom,
+		CheckInDate: "2026-01-31", CheckOutDate: "2026-02-03", SourceReference: "REVENUE-API",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := st.CreateBookingPayout(ctx, &store.FinanceBookingPayout{
 		PropertyID:      prop.ID,
 		ReferenceNumber: "REVENUE-API",
@@ -35,6 +42,7 @@ func TestFinanceRevenueRecognitionEndpoint_ReturnsProratedGross(t *testing.T) {
 		AmountCents:     sql.NullInt64{Int64: 10000, Valid: true},
 		NetCents:        8000,
 		PayoutDate:      time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +80,7 @@ func TestFinanceRevenueRecognitionEndpoint_ReturnsProratedGross(t *testing.T) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.GrossRevenueCents != 6666 || len(payload.Bookings) != 1 || payload.Bookings[0].RecognizedGrossCents != 6666 || !payload.Bookings[0].Unmatched {
+	if payload.GrossRevenueCents != 6666 || len(payload.Bookings) != 1 || payload.Bookings[0].RecognizedGrossCents != 6666 || payload.Bookings[0].Unmatched {
 		t.Fatalf("unexpected response: %+v", payload)
 	}
 	if payload.Excluded == nil {

@@ -24,12 +24,11 @@ const (
 	StatusPartialNoMutation = "partial_no_mutation"
 )
 
-// Service runs ICS fetch and occupancy normalization.
+// Service fetches ICS feeds and maintains canonical raw booking blocks.
 type Service struct {
-	Store              *store.Store
-	HTTP               *http.Client
-	Now                func() time.Time
-	RawBlocksDualWrite bool
+	Store *store.Store
+	HTTP  *http.Client
+	Now   func() time.Time
 }
 
 func (s *Service) now() time.Time {
@@ -39,9 +38,9 @@ func (s *Service) now() time.Time {
 	return time.Now().UTC()
 }
 
-// SyncProperty fetches the property ICS URL and reconciles occupancies. A
+// SyncProperty fetches the property ICS URL and reconciles raw booking blocks. A
 // successful full sync is authoritative for current/future Booking.com events;
-// failed or partial syncs never mutate occupancies (PMS_19 §7).
+// failed or partial syncs never mutate canonical source state.
 func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger string) error {
 	if s.HTTP == nil {
 		s.HTTP = &http.Client{Timeout: defaultSyncHTTPTimeout, Transport: otelx.HTTPTransport(nil)}
@@ -116,7 +115,6 @@ func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger st
 		ParseErrors:          len(parsedRes.ParseErrors),
 		DeletionEnabled:      true,
 		SyncRunID:            runID,
-		RawBlocksDualWrite:   s.RawBlocksDualWrite,
 	}
 
 	// PMS_19 §7.2: any event-level parse failure aborts mutation entirely so a

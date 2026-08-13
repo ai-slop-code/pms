@@ -15,16 +15,13 @@ export interface NukiKeypadCode {
 
 export interface NukiUpcomingStay {
   stay_id: number
-  legacy_occupancy_id?: number
-  /** @deprecated Legacy compatibility identity. */
-  occupancy_id?: number
   source_event_uid: string
   summary: string | null
   saved_pin_name: string | null
   stay_type: string
   start_at: string
   end_at: string
-  occupancy_status: string
+  stay_status: string
   generated_code_id: number | null
   generated_label: string | null
   generated_status: string | null

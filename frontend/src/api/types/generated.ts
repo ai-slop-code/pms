@@ -633,14 +633,9 @@ export interface paths {
         /** Generate guest messages for a named stay. */
         get: {
             parameters: {
-                query?: {
-                    /** @description Preferred PMS 21 named stay identity. */
-                    stay_id?: number;
-                    /**
-                     * @deprecated
-                     * @description Deprecated compatibility identity resolved through occupancy_stay_migration_map.
-                     */
-                    occupancy_id?: number;
+                query: {
+                    /** @description PMS 21 named stay identity. */
+                    stay_id: number;
                 };
                 header?: never;
                 path: {
@@ -898,6 +893,104 @@ export interface paths {
         };
         trace?: never;
     };
+    "/properties/{id}/stays/{stayId}/outcome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                stayId: components["parameters"]["StayIdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set or clear a named stay outcome. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    stayId: components["parameters"]["StayIdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StayOutcomePatchRequest"];
+                };
+            };
+            responses: {
+                /** @description Named stay outcome updated. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NamedStayMutationResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        trace?: never;
+    };
+    "/properties/{id}/stays/{stayId}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                stayId: components["parameters"]["StayIdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Confirm or reject a named stay review. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    stayId: components["parameters"]["StayIdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StayReviewPatchRequest"];
+                };
+            };
+            responses: {
+                /** @description Named stay review updated. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NamedStayMutationResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        trace?: never;
+    };
     "/properties/{id}/booking-blocks/{blockId}/promote": {
         parameters: {
             query?: never;
@@ -999,7 +1092,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AvailabilityBlockRequest"];
+                    "application/json": components["schemas"]["AvailabilityBlockCreateRequest"];
                 };
             };
             responses: {
@@ -1052,7 +1145,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["AvailabilityBlockRequest"];
+                    "application/json": components["schemas"]["AvailabilityBlockUpdateRequest"];
                 };
             };
             responses: {
@@ -1116,189 +1209,6 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancy-export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Deprecated public occupancy JSON export.
-         * @deprecated
-         * @description Public occupancy export is retired by PMS 21. Native Google Calendar cleaning sync is the supported external calendar integration path.
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy export payload when temporarily enabled for compatibility. */
-                200: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["DeprecatedOccupancyExportResponse"];
-                    };
-                };
-                401: components["responses"]["Unauthorized"];
-                /** @description Occupancy export is disabled. */
-                410: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancy-api-tokens": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Deprecated occupancy export token list.
-         * @deprecated
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy export tokens. */
-                200: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["DeprecatedOccupancyTokensResponse"];
-                    };
-                };
-                403: components["responses"]["Forbidden"];
-            };
-        };
-        put?: never;
-        /**
-         * Deprecated occupancy export token creation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: {
-                content: {
-                    "application/json": {
-                        label?: string | null;
-                    };
-                };
-            };
-            responses: {
-                /** @description Legacy export token created. */
-                201: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["DeprecatedOccupancyTokenCreateResponse"];
-                    };
-                };
-                403: components["responses"]["Forbidden"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancy-api-tokens/{tokenId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                tokenId: number;
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Deprecated occupancy export token revocation.
-         * @deprecated
-         */
-        delete: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    tokenId: number;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Token revoked. */
-                204: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                403: components["responses"]["Forbidden"];
-                404: components["responses"]["NotFound"];
-            };
-        };
         options?: never;
         head?: never;
         patch?: never;
@@ -1632,7 +1542,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Map or clear a Booking.com finance row to a named stay. */
+        /** Remap a Booking.com finance row to a valid named stay. */
         patch: {
             parameters: {
                 query?: never;
@@ -1662,49 +1572,7 @@ export interface paths {
         };
         trace?: never;
     };
-    "/properties/{id}/finance/booking-payouts/{referenceNumber}/create-stay": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                referenceNumber: string;
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Explicitly create or link a named stay from a finance row. */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    referenceNumber: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Named stay created or linked. */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["FinanceBookingPayoutCreateStayResponse"];
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/invoices/occupancy-candidates": {
+    "/properties/{id}/invoices/stay-candidates": {
         parameters: {
             query?: never;
             header?: never;
@@ -1716,7 +1584,11 @@ export interface paths {
         /** List named stays for invoice stay selection. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    month?: string;
+                    limit?: number;
+                    offset?: number;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -1725,7 +1597,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Named-stay candidates; deprecated occupancies is empty for compatibility. */
+                /** @description Named-stay candidates. */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -2048,92 +1920,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/properties/{id}/occupancies": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Deprecated occupancy compatibility read operation.
-         * @deprecated
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/calendar": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Deprecated occupancy compatibility read operation.
-         * @deprecated
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/properties/{id}/occupancy-sync/run": {
         parameters: {
             query?: never;
@@ -2145,7 +1931,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Run Booking.com occupancy synchronization and cleaning reconciliation. */
         post: {
             parameters: {
                 query?: never;
@@ -2157,13 +1943,16 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Synchronization result; runtime failures are reported with `ok: false`. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["ActionResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         delete?: never;
@@ -2181,10 +1970,13 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** List paginated occupancy synchronization runs. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    limit?: number;
+                    page?: number;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -2193,614 +1985,20 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Occupancy synchronization runs. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["OccupancySyncRunsResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/close": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/external-sale": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/split-nights": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/reopen": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/outcome/cancelled-non-refundable": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/outcome/no-show": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/outcome/clear": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/cleaning-calendar/exclude": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/cleaning-calendar/include": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancy-blocks/{upstreamUid}/named-stays": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                upstreamUid: components["parameters"]["UpstreamUidPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    upstreamUid: components["parameters"]["UpstreamUidPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancies/{occupancyId}/named-stay": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-                occupancyId: components["parameters"]["OccupancyIdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        delete: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        options?: never;
-        head?: never;
-        /**
-         * Deprecated occupancy compatibility write operation.
-         * @deprecated
-         */
-        patch: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                    occupancyId: components["parameters"]["OccupancyIdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Legacy compatibility response. */
-                default: {
-                    headers: {
-                        Deprecation: components["headers"]["Deprecation"];
-                        Warning: components["headers"]["Warning"];
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        trace?: never;
-    };
-    "/properties/{id}/occupancy-repair/ics-reconciliation/dry-run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/properties/{id}/occupancy-repair/ics-reconciliation/apply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["IdPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["IdPath"];
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
         delete?: never;
         options?: never;
         head?: never;
@@ -2816,7 +2014,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get the property's occupancy source configuration. */
         get: {
             parameters: {
                 query?: never;
@@ -2828,13 +2026,17 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Occupancy source configuration. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["OccupancySourceResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -2842,7 +2044,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Update the property's occupancy source configuration. */
         patch: {
             parameters: {
                 query?: never;
@@ -2852,15 +2054,24 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["OccupancySourcePatchRequest"];
+                };
+            };
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Updated occupancy source configuration. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["OccupancySourceResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         trace?: never;
@@ -3414,7 +2625,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get Google cleaning calendar settings. */
         get: {
             parameters: {
                 query?: never;
@@ -3426,13 +2637,16 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Cleaning calendar settings. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["CleaningCalendarSettingsResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
@@ -3440,7 +2654,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Update Google cleaning calendar settings. */
         patch: {
             parameters: {
                 query?: never;
@@ -3450,15 +2664,23 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CleaningCalendarSettingsPatchRequest"];
+                };
+            };
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Updated cleaning calendar settings. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["CleaningCalendarSettingsResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
             };
         };
         trace?: never;
@@ -3472,7 +2694,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Describe calendar selection support for service-account mode. */
         get: {
             parameters: {
                 query?: never;
@@ -3484,13 +2706,16 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Google client state and available calendars. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["CleaningCalendarGoogleCalendarsResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
@@ -3512,7 +2737,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Connect the configured Google service account. */
         post: {
             parameters: {
                 query?: never;
@@ -3524,13 +2749,17 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Updated cleaning calendar settings. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["CleaningCalendarSettingsResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
             };
         };
         delete?: never;
@@ -3550,7 +2779,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Disconnect and disable the Google cleaning calendar. */
         post: {
             parameters: {
                 query?: never;
@@ -3562,13 +2791,16 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Updated cleaning calendar settings. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["CleaningCalendarSettingsResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         delete?: never;
@@ -3589,7 +2821,9 @@ export interface paths {
         /** List cleaning calendar events with PMS 21 ownership identities. */
         get: {
             parameters: {
-                query?: never;
+                query: {
+                    month: components["parameters"]["MonthQuery"];
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -3604,12 +2838,11 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            month: string;
-                            events: components["schemas"]["CleaningCalendarEvent"][];
-                        };
+                        "application/json": components["schemas"]["CleaningCalendarEventsResponse"];
                     };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
@@ -3629,7 +2862,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** List the latest cleaning calendar synchronization runs. */
         get: {
             parameters: {
                 query?: never;
@@ -3641,13 +2874,16 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Cleaning calendar synchronization runs. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["CleaningCalendarRunsResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
@@ -3669,7 +2905,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Reconcile canonical stay and raw-block checkouts with Google Calendar. */
         post: {
             parameters: {
                 query?: never;
@@ -3681,13 +2917,16 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Reconciliation result and counters. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["CleaningCalendarReconcileResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         delete?: never;
@@ -3708,7 +2947,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Retry synchronization of one cleaning calendar event. */
         post: {
             parameters: {
                 query?: never;
@@ -3721,13 +2960,18 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Event retry completed. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["ActionResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -3805,7 +3049,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Parse a Booking.com CSV and cache an import preview. */
         post: {
             parameters: {
                 query?: never;
@@ -3815,15 +3059,27 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /** Format: binary */
+                        file: string;
+                    };
+                };
+            };
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Import preview and short-lived commit token. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["FinanceImportPreviewResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         delete?: never;
@@ -3843,7 +3099,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Commit a cached finance import preview. */
         post: {
             parameters: {
                 query?: never;
@@ -3853,14 +3109,32 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FinanceImportCommitRequest"];
+                };
+            };
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Committed import counters. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["FinanceImportCommitResponse"];
+                    };
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                /** @description Preview token expired or does not belong to this property. */
+                410: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
                 };
             };
         };
@@ -3879,10 +3153,12 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** List finance import audit records. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    limit?: number;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -3891,13 +3167,16 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Finance imports. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["FinanceImportsResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
@@ -3919,10 +3198,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Rematch Booking.com payout rows to canonical named stays. */
         post: {
             parameters: {
-                query?: never;
+                query?: {
+                    month?: string;
+                    only_unmapped?: boolean;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -3931,13 +3213,17 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Rematch counters. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["FinanceBookingPayoutRematchResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
             };
         };
         delete?: never;
@@ -4427,10 +3713,13 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** List Booking.com payout rows available for invoice linking. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    month?: string;
+                    mapped_only?: boolean;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -4439,13 +3728,17 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Booking.com payout candidates. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["FinanceBookingPayoutsResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
@@ -4465,7 +3758,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** List invoices for a property. */
         get: {
             parameters: {
                 query?: never;
@@ -4477,17 +3770,20 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Invoice list. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["InvoicesResponse"];
+                    };
                 };
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Create an invoice and its first PDF version. */
         post: {
             parameters: {
                 query?: never;
@@ -4497,15 +3793,24 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InvoiceCreateRequest"];
+                };
+            };
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Invoice created. */
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["InvoiceResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                409: components["responses"]["Conflict"];
             };
         };
         delete?: never;
@@ -4524,7 +3829,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get an invoice and its PDF version history. */
         get: {
             parameters: {
                 query?: never;
@@ -4537,13 +3842,18 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Invoice detail. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["InvoiceResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -4551,7 +3861,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Update an invoice and generate its next PDF version. */
         patch: {
             parameters: {
                 query?: never;
@@ -4562,15 +3872,25 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InvoicePatchRequest"];
+                };
+            };
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Updated invoice. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["InvoiceResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
             };
         };
         trace?: never;
@@ -4587,7 +3907,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Refresh linked values and generate the next invoice PDF version. */
         post: {
             parameters: {
                 query?: never;
@@ -4600,13 +3920,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Regenerated invoice. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["InvoiceResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                429: components["responses"]["RateLimited"];
             };
         };
         delete?: never;
@@ -4625,7 +3951,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Download the latest invoice PDF. */
         get: {
             parameters: {
                 query?: never;
@@ -4638,13 +3964,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Latest invoice PDF. */
+                200: {
                     headers: {
+                        "Content-Disposition"?: string;
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/pdf": string;
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
             };
         };
         put?: never;
@@ -4859,7 +4191,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get source-data freshness for analytics. */
         get: {
             parameters: {
                 query?: never;
@@ -4871,13 +4203,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Analytics source-data freshness. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AnalyticsFreshnessResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                500: components["responses"]["InternalServerError"];
             };
         };
         put?: never;
@@ -4897,7 +4235,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get forward-looking occupancy, revenue, and booking pace analytics. */
         get: {
             parameters: {
                 query?: never;
@@ -4909,13 +4247,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Forward-looking analytics. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AnalyticsOutlookResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                500: components["responses"]["InternalServerError"];
             };
         };
         put?: never;
@@ -4935,10 +4279,19 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get performance, cancellation, commission, and yearly analytics. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Inclusive period start in the property timezone; defaults to the first day of the current month. */
+                    from?: string;
+                    /** @description Exclusive period end in the property timezone; defaults to the first day of the next month. */
+                    to?: string;
+                    /** @description Include KPIs for the same period one year earlier. */
+                    yoy?: boolean;
+                    /** @description Calendar year used for yearly cleaning and finance totals. */
+                    year?: number;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -4947,13 +4300,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Performance analytics for the selected period. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AnalyticsPerformanceResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                500: components["responses"]["InternalServerError"];
             };
         };
         put?: never;
@@ -4973,10 +4332,15 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get demand, stay-shape, gap-night, and returning-guest analytics. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Inclusive period start in the property timezone; defaults to one year ago. */
+                    from?: string;
+                    /** @description Exclusive period end in the property timezone; defaults to today. */
+                    to?: string;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -4985,13 +4349,18 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Demand analytics for the selected period. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AnalyticsDemandResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
@@ -5011,10 +4380,13 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get cumulative booking pace for an arrival month. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Arrival month; defaults to the current month in the property timezone. */
+                    window?: string;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -5023,13 +4395,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Booking pace for the selected month and, when available, the prior year. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AnalyticsPaceResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                500: components["responses"]["InternalServerError"];
             };
         };
         put?: never;
@@ -5049,10 +4427,17 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** List returning guests for a date range. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Inclusive period start in the property timezone; defaults to one year ago. */
+                    from?: string;
+                    /** @description Exclusive period end in the property timezone; defaults to today. */
+                    to?: string;
+                    limit?: number;
+                    offset?: number;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -5061,13 +4446,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Paginated returning guests. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AnalyticsReturningGuestsResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                500: components["responses"]["InternalServerError"];
             };
         };
         put?: never;
@@ -5087,10 +4478,15 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Get first guest unlock counts by local hour of day. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Inclusive range start; defaults to the first day of the current month in the property timezone. */
+                    from?: string;
+                    /** @description Inclusive range end; defaults to the last day of the current month in the property timezone. */
+                    to?: string;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -5099,13 +4495,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description A 24-bucket guest check-in histogram. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AnalyticsGuestCheckinHeatmapResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                500: components["responses"]["InternalServerError"];
             };
         };
         put?: never;
@@ -5127,10 +4529,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Reconcile Nuki guest entry events for analytics. */
         post: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Optional month whose first day replaces the default 45-day reconciliation lookback. */
+                    month?: string;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -5139,13 +4544,20 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Reconciliation result; service failures are returned with `ok: false`. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AnalyticsGuestReconcileResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                500: components["responses"]["InternalServerError"];
             };
         };
         delete?: never;
@@ -5202,33 +4614,422 @@ export interface components {
             /** @description Optional machine-readable code. */
             code?: string;
         };
-        /** @deprecated */
-        DeprecatedOccupancyExportResponse: {
-            occupancies: {
-                [key: string]: unknown;
-            }[];
-        };
-        /** @deprecated */
-        DeprecatedOccupancyTokenCreateResponse: {
-            /** Format: int64 */
-            id: number;
-            token: string;
-        };
-        /** @deprecated */
-        DeprecatedOccupancyTokensResponse: {
-            tokens: {
-                /** Format: int64 */
-                id: number;
-                label?: string;
-                /** Format: date-time */
-                created_at: string;
-                /** Format: date-time */
-                last_used_at?: string;
-            }[];
-        };
         ActionResponse: {
             ok: boolean;
             error?: string;
+        };
+        AnalyticsFreshnessResponse: {
+            /** Format: date-time */
+            generated_at: string;
+            /** Format: date-time */
+            last_ics_sync_at?: string;
+            /** Format: date */
+            last_payout_date?: string;
+            /** Format: date */
+            last_statement_date?: string;
+            unmatched_payouts_count: number;
+            has_statement_data: boolean;
+            /** @enum {string} */
+            staleness_level: "ok" | "warn" | "stale";
+        };
+        AnalyticsKPIWindow: {
+            days: number;
+            nights_sold: number;
+            available_nights: number;
+            /** Format: int64 */
+            confirmed_cents: number;
+            /** Format: int64 */
+            estimated_cents: number;
+            /** Format: int64 */
+            total_revenue_cents: number;
+        };
+        AnalyticsPacePoint: {
+            date: string;
+            count: number;
+        };
+        AnalyticsUnsoldNight: {
+            /** Format: date */
+            date: string;
+            prev_guest?: string;
+            next_guest?: string;
+        };
+        AnalyticsCountByDay: {
+            /** Format: date */
+            date: string;
+            count: number;
+        };
+        AnalyticsOutlookResponse: {
+            /** Format: date-time */
+            generated_at: string;
+            windows: components["schemas"]["AnalyticsKPIWindow"][];
+            pacing_series: components["schemas"]["AnalyticsPacePoint"][];
+            unsold_nights: components["schemas"]["AnalyticsUnsoldNight"][];
+            new_bookings: components["schemas"]["AnalyticsCountByDay"][];
+            /** Format: date */
+            revenue_as_of?: string;
+            /** Format: int64 */
+            trailing_adr_cents: number;
+        };
+        AnalyticsPerformanceKPIs: {
+            nights_sold: number;
+            available_nights: number;
+            /** Format: double */
+            occupancy_rate: number;
+            /** Format: int64 */
+            adr_cents: number;
+            /** Format: int64 */
+            revpar_cents: number;
+            /** Format: int64 */
+            gross_cents: number;
+            /** Format: int64 */
+            net_cents: number;
+            /** Format: int64 */
+            commission_cents: number;
+            /** Format: int64 */
+            payment_fees_cents: number;
+            /** Format: double */
+            effective_take_rate: number;
+            matched_nights: number;
+            availability_nights: number;
+            /** Format: double */
+            availability_occupancy: number;
+            guest_nights: number;
+            /** Format: double */
+            guest_occupancy: number;
+        };
+        AnalyticsMonthlyTrendRow: {
+            month: string;
+            /** Format: double */
+            occupancy_rate: number;
+            /** Format: int64 */
+            adr_cents: number;
+            /** Format: int64 */
+            gross_cents: number;
+            nights_sold: number;
+            available_nights: number;
+        };
+        AnalyticsHeatmapCell: {
+            year: number;
+            week: number;
+            /** Format: double */
+            occupancy_rate: number;
+        };
+        AnalyticsDOWCell: {
+            dow: number;
+            nights_sold: number;
+            available_nights: number;
+            /** Format: double */
+            occupancy_rate: number;
+        };
+        AnalyticsBucket: {
+            bucket: string;
+            count: number;
+        };
+        AnalyticsCancellationStat: {
+            /** Format: double */
+            rate: number;
+            buckets: components["schemas"]["AnalyticsBucket"][] | null;
+            total_active_plus_cancelled: number;
+            total_cancelled: number;
+        };
+        AnalyticsCancellationCohortRow: {
+            month: string;
+            /** Format: double */
+            rate: number;
+            cancelled: number;
+            active: number;
+            other: number;
+        };
+        AnalyticsCommissionTrendRow: {
+            month: string;
+            /** Format: double */
+            rate: number;
+            /** Format: int64 */
+            commission_cents: number;
+            /** Format: int64 */
+            gross_cents: number;
+            stays: number;
+        };
+        AnalyticsCommissionPerStayRow: {
+            /** Format: int64 */
+            booking_id: number;
+            reference: string;
+            guest_name: string;
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+            /** Format: int64 */
+            gross_cents: number;
+            /** Format: int64 */
+            commission_cents: number;
+            /** Format: double */
+            rate: number;
+        };
+        AnalyticsNetPerStayRow: {
+            /** Format: int64 */
+            stay_id: number;
+            /** Format: date-time */
+            start_at: string;
+            /** Format: date-time */
+            end_at: string;
+            guest_name: string;
+            /** Format: int64 */
+            gross_cents: number;
+            /** Format: int64 */
+            commission_cents: number;
+            /** Format: int64 */
+            payment_fee_cents: number;
+            /** Format: int64 */
+            cleaning_allocated_cents: number;
+            /** Format: int64 */
+            net_cents: number;
+        };
+        AnalyticsYearlyCleaningRow: {
+            month: number;
+            count: number;
+        };
+        AnalyticsYearlyCleaningBlock: {
+            year: number;
+            series: components["schemas"]["AnalyticsYearlyCleaningRow"][] | null;
+        };
+        AnalyticsYearlyFinanceBlock: {
+            year: number;
+            /** Format: int64 */
+            incoming_cents: number;
+            /** Format: int64 */
+            outgoing_cents: number;
+            /** Format: int64 */
+            net_cents: number;
+        };
+        AnalyticsPerformanceResponse: {
+            /** Format: date-time */
+            generated_at: string;
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            kpis: components["schemas"]["AnalyticsPerformanceKPIs"];
+            prior_kpis?: components["schemas"]["AnalyticsPerformanceKPIs"];
+            monthly_trend: components["schemas"]["AnalyticsMonthlyTrendRow"][] | null;
+            seasonality_heatmap: components["schemas"]["AnalyticsHeatmapCell"][] | null;
+            dow_occupancy: components["schemas"]["AnalyticsDOWCell"][] | null;
+            cancellation: components["schemas"]["AnalyticsCancellationStat"];
+            cancellation_by_booking_month: components["schemas"]["AnalyticsCancellationCohortRow"][] | null;
+            cancellation_by_arrival_month: components["schemas"]["AnalyticsCancellationCohortRow"][] | null;
+            commission_rate_trend: components["schemas"]["AnalyticsCommissionTrendRow"][] | null;
+            commission_per_stay: components["schemas"]["AnalyticsCommissionPerStayRow"][] | null;
+            has_statement_data: boolean;
+            net_per_stay: components["schemas"]["AnalyticsNetPerStayRow"][] | null;
+            yearly_cleaning: components["schemas"]["AnalyticsYearlyCleaningBlock"];
+            yearly_finance: components["schemas"]["AnalyticsYearlyFinanceBlock"];
+            /** Format: date */
+            revenue_as_of?: string;
+        };
+        AnalyticsPersonsBucket: {
+            persons: number;
+            stays: number;
+            /** Format: int64 */
+            gross_cents: number;
+            room_nights: number;
+            /** Format: int64 */
+            adr_cents: number;
+        };
+        AnalyticsADRRow: {
+            bucket: string;
+            /** Format: int64 */
+            adr_cents: number;
+            matched_nights: number;
+        };
+        AnalyticsGapRow: {
+            /** Format: date */
+            date: string;
+            /** Format: int64 */
+            prev_stay_id?: number;
+            /** Format: int64 */
+            next_stay_id?: number;
+            /** Format: date */
+            prev_checkout_date?: string;
+            /** Format: date */
+            next_checkin_date?: string;
+        };
+        AnalyticsReturningStat: {
+            total_active: number;
+            returning: number;
+            /** Format: double */
+            returning_rate: number;
+        };
+        AnalyticsDemandResponse: {
+            /** Format: date-time */
+            generated_at: string;
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            lead_time: components["schemas"]["AnalyticsBucket"][] | null;
+            lead_time_statement: components["schemas"]["AnalyticsBucket"][] | null;
+            length_of_stay: components["schemas"]["AnalyticsBucket"][] | null;
+            persons_distribution: components["schemas"]["AnalyticsPersonsBucket"][] | null;
+            adr_by_month: components["schemas"]["AnalyticsADRRow"][] | null;
+            adr_by_dow: components["schemas"]["AnalyticsADRRow"][] | null;
+            adr_by_lead_bucket: components["schemas"]["AnalyticsADRRow"][] | null;
+            adr_by_persons: components["schemas"]["AnalyticsADRRow"][] | null;
+            gap_nights: components["schemas"]["AnalyticsGapRow"][] | null;
+            orphan_midweek: components["schemas"]["AnalyticsGapRow"][] | null;
+            returning_guests: components["schemas"]["AnalyticsReturningStat"];
+            has_statement_data: boolean;
+        };
+        AnalyticsReturningGuest: {
+            display_name: string;
+            normalized: string;
+            stay_count: number;
+            /** Format: date-time */
+            first_stay: string;
+            /** Format: date-time */
+            last_stay: string;
+        };
+        AnalyticsReturningGuestsResponse: {
+            /** Format: date-time */
+            generated_at: string;
+            total: number;
+            limit: number;
+            offset: number;
+            guests: components["schemas"]["AnalyticsReturningGuest"][];
+        };
+        AnalyticsPaceResponse: {
+            /** Format: date-time */
+            generated_at: string;
+            window: string;
+            this_year: components["schemas"]["AnalyticsPacePoint"][];
+            last_year?: components["schemas"]["AnalyticsPacePoint"][];
+            ly_available: boolean;
+        };
+        AnalyticsGuestCheckinHourBucket: {
+            hour: number;
+            count: number;
+        };
+        AnalyticsGuestCheckinHeatmapResponse: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            buckets: components["schemas"]["AnalyticsGuestCheckinHourBucket"][];
+        };
+        AnalyticsGuestReconcileStats: {
+            fetched_events: number;
+            cleaner_skipped: number;
+            auth_matched_events: number;
+            entry_like_events: number;
+            upserted_days: number;
+            fallback_any_event: boolean;
+            named_stay_key_count: number;
+            cleaner_alias_count: number;
+            /** Format: date-time */
+            requested_since_utc: string;
+        };
+        AnalyticsGuestReconcileResponse: {
+            ok: boolean;
+            error?: string;
+            stats?: components["schemas"]["AnalyticsGuestReconcileStats"];
+        };
+        OccupancySource: {
+            /** Format: int64 */
+            property_id: number;
+            source_type: string;
+            active: boolean;
+        };
+        OccupancySourceResponse: {
+            source: components["schemas"]["OccupancySource"];
+        };
+        OccupancySourcePatchRequest: {
+            active?: boolean;
+            source_type?: string;
+        };
+        OccupancySyncRunsResponse: {
+            runs: components["schemas"]["OccupancySyncRun"][];
+            page: number;
+            limit: number;
+            has_more: boolean;
+        };
+        OccupancySyncRun: {
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            finished_at?: string;
+            status: string;
+            error_message?: string;
+            events_seen: number;
+            http_status?: number;
+            trigger: string;
+            raw_blocks_inserted: number;
+            raw_blocks_updated: number;
+            raw_blocks_unchanged: number;
+            raw_blocks_deleted_from_source: number;
+            raw_block_conflicts: number;
+        };
+        CleaningCalendarSettings: {
+            enabled: boolean;
+            calendar_id: string | null;
+            default_duration_minutes: number;
+            title_prefix: string;
+            same_day_label: string;
+            no_guest_label: string;
+            connected_account_id: string | null;
+            google_client_configured: boolean;
+            /** Format: date-time */
+            updated_at: string | null;
+        };
+        CleaningCalendarSettingsResponse: {
+            settings: components["schemas"]["CleaningCalendarSettings"];
+        };
+        CleaningCalendarSettingsPatchRequest: {
+            enabled?: boolean;
+            calendar_id?: string | null;
+            default_duration_minutes?: number;
+            title_prefix?: string;
+            same_day_label?: string;
+            no_guest_label?: string;
+            connected_account_id?: string | null;
+        };
+        CleaningCalendarGoogleCalendarsResponse: {
+            google_client_configured: boolean;
+            calendars: unknown[];
+            note: string;
+        };
+        CleaningCalendarEventsResponse: {
+            month: string;
+            events: components["schemas"]["CleaningCalendarEvent"][];
+        };
+        CleaningCalendarRun: {
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            finished_at: string | null;
+            status: string;
+            error_message: string | null;
+            events_seen: number;
+            events_upserted: number;
+            events_removed: number;
+            trigger: string;
+        };
+        CleaningCalendarRunsResponse: {
+            runs: components["schemas"]["CleaningCalendarRun"][];
+        };
+        CleaningCalendarReconcileStats: {
+            events_seen: number;
+            events_upserted: number;
+            events_removed: number;
+            provisional_cleaning_events_created: number;
+            provisional_cleaning_events_removed: number;
+        };
+        CleaningCalendarReconcileResponse: {
+            ok: boolean;
+            error?: string;
+            stats?: components["schemas"]["CleaningCalendarReconcileStats"];
         };
         FinanceBookingPayoutsResponse: {
             month?: string;
@@ -5239,44 +5040,43 @@ export interface components {
             /** Format: int64 */
             id: number;
             reference_number: string;
-            payout_id?: string;
-            row_type?: string;
+            payout_id: string | null;
+            row_type: string | null;
             /** Format: date */
-            check_in_date?: string;
+            check_in_date: string | null;
             /** Format: date */
-            check_out_date?: string;
-            guest_name?: string;
-            reservation_status?: string;
-            currency?: string;
-            payment_status?: string;
+            check_out_date: string | null;
+            guest_name: string | null;
+            host_name: string | null;
+            payout_summary: string | null;
+            reservation_status: string | null;
+            currency: string | null;
+            payment_status: string | null;
             /** Format: int64 */
-            amount_cents?: number;
+            amount_cents: number | null;
             /** Format: int64 */
-            commission_cents?: number;
+            commission_cents: number | null;
             /** Format: int64 */
-            payment_service_fee_cents?: number;
+            payment_service_fee_cents: number | null;
             net_cents: number;
             /** Format: date-time */
             payout_date: string;
             /** Format: int64 */
-            transaction_id?: number;
+            transaction_id: number | null;
             /** Format: int64 */
-            named_stay_id?: number;
-            /**
-             * Format: int64
-             * @deprecated
-             */
-            occupancy_id?: number;
-            occupancy_summary?: string;
-            named_stay_display_name?: string;
-            /** @enum {string} */
-            named_stay_type?: "booking_com" | "external" | "maintenance" | "personal_use";
+            named_stay_id: number;
+            named_stay_display_name: string | null;
+            /** @enum {string|null} */
+            named_stay_type: "booking_com" | "external" | "maintenance" | "personal_use" | null;
             /** Format: date */
-            named_stay_check_in_date?: string;
+            named_stay_check_in_date: string | null;
             /** Format: date */
-            named_stay_check_out_date?: string;
+            named_stay_check_out_date: string | null;
+            outcome_override: string | null;
+            /** Format: date-time */
+            outcome_override_marked_at: string | null;
             /** Format: int64 */
-            linked_invoice_id?: number;
+            linked_invoice_id: number | null;
             has_payout_data: boolean;
             has_statement_data: boolean;
         };
@@ -5329,7 +5129,7 @@ export interface components {
             /** @enum {string} */
             status: "active" | "cancelled" | "archived";
             /** @enum {string} */
-            review_status?: "confirmed" | "needs_review";
+            review_status?: "confirmed" | "needs_review" | "rejected";
             /** Format: int64 */
             manual_revenue_cents?: number;
             has_finance_data: boolean;
@@ -5339,35 +5139,204 @@ export interface components {
         };
         FinanceBookingPayoutMapRequest: {
             /** Format: int64 */
-            named_stay_id?: number | null;
-            /**
-             * Format: int64
-             * @deprecated
-             */
-            occupancy_id?: number | null;
+            named_stay_id: number;
         };
         FinanceBookingPayoutMapResponse: {
             ok: boolean;
             reference_number: string;
             /** Format: int64 */
-            named_stay_id?: number | null;
-        };
-        FinanceBookingPayoutCreateStayResponse: {
-            ok: boolean;
-            reference_number: string;
-            /** Format: int64 */
             named_stay_id: number;
-            /**
-             * Format: int64
-             * @deprecated
-             */
-            occupancy_id?: number;
-            created: boolean;
+        };
+        FinanceImportPreviewInsert: {
+            reference: string;
+            guest_name?: string;
+            /** Format: date */
+            check_in_date?: string;
+            /** Format: date */
+            check_out_date?: string;
+            amount_cents?: number;
+            status?: string;
+            status_changed?: boolean;
+        };
+        FinanceImportPreviewUpdate: {
+            reference: string;
+            guest_name?: string;
+            status_changed?: boolean;
+            changes?: {
+                field: string;
+            }[];
+        };
+        FinanceImportSkippedRow: {
+            reference: string;
+            reason: string;
+            hotel_id?: string;
+        };
+        FinanceImportRejectedRow: {
+            line: number;
+            reason: string;
+        };
+        FinanceImportPreviewResponse: {
+            ok: boolean;
+            preview_token: string;
+            /** @enum {string} */
+            source_type: "payout" | "statement";
+            hotel_id?: string;
+            file_sha256: string;
+            /** Format: date */
+            period_start?: string;
+            /** Format: date */
+            period_end?: string;
+            /** Format: int64 */
+            duplicate_of_import_id?: number;
+            inserts: components["schemas"]["FinanceImportPreviewInsert"][];
+            updates: components["schemas"]["FinanceImportPreviewUpdate"][];
+            unchanged_count: number;
+            skipped_other_hotel: components["schemas"]["FinanceImportSkippedRow"][];
+            rejected: components["schemas"]["FinanceImportRejectedRow"][];
+        };
+        FinanceImportCommitRequest: {
+            preview_token: string;
+        };
+        FinanceImportCommitResponse: {
+            ok: boolean;
+            /** Format: int64 */
+            import_id: number;
+            /** @enum {string} */
+            source_type: "payout" | "statement";
+            row_count_total: number;
+            row_count_inserted: number;
+            row_count_updated: number;
+            row_count_unchanged: number;
+            row_count_skipped_other_hotel: number;
+            row_count_rejected: number;
+        };
+        FinanceImport: {
+            /** Format: int64 */
+            id: number;
+            source_type: string;
+            source_channel: string;
+            hotel_id?: string;
+            /** Format: date-time */
+            uploaded_at: string;
+            file_sha256?: string;
+            row_count_total: number;
+            row_count_inserted: number;
+            row_count_updated: number;
+            row_count_unchanged: number;
+            row_count_skipped_other_hotel: number;
+            row_count_rejected: number;
+        };
+        FinanceImportsResponse: {
+            items: components["schemas"]["FinanceImport"][];
+        };
+        FinanceBookingPayoutRematchResponse: {
+            ok: boolean;
+            scanned: number;
+            matched: number;
+            updated: number;
+            already_mapped: number;
+            failed: number;
+        };
+        InvoiceParty: {
+            name: string;
+            company_name?: string;
+            address_line_1?: string;
+            city?: string;
+            postal_code?: string;
+            country?: string;
+            ico?: string;
+            dic?: string;
+            vat_id?: string;
+        };
+        InvoicePartyRequest: {
+            name?: string;
+            company_name?: string;
+            address_line_1?: string;
+            city?: string;
+            postal_code?: string;
+            country?: string;
+            ico?: string;
+            dic?: string;
+            vat_id?: string;
+        };
+        InvoiceRequestFields: {
+            /** Format: int64 */
+            named_stay_id?: number;
+            /** Format: int64 */
+            booking_payout_id?: number;
+            booking_payout_reference?: string;
+            /** @enum {string} */
+            language?: "sk" | "en";
+            issue_date?: string;
+            taxable_supply_date?: string;
+            due_date?: string;
+            stay_start_date?: string;
+            stay_end_date?: string;
+            amount_total_cents?: number;
+            payment_note?: string;
+            customer?: components["schemas"]["InvoicePartyRequest"];
+        };
+        InvoiceCreateRequest: components["schemas"]["InvoiceRequestFields"] & Record<string, never>;
+        InvoicePatchRequest: components["schemas"]["InvoiceRequestFields"];
+        InvoiceFile: {
+            /** Format: int64 */
+            id: number;
+            version: number;
+            file_path: string;
+            /** Format: int64 */
+            file_size_bytes: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        Invoice: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            named_stay_id: number | null;
+            /** Format: int64 */
+            booking_payout_id: number | null;
+            invoice_number: string;
+            sequence_year: number;
+            sequence_value: number;
+            /** @enum {string} */
+            language: "sk" | "en";
+            /** Format: date-time */
+            issue_date: string;
+            /** Format: date-time */
+            taxable_supply_date: string;
+            /** Format: date-time */
+            due_date: string;
+            /** Format: date-time */
+            stay_start_date: string;
+            /** Format: date-time */
+            stay_end_date: string;
+            supplier: components["schemas"]["InvoiceParty"];
+            customer: components["schemas"]["InvoiceParty"];
+            amount_total_cents: number;
+            currency: string;
+            payment_status: string;
+            payment_note: string;
+            version: number;
+            latest_file_path?: string;
+            /** Format: int64 */
+            latest_file_size_bytes?: number;
+            /** Format: date-time */
+            latest_file_created_at?: string;
+            download_url: string;
+            files?: components["schemas"]["InvoiceFile"][];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        InvoicesResponse: {
+            invoices: components["schemas"]["Invoice"][];
+        };
+        InvoiceResponse: {
+            invoice: components["schemas"]["Invoice"];
         };
         InvoiceStayCandidatesResponse: {
             stays: components["schemas"]["FinanceNamedStayCandidate"][];
-            /** @deprecated */
-            occupancies: Record<string, never>[];
         };
         NukiUpcomingStaysResponse: {
             stays: components["schemas"]["NukiUpcomingStay"][];
@@ -5375,14 +5344,6 @@ export interface components {
         NukiUpcomingStay: {
             /** Format: int64 */
             stay_id: number;
-            /** Format: int64 */
-            legacy_occupancy_id?: number;
-            /**
-             * Format: int64
-             * @deprecated
-             * @description Legacy compatibility ID retained until old Nuki callers are removed.
-             */
-            occupancy_id?: number;
             source_event_uid: string;
             summary: string | null;
             saved_pin_name: string | null;
@@ -5392,8 +5353,8 @@ export interface components {
             start_at: string;
             /** Format: date-time */
             end_at: string;
-            /** @description Compatibility field containing the named stay status. */
-            occupancy_status: string;
+            /** @enum {string} */
+            stay_status: "active" | "cancelled" | "archived";
             /** Format: int64 */
             generated_code_id: number | null;
             generated_label: string | null;
@@ -5419,15 +5380,9 @@ export interface components {
         NukiGenerateRequest: {
             /**
              * Format: int64
-             * @description Preferred Stage 7 named stay identity for single-stay generation.
+             * @description Named stay identity for single-stay generation.
              */
             stay_id?: number;
-            /**
-             * Format: int64
-             * @deprecated
-             * @description Deprecated compatibility identity resolved through occupancy_stay_migration_map.
-             */
-            occupancy_id?: number;
             pin_name?: string;
         };
         NukiCodesResponse: {
@@ -5505,11 +5460,6 @@ export interface components {
         GenerateMessagesResponse: {
             /** Format: int64 */
             stay_id: number;
-            /**
-             * Format: int64
-             * @deprecated
-             */
-            occupancy_id?: number;
             messages: components["schemas"]["RenderedMessage"][];
             nuki_available: boolean;
             placeholders?: {
@@ -5543,11 +5493,6 @@ export interface components {
         DashboardUpcomingStay: {
             /** Format: int64 */
             stay_id: number;
-            /**
-             * Format: int64
-             * @deprecated
-             */
-            occupancy_id?: number;
             summary: string | null;
             /** Format: date */
             start_at: string;
@@ -5560,11 +5505,6 @@ export interface components {
             nuki_code_id: number;
             /** Format: int64 */
             stay_id: number;
-            /**
-             * Format: int64
-             * @deprecated
-             */
-            occupancy_id?: number;
             summary: string | null;
             code_label: string | null;
             code_masked: string | null;
@@ -5671,8 +5611,6 @@ export interface components {
             last_sync_run_id?: number;
             conflict_reason?: string;
             covered_nights: string[];
-            /** Format: int64 */
-            legacy_occupancy_id?: number;
             cleaning_events: components["schemas"]["CalendarCleaningEvent"][];
         };
         NamedStay: {
@@ -5691,7 +5629,11 @@ export interface components {
             status: "active" | "cancelled" | "archived";
             cleaning_required: boolean;
             /** @enum {string} */
-            review_status: "confirmed" | "needs_review";
+            review_status: "confirmed" | "needs_review" | "rejected";
+            review_reason?: string;
+            /** @enum {string} */
+            outcome?: "cancelled_non_refundable" | "no_show";
+            outcome_reason?: string;
             /** @description Backend analytics sold-night eligibility for this stay. */
             counts_as_sold: boolean;
             /** @description Booking.com payout or statement data independently confirms this stay. */
@@ -5700,8 +5642,6 @@ export interface components {
             nuki_generation_status: "not_applicable" | "pending" | "generated" | "error";
             nuki_generation_error?: string;
             covered_nights: string[];
-            /** Format: int64 */
-            legacy_occupancy_id?: number;
             source_links: components["schemas"]["StaySourceLink"][];
             cleaning_events: components["schemas"]["CalendarCleaningEvent"][];
         };
@@ -5752,11 +5692,6 @@ export interface components {
         };
         NamedStayCreateRequest: {
             display_name: string;
-            /**
-             * @deprecated
-             * @description Legacy alias accepted during the compatibility window.
-             */
-            guest_display_name?: string;
             /** Format: date */
             check_in: string;
             /** Format: date */
@@ -5768,18 +5703,13 @@ export interface components {
         CleaningCalendarEvent: {
             /** Format: int64 */
             id: number;
-            /**
-             * Format: int64
-             * @deprecated
-             */
-            occupancy_id?: number | null;
             /** Format: int64 */
             named_stay_id?: number | null;
             /** Format: int64 */
             raw_booking_block_id?: number | null;
             cleaning_identity?: string | null;
             google_calendar_id: string;
-            google_event_id?: string | null;
+            google_event_id: string | null;
             /** Format: date */
             cleaning_date: string;
             /** Format: date-time */
@@ -5787,22 +5717,17 @@ export interface components {
             /** Format: date-time */
             ends_at: string;
             same_day_arrival: boolean;
-            /**
-             * Format: int64
-             * @deprecated
-             */
-            next_occupancy_id?: number | null;
             title: string;
             /** @enum {string} */
             status: "pending" | "synced" | "error" | "removed";
-            warning_message?: string | null;
-            error_message?: string | null;
+            warning_message: string | null;
+            error_message: string | null;
             /** Format: date-time */
-            last_synced_at?: string | null;
+            last_synced_at: string | null;
             /** Format: date-time */
             updated_at: string;
         };
-        AvailabilityBlockRequest: {
+        AvailabilityBlockCreateRequest: {
             /** @enum {string} */
             block_type: "closed" | "off_market";
             /** Format: date */
@@ -5811,14 +5736,23 @@ export interface components {
             end_date: string;
             reason?: string;
         };
+        AvailabilityBlockUpdateRequest: {
+            /** @enum {string} */
+            block_type: "closed" | "off_market";
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+            reason?: string;
+            /** @enum {string} */
+            status: "active" | "archived";
+        };
         AvailabilityBlockMutationResponse: {
             ok: boolean;
             availability_block: components["schemas"]["AvailabilityBlock"];
         };
         NamedStayPatchRequest: {
             display_name?: string;
-            /** @deprecated */
-            guest_display_name?: string;
             /** Format: date */
             check_in?: string;
             /** Format: date */
@@ -5831,12 +5765,20 @@ export interface components {
             manual_revenue_currency?: string | null;
             manual_revenue_note?: string | null;
         };
+        StayOutcomePatchRequest: {
+            /** @enum {string|null} */
+            outcome: "cancelled_non_refundable" | "no_show" | null;
+            reason?: string;
+        };
+        StayReviewPatchRequest: {
+            /** @enum {string} */
+            review_status: "confirmed" | "rejected";
+            reason?: string;
+        };
         NamedStayMutationResponse: {
             ok: boolean;
             /** Format: int64 */
             named_stay_id: number;
-            /** Format: int64 */
-            legacy_occupancy_id?: number;
             /** @enum {string} */
             nuki_generation_status: "not_applicable" | "pending" | "generated" | "error";
             nuki_generation_error?: string;
@@ -5897,12 +5839,19 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description Internal server error. */
+        InternalServerError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         IdPath: number;
         StayIdPath: number;
-        OccupancyIdPath: number;
-        UpstreamUidPath: string;
         ExternalIdPath: string;
         CodeIdPath: number;
         EventIdPath: number;
@@ -5914,12 +5863,7 @@ export interface components {
         MonthQuery: string;
     };
     requestBodies: never;
-    headers: {
-        /** @description Indicates that the endpoint is deprecated. */
-        Deprecation: string;
-        /** @description Human-readable migration target for the deprecated endpoint. */
-        Warning: string;
-    };
+    headers: never;
     pathItems: never;
 }
 export type $defs = Record<string, never>;

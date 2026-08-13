@@ -2,7 +2,9 @@
 
 > Audience: product / property manager + implementing engineer.
 > Scope: destructive finance-data reset for one property, while preserving the cleaning lady salary generated from flat-entry cleaning logs.
-> Status: implementation-ready specification with confirmed business decisions.
+> Status: active finance-reset behavior aligned to the PMS 21 final model.
+> Historical synthetic-occupancy implementation details are superseded by
+> named-stay ownership; reset never deletes named stays.
 
 ## 1. Business Analyst Challenge
 
@@ -27,7 +29,7 @@ The product owner confirmed the following decisions after BA review:
 - Finance categories are kept.
 - Uploaded finance attachment files are physically deleted after database commit.
 - Cleaning salary finance rows are recomputed from cleaning source data.
-- Finance-created synthetic occupancies are kept.
+- Named stays linked to finance bookings are kept when finance rows are reset.
 - A dedicated `finance_reset_runs` table records reset counts for audit/reporting.
 - Only owner/admin users can execute the reset.
 - The UI uses a confirmation dialog; no typed phrase is required.
@@ -43,6 +45,9 @@ Business analyst challenge: deleting invoices is materially riskier than blockin
 - The reset does not delete global finance categories or property-specific finance categories.
 - The reset deletes finance recurring rules and all non-cleaning-salary finance transactions.
 - The reset deletes finance import and booking data for the selected property.
+- Every committed finance booking has a named stay before reset; unmatched
+  import input remains staging/rejection evidence rather than a canonical row.
+- The reset preserves named stays and named-stay nights.
 - The reset deletes invoices linked to deleted finance booking rows, including invoice file metadata and physical invoice files.
 - The reset preserves invoice number sequences; deleted invoice numbers must not be reused.
 - The reset leaves audit logs intact, writes a normal audit event, and writes detailed counts to `finance_reset_runs`.
@@ -97,7 +102,8 @@ Current finance transaction source types include:
 - The reset must delete finance booking rows for the property.
 - The reset must delete invoices linked to deleted finance booking rows, including invoice file metadata and physical invoice files.
 - The reset must preserve invoice sequences so deleted invoice numbers are not reused.
-- The reset must preserve finance-created synthetic occupancies with `source_type = 'booking_payout'` or `source_type = 'booking_statement'`.
+- The reset must preserve every named stay and named-stay night formerly linked
+  to a deleted finance booking.
 - The reset must preserve finance categories.
 - The reset must preserve audit logs.
 - The reset must persist detailed reset counts in `finance_reset_runs`.
@@ -109,7 +115,9 @@ Current finance transaction source types include:
 ## 7. Non-Goals
 
 - Do not implement a global multi-property wipe.
-- Do not delete cleaning logs, salary adjustments, cleaning summaries, cleaner fee history, Nuki events, occupancy records, invoice sequences, or audit logs.
+- Do not delete cleaning logs, salary adjustments, cleaning summaries, cleaner
+  fee history, Nuki events, named stays, named-stay nights, raw booking blocks,
+  invoice sequences, or audit logs.
 - Do not add any database migration beyond the required `finance_reset_runs` migration unless implementation discovers another real schema need.
 - Do not change existing single-transaction delete semantics.
 - Do not add automatic scheduled reset behavior.
@@ -137,7 +145,7 @@ Current finance transaction source types include:
 | Invoice file metadata | `invoice_files` for deleted invoices | Delete through invoice cascade | Keeps DB consistent with deleted invoices. |
 | Physical invoice files | filesystem under invoice file paths | Delete after DB commit | Prevent orphaned generated invoice files. |
 | Invoice sequences | `invoice_sequences` | Preserve | Deleted invoice numbers must not be reused. |
-| Synthetic occupancies from finance imports | `occupancies` where `source_type IN ('booking_payout', 'booking_statement')` | Preserve | Confirmed product decision; occupancy history remains visible after finance reset. |
+| Named stays linked to finance bookings | `named_stays` and `named_stay_nights` | Preserve | Finance reset removes finance data, not business stay truth. |
 | Audit logs | existing audit table | Preserve and append reset event | Security and traceability. |
 | Reset run details | `finance_reset_runs` | Insert one row per executed reset | Stores detailed counts that do not fit `api_audit_logs`. |
 
@@ -272,7 +280,8 @@ Run steps 1-16 inside one database transaction:
 8. Delete finance imports for the property.
 9. Delete finance bookings for the property.
 10. Delete finance month states for the property.
-11. Preserve synthetic occupancies created from finance imports; do not delete or mark `occupancies.source_type IN ('booking_payout', 'booking_statement')` as deleted.
+11. Preserve named stays and named-stay nights. Deleting finance bookings must
+    not cancel, archive, resize, or delete their former stays.
 12. Recompute cleaning summaries and call existing generated-entry sync logic for only the captured cleaning salary months, or directly upsert `cleaning_salary` finance transactions from `ComputeCleaningMonthlySummary`.
 13. For any captured cleaning salary month whose recomputed `FinalSalaryCents <= 0`, delete the stale `cleaning_salary` finance transaction for that property/month.
 14. Reinsert/update `finance_month_states` for months where cleaning salary rows remain, using `last_synced_reason = 'finance_reset_preserve_cleaning_salary'`.
@@ -320,11 +329,13 @@ Months to preserve/regenerate should be the union of:
 
 If a month computes to `FinalSalaryCents <= 0`, no `cleaning_salary` finance transaction is required. If an old `cleaning_salary` finance transaction already exists for that property/month, reset must delete it so the finance summary does not keep a stale cleaner expense.
 
-### 9.7 Synthetic Occupancy Preservation
+### 9.7 Named-Stay Preservation
 
-Finance imports can create synthetic occupancy rows when no matching occupancy exists. These rows use `source_type = 'booking_payout'` or `source_type = 'booking_statement'`.
-
-Confirmed decision: reset keeps these synthetic occupancies. The reset removes finance/import data but does not delete or mark these occupancy rows as `deleted_from_source`. This means occupancy history may still show stays originally discovered from finance imports after the finance ledger has been reset.
+Every committed finance booking in the final model has a named stay. Finance
+reset deletes the canonical finance booking and its finance-owned links but
+does not delete, cancel, archive, resize, or otherwise mutate that named stay
+or its active nights. Unmatched import input remains staging/rejection evidence
+and therefore creates no stay for reset to preserve.
 
 ## 10. Frontend Specification
 
@@ -352,7 +363,8 @@ Backend store tests:
 - Reset deletes invoices linked to deleted finance bookings.
 - Reset deletes invoice file metadata and physical invoice files for deleted invoices after DB commit.
 - Reset preserves invoice sequences and does not reuse invoice numbers.
-- Reset preserves synthetic occupancies with `source_type = 'booking_payout'` and `source_type = 'booking_statement'`.
+- Reset preserves named stays and named-stay nights formerly linked to deleted
+  finance bookings.
 - Reset deletes recurring rules and `recurring_rule` transactions.
 - Reset preserves categories.
 - Reset preserves cleaning logs, fee history, adjustments, and summaries.
@@ -394,7 +406,7 @@ cd frontend && npm test -- FinanceView
 - After reset, cleaning salary from flat-entry cleaning logs remains visible in finance.
 - Cleaning module data is unchanged.
 - Linked invoices and their files are deleted, and invoice sequences are preserved.
-- Finance-created synthetic occupancies remain unchanged.
+- Named stays formerly linked to deleted finance bookings remain unchanged.
 - Stale cleaning salary finance rows are removed when recomputed salary is zero.
 - A `finance_reset_runs` row stores detailed reset counts.
 - The operation is audited with deleted/preserved counts.

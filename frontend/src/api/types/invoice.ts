@@ -22,8 +22,7 @@ export interface InvoiceFile {
 
 export interface Invoice {
   id: number
-  occupancy_id?: number
-  named_stay_id?: number
+  named_stay_id: number
   booking_payout_id?: number
   invoice_number: string
   sequence_year: number
@@ -56,11 +55,6 @@ export interface InvoicePreview {
   invoice_number: string
 }
 
-/**
- * Occupancy candidate shown in the InvoicesView "link stay" picker.
- * Different shape from {@link ./bookingPayouts.OccupancyOption} and
- * {@link ./occupancy.Occupancy} — kept distinct on purpose.
- */
 export interface InvoiceNamedStayOption {
   id: number
   display_name: string
@@ -73,8 +67,6 @@ export interface InvoiceNamedStayOption {
   has_finance_data: boolean
 }
 
-export type InvoiceOccupancyOption = InvoiceNamedStayOption
-
 export interface InvoiceBookingPayoutOption {
   id: number
   reference_number: string
@@ -85,8 +77,6 @@ export interface InvoiceBookingPayoutOption {
   guest_name?: string | null
   host_name?: string | null
   payout_summary?: string | null
-  occupancy_id?: number | null
   named_stay_id?: number | null
-  occupancy_summary?: string | null
   linked_invoice_id?: number | null
 }

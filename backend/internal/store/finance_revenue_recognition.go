@@ -59,12 +59,11 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT fb.id, fb.reference_number, COALESCE(fb.guest_name, ''),
 		       COALESCE(fb.check_in_date, ''), COALESCE(fb.check_out_date, ''),
-		       COALESCE(fb.amount_cents, 0), fb.named_stay_id, fb.occupancy_id,
+		       COALESCE(fb.amount_cents, 0), fb.named_stay_id,
 		       COALESCE(fb.status, ''), COALESCE(fb.reservation_status, ''),
-		       COALESCE(fb.outcome_override, ns.stay_outcome, occ.stay_outcome, '')
+		       COALESCE(fb.outcome_override, ns.stay_outcome, '')
 		FROM finance_bookings fb
 		LEFT JOIN named_stays ns ON ns.id = fb.named_stay_id AND ns.property_id = fb.property_id
-		LEFT JOIN occupancies occ ON occ.id = fb.occupancy_id AND occ.property_id = fb.property_id
 		WHERE fb.property_id = ? AND fb.has_payout_data = 1
 		ORDER BY fb.check_in_date DESC, fb.id DESC`, propertyID)
 	if err != nil {
@@ -79,12 +78,11 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 			checkIn, checkOut    string
 			grossCents           int
 			namedStayID          sql.NullInt64
-			occupancyID          sql.NullInt64
 			status               string
 			reservationStatus    string
 			outcome              string
 		)
-		if err := rows.Scan(&bookingID, &reference, &guestName, &checkIn, &checkOut, &grossCents, &namedStayID, &occupancyID, &status, &reservationStatus, &outcome); err != nil {
+		if err := rows.Scan(&bookingID, &reference, &guestName, &checkIn, &checkOut, &grossCents, &namedStayID, &status, &reservationStatus, &outcome); err != nil {
 			return nil, err
 		}
 
@@ -123,7 +121,7 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 				GrossCents:           grossCents,
 				StayNights:           stayNights,
 				RecognizedGrossCents: grossCents,
-				Unmatched:            !namedStayID.Valid && !occupancyID.Valid,
+				Unmatched:            !namedStayID.Valid,
 				Cancelled:            cancelled,
 				NoShow:               noShow,
 			})
@@ -157,7 +155,7 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 			StayNights:           stayNights,
 			RecognizedNights:     endOffset - startOffset,
 			RecognizedGrossCents: recognizedGross,
-			Unmatched:            !namedStayID.Valid && !occupancyID.Valid,
+			Unmatched:            !namedStayID.Valid,
 			Cancelled:            false,
 			NoShow:               false,
 		})

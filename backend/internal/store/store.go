@@ -15,9 +15,8 @@ import (
 // at-rest-sensitive columns (property secrets, generated PINs) transparently
 // via the encryptNS / decryptNS helpers.
 type Store struct {
-	DB                           *sql.DB
-	Crypto                       *secretbox.Box
-	OccupancyLegacyWriteDisabled bool
+	DB     *sql.DB
+	Crypto *secretbox.Box
 }
 
 // encryptNS encrypts a NullString in place, returning a value safe to pass

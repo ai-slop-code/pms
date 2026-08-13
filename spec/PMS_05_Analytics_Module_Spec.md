@@ -12,6 +12,14 @@ This module is distinct from the existing **Dashboard Module (#8)**, which is an
 
 **Source of truth for available data:** [`PMS_04_Analytics_Data_Inventory.md`](PMS_04_Analytics_Data_Inventory.md).
 
+**PMS 21 authority:** the formulas below use active `named_stay_nights`,
+named-stay lifecycle/type/review/outcome fields, property availability blocks,
+and named-stay-linked finance data. Raw booking blocks are availability source
+evidence and never sold/revenue nights. The final schema and API do not expose
+occupancy IDs, occupancy-as-stay aliases, or legacy occupancy repair APIs.
+Historical references to those concepts are superseded by ADR-007 and the PMS
+21 cleanup contract.
+
 ---
 
 ## Scoping assumptions (locked)
@@ -24,7 +32,7 @@ These decisions bound the spec. Revisit only on explicit owner request.
 | Booking channels | Booking.com only (ICS + payouts CSV). No channel-mix widgets. |
 | History depth | 2+ years available → all YoY comparisons valid. |
 | Payouts CSV cadence | Imported monthly. Revenue-side metrics (ADR, RevPAR, commission, net) are authoritative but **lag up to ~30 days** behind arrivals. UI must surface this freshness explicitly. |
-| Lead time basis | `imported_at → start_at` is accepted as a close proxy for booking creation time (sync is frequent enough). |
+| Lead time basis | Persisted `named_stays.first_known_at → check_in_date`. `first_known_at` is the canonical earliest reliable booking/source/user evidence timestamp. |
 | Returning guests | Fuzzy match on normalized `guest_name` from Booking.com payouts. Always labelled as "likely returning" with a disclaimer. |
 | Currency | EUR only. No FX. |
 
@@ -34,10 +42,13 @@ These decisions bound the spec. Revisit only on explicit owner request.
 
 These are non-negotiable product disclosures so the owner trusts the numbers:
 
-1. **Revenue metrics lag arrivals by up to ~30 days** because they depend on the next Booking.com payout CSV import. Every revenue tile shows "revenue data through: <date>" derived from `MAX(finance_booking_payouts.payout_date)`.
+1. **Revenue metrics lag arrivals by up to ~30 days** because they depend on the next Booking.com payout CSV import. Every revenue tile shows "revenue data through: <date>" derived from the canonical finance-booking payout date.
 2. **Forward revenue is a blend**: bookings with a payout already matched contribute their actual gross; bookings without a payout yet contribute an **estimate = property-wide trailing-12-months ADR × nights**. Estimated vs confirmed portions must be visually distinct.
 3. **Returning-guest count is fuzzy**. The UI labels it as "likely returning" and offers a drill-down list so the owner can eyeball false positives.
-4. **Cancelled stays** are excluded from occupancy, ADR, RevPAR, and revenue totals, but counted in cancellation metrics.
+4. **Normal cancelled/archived stays** are excluded from occupancy, ADR,
+   RevPAR, and revenue totals. PMS 17 no-show and non-refundable outcomes keep
+   their sold nights and actual revenue and are excluded from the normal
+   cancellation-rate cohort.
 5. **Gap-night analysis** only considers nights between two *confirmed active* stays.
 
 ---
@@ -49,17 +60,22 @@ Precision matters. Every formula below is implementable against the tables liste
 ### Nightly / calendar primitives
 
 - **Night** — a calendar date `d` such that `start_at_date ≤ d < end_at_date`. A stay from 2026-06-10 → 2026-06-13 contributes 3 nights: the 10th, 11th, 12th.
-- **Available nights in period P** — count of calendar dates in P. No blocking calendar is modelled; every night is assumed sellable.
-- **Nights sold in period P** — sum over all *active* (non-cancelled, non-deleted) stays of nights that fall inside P.
-- **Active stay** — `occupancies.status IN ('active', 'updated')`. Cancellations are `cancelled` or `deleted_from_source`.
+- **Bookable nights in period P** — calendar nights minus active non-stay
+  availability blocks and other PMS 21 availability reductions.
+- **Nights sold in period P** — active `named_stay_nights` whose stay type,
+  review state, funding state, and outcome are sold-eligible.
+- **Active stay** — an active named stay with its expected active night set.
+  Cancelled and archived stays have no active nights. PMS 17 outcomes
+  `cancelled_non_refundable` and `no_show` remain sold/occupied when their
+  actual revenue is retained.
 
 ### Core performance metrics
 
 | Metric | Formula | Notes |
 |---|---|---|
-| Occupancy rate | nights sold / available nights | Per period, per month, per day-of-week. |
+| Occupancy rate | nights sold / bookable nights | Per period, per month, per day-of-week. |
 | ADR (Average Daily Rate) | Σ `amount_cents` (gross from payouts) / nights sold — **for stays that have a matched payout** | Denominator matches numerator: never divide payout revenue by all nights sold. |
-| RevPAR | Σ gross / available nights | Equivalent to ADR × occupancy (on the same stay set). |
+| RevPAR | Σ gross / bookable nights | Equivalent to ADR × occupancy (on the same stay set). |
 | Net revenue per night | Σ `net_cents` / nights sold (matched stays only) | Already net of Booking.com commission and payment fees. |
 | Booking.com effective take-rate | Σ (commission + payment_service_fee) / Σ gross | Trended monthly. Alerts if it creeps up. |
 | Average length of stay | nights sold / distinct active stays in period | |
@@ -68,24 +84,38 @@ Precision matters. Every formula below is implementable against the tables liste
 
 ### Booking behavior metrics
 
-- **Lead time** — `DATE(start_at) − DATE(imported_at)` in days, per stay. Bucketed as: **0–3 / 4–14 / 15–45 / 46–90 / 91+**.
+- **Lead time** — named-stay arrival date minus canonical
+  `named_stays.first_known_at`. This persisted field keeps the earliest reliable
+  evidence known for the stay; analytics must not re-derive it from current raw
+  blocks or substitute a later runtime `created_at`. Bucketed as:
+  **0–3 / 4–14 / 15–45 / 46–90 / 91+**.
 - **Booking pace curve** — for a given *future arrival window* (e.g. "stays arriving in July 2026"), for each integer `T` from 0 to 180: count of bookings for that window already received at `T` days before the window's *start*. Plotted as a cumulative curve, with last year's curve for the same-named window overlaid.
-- **Day-of-week occupancy** — nights sold per weekday / available nights per weekday, across the selected period.
+- **Day-of-week occupancy** — nights sold per weekday / bookable nights per weekday, across the selected period.
 - **Seasonality heatmap** — occupancy rate per ISO week × year. Colour scale goes dark at ≤30%, hot at ≥90%.
 - **Length-of-stay distribution** — histogram, buckets **1 / 2 / 3 / 4–5 / 6–7 / 8–14 / 15+ nights**.
 
 ### Forward-looking metrics
 
 - **On-the-books nights, next 30/60/90 days** — nights sold for arrival dates in `[today, today + N)`.
-- **Forward occupancy, next 30/60/90 days** — on-the-books nights / available nights in the window.
+- **Forward occupancy, next 30/60/90 days** — on-the-books nights / bookable nights in the window.
 - **On-the-books revenue, next 30/60/90 days** — Σ gross for matched stays + Σ (trailing-12m ADR × nights) for unmatched stays, split visually.
-- **Pace vs same time last year** — on-the-books nights for calendar-window `[today, today+30)` **today** vs on-the-books nights for `[today −1y, today −1y +30)` as-of `today −1y`. Needs a point-in-time reconstruction: for each day in history, the set of bookings with `imported_at ≤ D`. Sqlite can reconstruct this from `occupancies.imported_at` + `last_synced_at`.
+- **Pace vs same time last year** — on-the-books nights for calendar-window
+  `[today, today+30)` today vs the prior-year window at the equivalent as-of
+  date. Reconstruction uses `named_stays.first_known_at` and
+  `named_stays.cancellation_effective_at` retained in the final model.
 - **Unsold nights in next 14 days** — list view with dates and adjacent-stay context, to trigger last-minute pricing action.
 
 ### Cancellation metrics
 
-- **Cancellation rate** — cancelled stays in period / (cancelled + active) stays in period, cohorted by **arrival date**. A cancellation is detected when status transitions to `cancelled` or `deleted_from_source` (tracked via `content_hash` churn and final status).
-- **Cancellation lead time distribution** — `DATE(start_at) − DATE(cancelled_at)` in days; `cancelled_at` inferred from `last_synced_at` on the final status-change. Buckets **0–3 / 4–14 / 15–45 / 46+**. Late cancellations are the painful ones; highlight them.
+- **Cancellation rate** — normal cancelled named stays in period / (normal
+  cancelled + active) stays, cohorted by arrival date. PMS 17 no-show and
+  non-refundable cancellation outcomes are excluded from both numerator and
+  denominator.
+- **Cancellation lead time distribution** — arrival date minus canonical
+  `named_stays.cancellation_effective_at`. The timestamp records the effective
+  transition to normal cancelled state, is not overwritten by repeated
+  cancellation writes, and is cleared if the stay is reactivated. Buckets
+  **0–3 / 4–14 / 15–45 / 46+**.
 
 ### Gap & efficiency metrics
 
@@ -122,7 +152,9 @@ Single Analytics page at `/analytics`, three tabs:
 2. **Performance** (retrospective)
 3. **Demand & Pricing**
 
-A slim **freshness bar** sits above all tabs showing: last ICS sync timestamp, last payout CSV import date, count of unmatched payouts (payouts with no linked occupancy).
+A slim **freshness bar** sits above all tabs showing: last ICS sync timestamp,
+last payout CSV import date, and unmatched import/staging evidence count. Final
+canonical `finance_bookings` rows are never ownerless.
 
 ### Tab 1 — Outlook (forward-looking)
 
@@ -130,7 +162,7 @@ A slim **freshness bar** sits above all tabs showing: last ICS sync timestamp, l
 - Hero row: on-the-books gross revenue **30 / 60 / 90 days**, split confirmed vs estimated, with YoY delta.
 - Pacing chart: cumulative on-the-books nights for the next 90-day arrival window, overlaid with the same-day-last-year curve.
 - Upcoming unsold-nights table: every sellable night in the next 14 days that isn't booked, with adjacent-stay context (what's booked before / after).
-- "New bookings received in the last 7 days" sparkline (cheap to compute from `imported_at`).
+- "New bookings received in the last 7 days" sparkline (computed from canonical `first_known_at`).
 
 ### Tab 2 — Performance (retrospective)
 
@@ -157,8 +189,12 @@ A slim **freshness bar** sits above all tabs showing: last ICS sync timestamp, l
 
 ## Business rules
 
-- **Cancelled stays are excluded** from occupancy / ADR / RevPAR / revenue totals; included in cancellation metrics only.
-- **Revenue metrics cohort by arrival date** (`check_in_date` on the payout, or `start_at` on the occupancy), not by payout date. A payout received in March for a stay in February belongs to February revenue.
+- **Normal cancelled/archived stays are excluded** from occupancy / ADR /
+  RevPAR / revenue totals. PMS 17 `cancelled_non_refundable` and `no_show`
+  remain sold/occupied, retain actual revenue, and are excluded from normal
+  cancellation-rate numerator and denominator.
+- **Revenue metrics cohort by named-stay arrival date**, not payout date. A
+  payout received in March for a February stay belongs to February revenue.
 - **When a stay has no matched payout**, it contributes to occupancy-side metrics but not to revenue-side metrics. Forward-revenue estimation is the only exception and must be visually distinguished.
 - **YoY comparisons** anchor on calendar period, not on weekday alignment. July 2026 compares to July 2025.
 - **Pace vs LY** uses the "as-of offset" technique: today's position in 2026 vs the equivalent day in 2025 (`today − interval '1 year'`).
@@ -186,8 +222,13 @@ All list responses include a `generated_at` timestamp and the input filters echo
 
 **No new tables required.** All metrics derive from the existing schema documented in `PMS_04`:
 
-- `occupancies` + `occupancy_sync_runs` → nights, occupancy, lead time, cancellations, pace, gaps.
-- `finance_booking_payouts` → ADR, RevPAR, gross / net / commission / fees, returning-guest name source.
+- `named_stays` + `named_stay_nights` + `property_availability_blocks` → sold
+  nights, bookable nights, lifecycle/outcomes, canonical `first_known_at` and
+  `cancellation_effective_at`, lead time, cancellations, pace, and gaps.
+- `raw_booking_blocks` + `stay_source_links` + `occupancy_sync_runs` → source
+  evidence and freshness, not sold nights.
+- `finance_bookings` with required named-stay linkage → ADR, RevPAR, gross /
+  net / commission / fees, returning-guest name source.
 - `finance_transactions` + `cleaning_monthly_summaries` → net-per-stay cleaning allocation, cost-per-night.
 
 **Optional future addition** (flagged, not included in v1):
@@ -222,6 +263,11 @@ All list responses include a `generated_at` timestamp and the input filters echo
 - Cancelled stays excluded from performance metrics, included in cancellation stats.
 - Forward-revenue split: confirmed vs estimated portions sum to the total.
 - Pace-vs-LY "as-of" reconstruction produces monotonic cumulative curves.
+- Lead-time and pace queries use persisted `named_stays.first_known_at`, not a
+  legacy import-time or row-creation fallback.
+- Cancellation lead time uses persisted
+  `named_stays.cancellation_effective_at`, including cancel/reactivate/cancel
+  lifecycle coverage.
 - Returning-guest normalization handles diacritics (`Novák` == `novak`), trims whitespace, rejects ≤5-char names.
 - Gap-night detection on back-to-back-bookings with same-day checkout/check-in correctly reports **zero** gap (not one).
 - Freshness thresholds (45 / 75 days) render the correct banner colour.

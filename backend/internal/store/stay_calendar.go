@@ -16,20 +16,19 @@ type OccupancyCalendarView struct {
 }
 
 type CalendarRawBookingBlock struct {
-	ID                int64                   `json:"id"`
-	PropertyID        int64                   `json:"property_id"`
-	SourceType        string                  `json:"source_type"`
-	SourceEventUID    string                  `json:"source_event_uid"`
-	CheckInDate       string                  `json:"check_in_date"`
-	CheckOutDate      string                  `json:"check_out_date"`
-	Status            string                  `json:"status"`
-	RawSummary        *string                 `json:"raw_summary,omitempty"`
-	SourceDtstamp     *string                 `json:"source_dtstamp,omitempty"`
-	LastSyncRunID     *int64                  `json:"last_sync_run_id,omitempty"`
-	ConflictReason    *string                 `json:"conflict_reason,omitempty"`
-	CoveredNights     []string                `json:"covered_nights"`
-	LegacyOccupancyID *int64                  `json:"legacy_occupancy_id,omitempty"`
-	CleaningEvents    []CalendarCleaningEvent `json:"cleaning_events"`
+	ID             int64                   `json:"id"`
+	PropertyID     int64                   `json:"property_id"`
+	SourceType     string                  `json:"source_type"`
+	SourceEventUID string                  `json:"source_event_uid"`
+	CheckInDate    string                  `json:"check_in_date"`
+	CheckOutDate   string                  `json:"check_out_date"`
+	Status         string                  `json:"status"`
+	RawSummary     *string                 `json:"raw_summary,omitempty"`
+	SourceDtstamp  *string                 `json:"source_dtstamp,omitempty"`
+	LastSyncRunID  *int64                  `json:"last_sync_run_id,omitempty"`
+	ConflictReason *string                 `json:"conflict_reason,omitempty"`
+	CoveredNights  []string                `json:"covered_nights"`
+	CleaningEvents []CalendarCleaningEvent `json:"cleaning_events"`
 }
 
 type CalendarNamedStay struct {
@@ -42,12 +41,14 @@ type CalendarNamedStay struct {
 	Status               string                   `json:"status"`
 	CleaningRequired     bool                     `json:"cleaning_required"`
 	ReviewStatus         string                   `json:"review_status"`
+	ReviewReason         *string                  `json:"review_reason,omitempty"`
+	Outcome              *string                  `json:"outcome,omitempty"`
+	OutcomeReason        *string                  `json:"outcome_reason,omitempty"`
 	CountsAsSold         bool                     `json:"counts_as_sold"`
 	HasFinanceEvidence   bool                     `json:"has_finance_evidence"`
 	NukiGenerationStatus string                   `json:"nuki_generation_status"`
 	NukiGenerationError  *string                  `json:"nuki_generation_error,omitempty"`
 	CoveredNights        []string                 `json:"covered_nights"`
-	LegacyOccupancyID    *int64                   `json:"legacy_occupancy_id,omitempty"`
 	SourceLinks          []CalendarStaySourceLink `json:"source_links"`
 	CleaningEvents       []CalendarCleaningEvent  `json:"cleaning_events"`
 }
@@ -90,6 +91,7 @@ type AvailabilityBlockInput struct {
 	StartDate    string
 	EndDate      string
 	Reason       string
+	Status       string
 	ActingUserID int64
 }
 
@@ -124,9 +126,8 @@ func (s *Store) OccupancyCalendarView(ctx context.Context, propertyID int64, mon
 func (s *Store) ListCalendarRawBookingBlocks(ctx context.Context, propertyID int64, startDate, endDate string) ([]CalendarRawBookingBlock, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT rb.id, rb.property_id, rb.source_type, rb.source_event_uid, rb.check_in_date, rb.check_out_date,
-		       rb.status, rb.raw_summary, rb.source_dtstamp, rb.last_sync_run_id, rb.conflict_reason, osm.old_occupancy_id
+		       rb.status, rb.raw_summary, rb.source_dtstamp, rb.last_sync_run_id, rb.conflict_reason
 		FROM raw_booking_blocks rb
-		LEFT JOIN occupancy_stay_migration_map osm ON osm.raw_booking_block_id = rb.id AND osm.migration_kind = 'raw_block'
 		WHERE rb.property_id = ? AND rb.check_in_date < ? AND rb.check_out_date > ?
 		ORDER BY rb.check_in_date, rb.id`, propertyID, endDate, startDate)
 	if err != nil {
@@ -139,16 +140,15 @@ func (s *Store) ListCalendarRawBookingBlocks(ctx context.Context, propertyID int
 	for rows.Next() {
 		var b CalendarRawBookingBlock
 		var rawSummary, sourceDtstamp, conflictReason sql.NullString
-		var lastSyncRunID, legacyOccupancyID sql.NullInt64
+		var lastSyncRunID sql.NullInt64
 		if err := rows.Scan(&b.ID, &b.PropertyID, &b.SourceType, &b.SourceEventUID, &b.CheckInDate, &b.CheckOutDate,
-			&b.Status, &rawSummary, &sourceDtstamp, &lastSyncRunID, &conflictReason, &legacyOccupancyID); err != nil {
+			&b.Status, &rawSummary, &sourceDtstamp, &lastSyncRunID, &conflictReason); err != nil {
 			return nil, err
 		}
 		b.RawSummary = stringPtr(rawSummary)
 		b.SourceDtstamp = stringPtr(sourceDtstamp)
 		b.LastSyncRunID = int64Ptr(lastSyncRunID)
 		b.ConflictReason = stringPtr(conflictReason)
-		b.LegacyOccupancyID = int64Ptr(legacyOccupancyID)
 		b.CoveredNights = []string{}
 		b.CleaningEvents = []CalendarCleaningEvent{}
 		byID[b.ID] = len(out)
@@ -191,8 +191,10 @@ func (s *Store) ListCalendarRawBookingBlocks(ctx context.Context, propertyID int
 func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, startDate, endDate string) ([]CalendarNamedStay, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date,
-		       ns.status, ns.cleaning_required, ns.review_status,
-		       CASE WHEN ns.status = 'active' AND COALESCE(ns.review_status, 'confirmed') = 'confirmed' AND (
+		       ns.status, ns.cleaning_required,
+		       COALESCE(ns.review_resolution, ns.review_status),
+		       ns.review_reason, ns.stay_outcome, ns.stay_outcome_reason,
+		       CASE WHEN ns.status = 'active' AND COALESCE(ns.review_resolution, ns.review_status, 'confirmed') = 'confirmed' AND (
 		           ns.stay_type = 'booking_com' OR (
 		               ns.stay_type = 'external' AND (
 		                   ns.manual_revenue_cents IS NOT NULL OR EXISTS (
@@ -211,10 +213,8 @@ func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, st
 		             AND upper(trim(COALESCE(fb.status, fb.reservation_status, ''))) NOT IN
 		                 ('CANCELLED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_PARTNER')
 		       ),
-		       ns.nuki_generation_status, ns.nuki_generation_error,
-		       osm.old_occupancy_id
+		       ns.nuki_generation_status, ns.nuki_generation_error
 		FROM named_stays ns
-		LEFT JOIN occupancy_stay_migration_map osm ON osm.named_stay_id = ns.id AND osm.migration_kind = 'named_stay'
 		WHERE ns.property_id = ? AND ns.status <> 'archived' AND ns.check_in_date < ? AND ns.check_out_date > ?
 		ORDER BY ns.check_in_date, ns.id`, propertyID, endDate, startDate)
 	if err != nil {
@@ -229,20 +229,21 @@ func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, st
 		var cleaningRequired int
 		var countsAsSold int
 		var hasFinanceEvidence int
-		var reviewStatus, nukiStatus, nukiError sql.NullString
-		var legacyOccupancyID sql.NullInt64
+		var reviewStatus, reviewReason, outcome, outcomeReason, nukiStatus, nukiError sql.NullString
 		if err := rows.Scan(&stay.ID, &stay.PropertyID, &stay.DisplayName, &stay.StayType, &stay.CheckInDate, &stay.CheckOutDate,
-			&stay.Status, &cleaningRequired, &reviewStatus, &countsAsSold, &hasFinanceEvidence,
-			&nukiStatus, &nukiError, &legacyOccupancyID); err != nil {
+			&stay.Status, &cleaningRequired, &reviewStatus, &reviewReason, &outcome, &outcomeReason, &countsAsSold, &hasFinanceEvidence,
+			&nukiStatus, &nukiError); err != nil {
 			return nil, err
 		}
 		stay.CleaningRequired = cleaningRequired == 1
 		stay.ReviewStatus = nullStringDefault(reviewStatus, "confirmed")
+		stay.ReviewReason = stringPtr(reviewReason)
+		stay.Outcome = stringPtr(outcome)
+		stay.OutcomeReason = stringPtr(outcomeReason)
 		stay.CountsAsSold = countsAsSold == 1
 		stay.HasFinanceEvidence = hasFinanceEvidence == 1
 		stay.NukiGenerationStatus = nullStringDefault(nukiStatus, NukiGenerationNotApplicable)
 		stay.NukiGenerationError = stringPtr(nukiError)
-		stay.LegacyOccupancyID = int64Ptr(legacyOccupancyID)
 		stay.CoveredNights = []string{}
 		stay.SourceLinks = []CalendarStaySourceLink{}
 		stay.CleaningEvents = []CalendarCleaningEvent{}
@@ -348,6 +349,10 @@ func (s *Store) UpdateAvailabilityBlock(ctx context.Context, propertyID, blockID
 	if err != nil {
 		return nil, err
 	}
+	status := strings.TrimSpace(in.Status)
+	if status != "active" && status != "archived" {
+		return nil, ErrNamedStayInvalidRange
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -361,13 +366,15 @@ func (s *Store) UpdateAvailabilityBlock(ctx context.Context, propertyID, blockID
 	if exists == 0 {
 		return nil, sql.ErrNoRows
 	}
-	if err := availabilityBlockRangeAvailableTx(ctx, tx, propertyID, start, end); err != nil {
-		return nil, err
+	if status == "active" {
+		if err := availabilityBlockRangeAvailableTx(ctx, tx, propertyID, start, end); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE property_availability_blocks
-		SET block_type = ?, start_date = ?, end_date = ?, reason = ?, updated_by_user_id = ?, updated_at = ?
-		WHERE property_id = ? AND id = ?`, blockType, start, end, nullableString(reason), nullableInt64(in.ActingUserID), now, propertyID, blockID); err != nil {
+		SET block_type = ?, start_date = ?, end_date = ?, reason = ?, status = ?, updated_by_user_id = ?, updated_at = ?
+		WHERE property_id = ? AND id = ?`, blockType, start, end, nullableString(reason), status, nullableInt64(in.ActingUserID), now, propertyID, blockID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -420,11 +427,10 @@ func availabilityBlockRangeAvailableTx(ctx context.Context, tx *sql.Tx, property
 
 func (s *Store) attachNamedCalendarCleaningEvents(ctx context.Context, propertyID int64, startDate, endDate string, stays []CalendarNamedStay, byID map[int64]int) error {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT c.id, COALESCE(c.named_stay_id, osm.named_stay_id), c.checkout_date, c.cleaning_kind, c.title, c.status, c.google_event_id, c.error_message, c.warning_message
+		SELECT c.id, c.named_stay_id, c.checkout_date, c.cleaning_kind, c.title, c.status, c.google_event_id, c.error_message, c.warning_message
 		FROM cleaning_calendar_events c
-		LEFT JOIN occupancy_stay_migration_map osm ON osm.old_occupancy_id = c.occupancy_id AND osm.migration_kind = 'named_stay'
 		WHERE c.property_id = ? AND c.status <> 'removed' AND c.checkout_date >= ? AND c.checkout_date <= ?
-		  AND COALESCE(c.named_stay_id, osm.named_stay_id) IS NOT NULL`, propertyID, startDate, endDate)
+		  AND c.named_stay_id IS NOT NULL`, propertyID, startDate, endDate)
 	if err != nil {
 		return err
 	}
@@ -444,11 +450,10 @@ func (s *Store) attachNamedCalendarCleaningEvents(ctx context.Context, propertyI
 
 func (s *Store) attachRawCalendarCleaningEvents(ctx context.Context, propertyID int64, startDate, endDate string, blocks []CalendarRawBookingBlock, byID map[int64]int) error {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT c.id, COALESCE(c.raw_booking_block_id, osm.raw_booking_block_id), c.checkout_date, c.cleaning_kind, c.title, c.status, c.google_event_id, c.error_message, c.warning_message
+		SELECT c.id, c.raw_booking_block_id, c.checkout_date, c.cleaning_kind, c.title, c.status, c.google_event_id, c.error_message, c.warning_message
 		FROM cleaning_calendar_events c
-		LEFT JOIN occupancy_stay_migration_map osm ON osm.old_occupancy_id = c.occupancy_id AND osm.migration_kind = 'raw_block'
 		WHERE c.property_id = ? AND c.status <> 'removed' AND c.checkout_date >= ? AND c.checkout_date <= ?
-		  AND COALESCE(c.raw_booking_block_id, osm.raw_booking_block_id) IS NOT NULL`, propertyID, startDate, endDate)
+		  AND c.raw_booking_block_id IS NOT NULL`, propertyID, startDate, endDate)
 	if err != nil {
 		return err
 	}
@@ -482,7 +487,7 @@ func (s *Store) ListCalendarAvailabilityBlocks(ctx context.Context, propertyID i
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, property_id, block_type, start_date, end_date, reason, status
 		FROM property_availability_blocks
-		WHERE property_id = ? AND status = 'active' AND start_date < ? AND end_date > ?
+		WHERE property_id = ? AND status IN ('active', 'archived') AND start_date < ? AND end_date > ?
 		ORDER BY start_date, id`, propertyID, endDate, startDate)
 	if err != nil {
 		return nil, err

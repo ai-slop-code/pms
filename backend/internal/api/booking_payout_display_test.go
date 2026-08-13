@@ -31,9 +31,13 @@ func TestFinanceBookingPayoutSummary_guestFallback(t *testing.T) {
 	if s == nil || *s != "Jane D." {
 		t.Fatalf("got %v", s)
 	}
-	s2 := financeBookingPayoutSummary(sql.NullString{}, sql.NullString{}, sql.NullString{}, "  Villa X  ")
-	if s2 == nil || *s2 != "Villa X" {
-		t.Fatalf("property fallback got %v", s2)
+	s2 := financeBookingPayoutSummary(sql.NullString{}, sql.NullString{}, sql.NullString{String: "  Named Stay  ", Valid: true}, "")
+	if s2 == nil || *s2 != "Named Stay" {
+		t.Fatalf("named-stay fallback got %v", s2)
+	}
+	s3 := financeBookingPayoutSummary(sql.NullString{}, sql.NullString{}, sql.NullString{}, "  Villa X  ")
+	if s3 == nil || *s3 != "Villa X" {
+		t.Fatalf("property fallback got %v", s3)
 	}
 }
 

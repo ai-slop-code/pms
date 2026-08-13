@@ -18,6 +18,25 @@ below only highlight the variables that *change meaning* between layouts
 For Google Calendar cleaning-event sync setup, see
 [`google-calendar-cleaning.md`](google-calendar-cleaning.md).
 
+## PMS 21 final model and destructive migration
+
+The final runtime model uses raw booking blocks for ICS source evidence, named
+stays for guest/business workflows, and property availability blocks for
+non-stay closures. Legacy occupancy IDs, occupancy-as-stay/export/token routes,
+and the old ICS occupancy-repair APIs are not part of the final API.
+
+Existing-database server startup applies ordinary migrations automatically but
+intentionally skips the manual destructive migration
+`000039_legacy_occupancy_removal`. A brand-new database applies the complete
+final schema, and later ordinary migrations are not held back by the manual
+skip. In the packaged backend image, only an explicit
+`/app/pms21-cleanup --apply ...` run applies all pending migrations, including
+`000039`; its required `--audit`, approvals, immutable identities, quiesced
+database, backup, and verification steps are documented in the active
+[`PMS 21 operations cutover runbook`](../pms-21-operations-cutover-runbook.md).
+Do not infer from application startup or this guide that any production cleanup
+gate has completed.
+
 ## 1. Docker Compose (recommended)
 
 Prerequisites: Docker ≥ 24, a domain pointing at the host, ports 80/443 open.
@@ -147,8 +166,8 @@ A few container-specific notes:
 - The image already declares a `HEALTHCHECK` running `/app/pms-healthcheck`,
   but `podman run --health-cmd` re-asserts it for clarity and so
   `podman healthcheck run pms-backend` works.
-- The first start runs migrations and creates the bootstrap super-admin
-  account. The user must change the password and (for super-admins)
+- The first start of a new database runs the complete schema and creates the bootstrap
+  super-admin account. The user must change the password and (for super-admins)
   enrol TOTP on first login — see the *First-boot checklist* below.
 
 To replace the binary on a new release:
@@ -159,7 +178,10 @@ podman stop pms-backend && podman rm pms-backend
 # re-run the `podman run` command above
 ```
 
-The data volume is reused; migrations run on every boot and are idempotent.
+The data volume is reused; ordinary automatic migrations are checked on every
+boot and are idempotent. For an existing database, manual destructive migration
+`000039` remains pending until the gated `/app/pms21-cleanup` apply workflow
+runs.
 
 For systemd-managed Podman, generate a unit with:
 
@@ -451,8 +473,8 @@ is restorable and that the operator knows the muscle-memory steps.
    docker compose up -d pms-backend
    docker compose logs -f pms-backend
    ```
-6. **Verify**: log in, confirm the most recent occupancy / invoice / audit
-   log entries match what you expect from the snapshot date.
+6. **Verify**: log in, confirm the most recent raw booking block, named stay,
+   invoice, and audit-log entries match what you expect from the snapshot date.
 7. **Roll back** if the drill fails: stop the backend, swap
    `pms.db.predrill` back into place, restart.
 8. **Record** the drill date and outcome in

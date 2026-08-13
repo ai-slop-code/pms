@@ -42,6 +42,23 @@ func categoryIDByCode(t *testing.T, st *Store, pid int64, code string) int64 {
 	return 0
 }
 
+func createFinanceNamedStay(t *testing.T, st *Store, propertyID int64, reference, checkIn, checkOut string) *NamedStay {
+	t.Helper()
+	stay, err := st.CreateNamedStayRecord(context.Background(), NamedStayCreateInput{
+		PropertyID:      propertyID,
+		DisplayName:     reference + " Guest",
+		StayType:        StayTypeBookingCom,
+		CheckInDate:     checkIn,
+		CheckOutDate:    checkOut,
+		SourceChannel:   "booking_com",
+		SourceReference: reference,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stay
+}
+
 func TestLinkBookingToNamedStayConfirmsOnlyMigrationReviewWithEligibleNukiState(t *testing.T) {
 	ctx := context.Background()
 	st := &Store{DB: testutil.OpenTestDB(t)}
@@ -60,9 +77,9 @@ func TestLinkBookingToNamedStayConfirmsOnlyMigrationReviewWithEligibleNukiState(
 		}
 		return stay
 	}
-	insertBooking := func(reference, status string) int64 {
+	insertBooking := func(reference, status string, stayID int64) int64 {
 		t.Helper()
-		res, err := st.DB.Exec(`INSERT INTO finance_bookings (property_id, reference_number, check_in_date, check_out_date, guest_name, net_cents, payout_date, created_at, updated_at, source_channel, has_payout_data, has_statement_data, status) VALUES (?, ?, '2099-01-01', '2099-01-02', ?, 10000, '2099-01-03', ?, ?, 'booking_com', 1, 1, ?)`, pid, reference, reference, now, now, status)
+		res, err := st.DB.Exec(`INSERT INTO finance_bookings (property_id, named_stay_id, reference_number, check_in_date, check_out_date, guest_name, net_cents, payout_date, created_at, updated_at, source_channel, has_payout_data, has_statement_data, status) VALUES (?, ?, ?, '2099-01-01', '2099-01-02', ?, 10000, '2099-01-03', ?, ?, 'booking_com', 1, 1, ?)`, pid, stayID, reference, reference, now, now, status)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -75,37 +92,87 @@ func TestLinkBookingToNamedStayConfirmsOnlyMigrationReviewWithEligibleNukiState(
 	assertState := func(stayID int64, wantReview, wantReason, wantNuki string) {
 		t.Helper()
 		var review, reason, nuki string
-		if err := st.DB.QueryRow(`SELECT review_status, COALESCE(review_reason, ''), nuki_generation_status FROM named_stays WHERE id = ?`, stayID).Scan(&review, &reason, &nuki); err != nil {
+		var resolution sql.NullString
+		if err := st.DB.QueryRow(`SELECT review_status, review_resolution, COALESCE(review_reason, ''), nuki_generation_status FROM named_stays WHERE id = ?`, stayID).Scan(&review, &resolution, &reason, &nuki); err != nil {
 			t.Fatal(err)
 		}
 		if review != wantReview || reason != wantReason || nuki != wantNuki {
 			t.Fatalf("stay %d state=%q/%q/%q want %q/%q/%q", stayID, review, reason, nuki, wantReview, wantReason, wantNuki)
 		}
+		if (wantReview == "confirmed" && resolution.String != "confirmed") || (wantReview == "needs_review" && resolution.Valid) {
+			t.Fatalf("stay %d resolution=%v for review_status=%q", stayID, resolution, wantReview)
+		}
 	}
 
 	confirmed := createStay("Confirmed", "2099-01-01", "2099-01-02", "legacy_non_reservation_stay")
-	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("CONFIRMED", "OK"), confirmed.ID); err != nil {
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("CONFIRMED", "OK", confirmed.ID), confirmed.ID); err != nil {
 		t.Fatal(err)
 	}
 	assertState(confirmed.ID, "confirmed", "", "pending")
 
 	cancelReview := createStay("Cancellation review", "2099-02-01", "2099-02-02", "finance_status_cancelled")
-	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("REVIEW", "OK"), cancelReview.ID); err != nil {
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("REVIEW", "OK", cancelReview.ID), cancelReview.ID); err != nil {
 		t.Fatal(err)
 	}
 	assertState(cancelReview.ID, "needs_review", "finance_status_cancelled", "not_applicable")
 
 	cancelledBooking := createStay("Cancelled booking", "2099-03-01", "2099-03-02", "legacy_non_reservation_stay")
-	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("CANCELLED", "CANCELLED"), cancelledBooking.ID); err != nil {
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("CANCELLED", "CANCELLED", cancelledBooking.ID), cancelledBooking.ID); err != nil {
 		t.Fatal(err)
 	}
 	assertState(cancelledBooking.ID, "needs_review", "legacy_non_reservation_stay", "not_applicable")
 
 	historical := createStay("Historical", "2020-01-01", "2020-01-02", "legacy_non_reservation_stay")
-	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("HISTORICAL", "OK"), historical.ID); err != nil {
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("HISTORICAL", "OK", historical.ID), historical.ID); err != nil {
 		t.Fatal(err)
 	}
 	assertState(historical.ID, "confirmed", "", "not_applicable")
+
+	rejected := createStay("Rejected", "2099-04-01", "2099-04-02", "legacy_non_reservation_stay")
+	if _, err := st.UpdateNamedStayReview(ctx, pid, rejected.ID, 1, "rejected", "legacy_non_reservation_stay"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("REJECTED", "OK", rejected.ID), rejected.ID); err != nil {
+		t.Fatal(err)
+	}
+	var resolution string
+	if err := st.DB.QueryRow(`SELECT review_resolution FROM named_stays WHERE id = ?`, rejected.ID).Scan(&resolution); err != nil {
+		t.Fatal(err)
+	}
+	if resolution != "rejected" {
+		t.Fatalf("finance evidence changed rejected resolution to %q", resolution)
+	}
+}
+
+func TestLinkBookingToNamedStayLowersFirstKnownAtFromEarlierFinanceEvidence(t *testing.T) {
+	ctx := context.Background()
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	stay := createFinanceNamedStay(t, st, pid, "LATE-LINK", "2026-06-01", "2026-06-02")
+	now := time.Now().UTC().Format(time.RFC3339)
+	bookedOn := "2020-02-03T04:05:06Z"
+	res, err := st.DB.Exec(`
+		INSERT INTO finance_bookings (
+			property_id, named_stay_id, reference_number, net_cents, payout_date,
+			booked_on, created_at, updated_at
+		) VALUES (?, ?, 'LATE-LINK', 10000, '2026-06-03', ?, ?, ?)`, pid, stay.ID, bookedOn, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookingID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkBookingToNamedStay(ctx, pid, bookingID, stay.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := st.GetNamedStay(ctx, pid, stay.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.FirstKnownAt.Format(time.RFC3339); got != bookedOn {
+		t.Fatalf("first_known_at=%q want %q", got, bookedOn)
+	}
 }
 
 func TestCanonicalFinanceEvidenceUpdateConfirmsAlreadyLinkedMigrationStay(t *testing.T) {
@@ -130,8 +197,9 @@ func TestCanonicalFinanceEvidenceUpdateConfirmsAlreadyLinkedMigrationStay(t *tes
 		t.Fatal(err)
 	}
 	status := "OK"
-	if _, err := st.UpsertFinanceBookingFromCanonical(ctx, pid, bookingID, statements.CanonicalBooking{
-		ReferenceNumber: "CANONICAL", SourceChannel: "booking_com", HasStatementData: true, Status: &status,
+	bookedOn := "2020-05-01T00:00:00Z"
+	if _, err := st.UpsertFinanceBookingFromCanonical(ctx, pid, bookingID, 0, statements.CanonicalBooking{
+		ReferenceNumber: "CANONICAL", SourceChannel: "booking_com", HasStatementData: true, Status: &status, BookedOn: &bookedOn,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +209,66 @@ func TestCanonicalFinanceEvidenceUpdateConfirmsAlreadyLinkedMigrationStay(t *tes
 	}
 	if reviewStatus != "confirmed" || nukiStatus != "pending" {
 		t.Fatalf("status=%q nuki=%q", reviewStatus, nukiStatus)
+	}
+	updated, err := st.GetNamedStay(ctx, pid, stay.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.FirstKnownAt.Format(time.RFC3339); got != bookedOn {
+		t.Fatalf("first_known_at=%q want imported booked_on %q", got, bookedOn)
+	}
+}
+
+func TestNewFinanceBookingsRequireNamedStayBeforeAnyWrite(t *testing.T) {
+	ctx := context.Background()
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	ref := "UNMATCHED"
+	net := 1000
+	payoutDate := time.Now().UTC().Format(time.RFC3339)
+
+	if _, err := st.UpsertFinanceBookingFromCanonical(ctx, pid, 0, 0, statements.CanonicalBooking{
+		ReferenceNumber: ref,
+		SourceChannel:   "booking_com",
+		NetCents:        &net,
+		PayoutDate:      &payoutDate,
+	}); err == nil {
+		t.Fatal("expected unmatched canonical insert to fail")
+	}
+	if _, err := st.ImportBookingPayoutRow(ctx, &FinanceTransaction{
+		PropertyID: pid, TransactionDate: time.Now().UTC(), Direction: "incoming", AmountCents: net,
+		SourceType: "booking_payout", SourceReference: sql.NullString{String: ref, Valid: true},
+	}, &FinanceBookingPayout{
+		PropertyID: pid, ReferenceNumber: ref, NetCents: net, PayoutDate: time.Now().UTC(),
+	}, 0); err == nil {
+		t.Fatal("expected unmatched payout insert to fail")
+	}
+	var bookings, transactions int
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM finance_bookings WHERE property_id = ?`, pid).Scan(&bookings); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB.QueryRow(`SELECT COUNT(*) FROM finance_transactions WHERE property_id = ?`, pid).Scan(&transactions); err != nil {
+		t.Fatal(err)
+	}
+	if bookings != 0 || transactions != 0 {
+		t.Fatalf("bookings=%d transactions=%d, want no writes", bookings, transactions)
+	}
+	stay := createFinanceNamedStay(t, st, pid, "MATCHED", "2026-07-01", "2026-07-02")
+	matchedRef := "MATCHED"
+	if _, err := st.UpsertFinanceBookingFromCanonical(ctx, pid, 0, stay.ID, statements.CanonicalBooking{
+		ReferenceNumber: matchedRef,
+		SourceChannel:   "booking_com",
+		NetCents:        &net,
+		PayoutDate:      &payoutDate,
+	}); err != nil {
+		t.Fatalf("matched canonical insert: %v", err)
+	}
+	var savedStayID int64
+	if err := st.DB.QueryRow(`SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND reference_number = ?`, pid, matchedRef).Scan(&savedStayID); err != nil {
+		t.Fatal(err)
+	}
+	if savedStayID != stay.ID {
+		t.Fatalf("named_stay_id=%d want %d", savedStayID, stay.ID)
 	}
 }
 
@@ -296,9 +424,10 @@ func TestResetFinanceRecords_DeletesFinanceDataAndPreservesCleaningSalary(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	stay := createFinanceNamedStay(t, st, pid, "REF-1", "2026-04-03", "2026-04-04")
 	bookingRes, err := st.DB.ExecContext(ctx, `
-		INSERT INTO finance_bookings (property_id, reference_number, net_cents, payout_date, transaction_id, created_at, updated_at, has_payout_data)
-		VALUES (?, 'REF-1', 50000, ?, ?, ?, ?, 1)`, pid, time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC).Format(time.RFC3339), bookingTx.ID, now, now)
+		INSERT INTO finance_bookings (property_id, named_stay_id, reference_number, net_cents, payout_date, transaction_id, created_at, updated_at, has_payout_data)
+		VALUES (?, ?, 'REF-1', 50000, ?, ?, ?, ?, 1)`, pid, stay.ID, time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC).Format(time.RFC3339), bookingTx.ID, now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,22 +440,17 @@ func TestResetFinanceRecords_DeletesFinanceDataAndPreservesCleaningSalary(t *tes
 	}
 	invoiceRes, err := st.DB.ExecContext(ctx, `
 		INSERT INTO invoices (
-			property_id, finance_booking_payout_id, invoice_number, sequence_year, sequence_value, language,
+			property_id, named_stay_id, finance_booking_payout_id, invoice_number, sequence_year, sequence_value, language,
 			issue_date, taxable_supply_date, due_date, stay_start_date, stay_end_date,
 			supplier_snapshot_json, customer_snapshot_json, amount_total_cents, currency, payment_status,
 			payment_note, version, created_at, updated_at
-		) VALUES (?, ?, 'T/2026/0007', 2026, 7, 'en', ?, ?, ?, ?, ?, '{}', '{}', 50000, 'EUR', 'paid', 'paid', 1, ?, ?)`,
-		pid, bookingID, now, now, now, now, now, now, now)
+		) VALUES (?, ?, ?, 'T/2026/0007', 2026, 7, 'en', ?, ?, ?, ?, ?, '{}', '{}', 50000, 'EUR', 'paid', 'paid', 1, ?, ?)`,
+		pid, stay.ID, bookingID, now, now, now, now, now, now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	invoiceID, _ := invoiceRes.LastInsertId()
 	if _, err := st.DB.ExecContext(ctx, `INSERT INTO invoice_files (invoice_id, version, file_path, file_size_bytes, created_at) VALUES (?, 1, 'invoices/test/invoice.pdf', 10, ?)`, invoiceID, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.DB.ExecContext(ctx, `
-		INSERT INTO occupancies (property_id, source_type, source_event_uid, start_at, end_at, status, content_hash, imported_at, last_synced_at)
-		VALUES (?, 'booking_payout', 'booking_payout:REF-1', ?, ?, 'active', 'h', ?, ?)`, pid, now, now, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.DB.ExecContext(ctx, `
@@ -389,13 +513,6 @@ func TestResetFinanceRecords_DeletesFinanceDataAndPreservesCleaningSalary(t *tes
 	}
 	if seq != 7 {
 		t.Fatalf("invoice sequence=%d want 7", seq)
-	}
-	var occCount int
-	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM occupancies WHERE property_id = ? AND source_type = 'booking_payout' AND status = 'active'`, pid).Scan(&occCount); err != nil {
-		t.Fatal(err)
-	}
-	if occCount != 1 {
-		t.Fatalf("synthetic occupancy count=%d want 1", occCount)
 	}
 	var reason string
 	if err := st.DB.QueryRowContext(ctx, `SELECT last_synced_reason FROM finance_month_states WHERE property_id = ? AND month = ?`, pid, month).Scan(&reason); err != nil {
@@ -558,12 +675,14 @@ func TestUpsertBookingFinanceTransaction_UsesCanonicalDirections(t *testing.T) {
 	pid := setupFinanceProperty(t, st)
 	catID := categoryIDByCode(t, st, pid, "booking_income")
 	payoutDate := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	stay := createFinanceNamedStay(t, st, pid, "REF-CANONICAL-DIR", "2026-04-05", "2026-04-07")
 
 	payout := &FinanceBookingPayout{
 		PropertyID:      pid,
 		ReferenceNumber: "REF-CANONICAL-DIR",
 		NetCents:        12345,
 		PayoutDate:      payoutDate,
+		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}
 	if err := st.CreateBookingPayout(ctx, payout); err != nil {
 		t.Fatal(err)
@@ -765,188 +884,5 @@ func TestOpenFinanceMonth_PositiveTimezoneKeepsTargetMonth_AfterPurge(t *testing
 	}
 	if _, err := st.OpenFinanceMonth(context.Background(), pid, month, nil, loc); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestLegacyFindOrCreateOccupancyForPayoutStayDates_CreatesHistoricalStay(t *testing.T) {
-	st := &Store{DB: testutil.OpenTestDB(t)}
-	pid := setupFinanceProperty(t, st)
-	loc := time.FixedZone("UTC+2", 2*60*60)
-
-	occ, err := st.legacyFindOrCreateOccupancyForPayoutStayDates(
-		context.Background(),
-		pid,
-		"BP-1001",
-		"2025-01-10",
-		"2025-01-12",
-		"Jane Guest",
-		loc,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if occ == nil {
-		t.Fatalf("expected occupancy to be created")
-	}
-	if occ.SourceType != "booking_payout" {
-		t.Fatalf("source_type=%q want booking_payout", occ.SourceType)
-	}
-	if occ.SourceEventUID != "booking_payout:BP-1001" {
-		t.Fatalf("source_event_uid=%q want booking_payout:BP-1001", occ.SourceEventUID)
-	}
-	if got := occ.StartAt.In(loc).Format("2006-01-02"); got != "2025-01-10" {
-		t.Fatalf("start date=%s want 2025-01-10", got)
-	}
-	if got := occ.EndAt.In(loc).Format("2006-01-02"); got != "2025-01-12" {
-		t.Fatalf("end date=%s want 2025-01-12", got)
-	}
-	if !occ.GuestDisplayName.Valid || occ.GuestDisplayName.String != "Jane Guest" {
-		t.Fatalf("guest_display_name=%v want Jane Guest", occ.GuestDisplayName)
-	}
-}
-
-func TestLegacyFindOrCreateOccupancyForPayoutStayDates_LegacyWriteDisabledDoesNotCreateSyntheticStay(t *testing.T) {
-	st := &Store{DB: testutil.OpenTestDB(t), OccupancyLegacyWriteDisabled: true}
-	pid := setupFinanceProperty(t, st)
-
-	occ, err := st.legacyFindOrCreateOccupancyForPayoutStayDates(
-		context.Background(),
-		pid,
-		"BP-1002",
-		"2025-01-13",
-		"2025-01-15",
-		"No Legacy Guest",
-		time.UTC,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if occ != nil {
-		t.Fatalf("expected no legacy occupancy, got %#v", occ)
-	}
-	var count int
-	if err := st.DB.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM occupancies WHERE property_id = ? AND source_type = 'booking_payout'`, pid).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("synthetic payout occupancies=%d want 0", count)
-	}
-}
-
-func TestLegacyFindOrCreateOccupancyForPayoutStayDates_ReusesExistingStay(t *testing.T) {
-	st := &Store{DB: testutil.OpenTestDB(t)}
-	pid := setupFinanceProperty(t, st)
-	loc := time.UTC
-	ctx := context.Background()
-
-	runID, err := st.StartOccupancySyncRun(ctx, pid, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	existing := &Occupancy{
-		PropertyID:     pid,
-		SourceType:     "booking_ics",
-		SourceEventUID: "ics-uid-1",
-		StartAt:        time.Date(2025, 2, 3, 0, 0, 0, 0, loc),
-		EndAt:          time.Date(2025, 2, 6, 0, 0, 0, 0, loc),
-		Status:         "active",
-		RawSummary:     sql.NullString{String: "ICS guest", Valid: true},
-		ContentHash:    "ics-hash-1",
-	}
-	if err := st.UpsertOccupancy(ctx, existing, runID); err != nil {
-		t.Fatal(err)
-	}
-	existingSaved, err := st.GetOccupancyBySourceEventUID(ctx, pid, "ics-uid-1")
-	if err != nil || existingSaved == nil {
-		t.Fatalf("expected existing occupancy err=%v", err)
-	}
-
-	occ, err := st.legacyFindOrCreateOccupancyForPayoutStayDates(
-		ctx,
-		pid,
-		"BP-2002",
-		"2025-02-03",
-		"2025-02-06",
-		"Guest Changed Name",
-		loc,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if occ == nil {
-		t.Fatalf("expected existing occupancy")
-	}
-	if occ.ID != existingSaved.ID {
-		t.Fatalf("occupancy id=%d want existing id=%d", occ.ID, existingSaved.ID)
-	}
-	payoutSynthetic, err := st.GetOccupancyBySourceEventUID(ctx, pid, "booking_payout:BP-2002")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if payoutSynthetic != nil {
-		t.Fatalf("did not expect synthetic payout occupancy when matching occupancy exists")
-	}
-}
-
-func TestLegacyFindOrCreateOccupancyForStatementStayDates_CreatesStatementStayAndSupersedesGenericICS(t *testing.T) {
-	st := &Store{DB: testutil.OpenTestDB(t)}
-	pid := setupFinanceProperty(t, st)
-	ctx := context.Background()
-	loc := time.UTC
-	runID, err := st.StartOccupancySyncRun(ctx, pid, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 7; i <= 9; i++ {
-		start := time.Date(2026, 8, i, 0, 0, 0, 0, time.UTC)
-		if err := st.UpsertOccupancy(ctx, &Occupancy{
-			PropertyID:     pid,
-			SourceType:     "booking_ics",
-			SourceEventUID: "ics-split-202608" + fmt.Sprintf("%02d", i),
-			StartAt:        start,
-			EndAt:          start.AddDate(0, 0, 1),
-			Status:         "active",
-			RawSummary:     sql.NullString{String: "CLOSED - Not available", Valid: true},
-			ContentHash:    fmt.Sprintf("h-%d", i),
-		}, runID); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	occ, err := st.legacyFindOrCreateOccupancyForStatementStayDates(ctx, pid, "ST-3003", "2026-08-07", "2026-08-10", "August Guest", loc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if occ == nil {
-		t.Fatal("expected statement occupancy")
-	}
-	if occ.SourceType != "booking_statement" {
-		t.Fatalf("source_type=%q want booking_statement", occ.SourceType)
-	}
-	if occ.SourceEventUID != "booking_statement:ST-3003" {
-		t.Fatalf("source uid=%q", occ.SourceEventUID)
-	}
-	if err := st.SupersedeGenericICSBlocksForFinanceStayDates(ctx, pid, "2026-08-07", "2026-08-10", loc, occ.ID); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := st.ListOccupancies(ctx, pid, "", loc, nil, 20, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	activeStatement := 0
-	deletedICS := 0
-	for _, row := range rows {
-		switch {
-		case row.ID == occ.ID && row.Status == "active":
-			activeStatement++
-		case row.SourceType == "booking_ics" && row.Status == "deleted_from_source":
-			deletedICS++
-		}
-	}
-	if activeStatement != 1 {
-		t.Fatalf("active statement rows=%d want 1", activeStatement)
-	}
-	if deletedICS != 3 {
-		t.Fatalf("deleted generic ics rows=%d want 3", deletedICS)
 	}
 }

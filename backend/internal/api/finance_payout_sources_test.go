@@ -33,13 +33,23 @@ func TestListBookingPayouts_ExposesSourceFlags(t *testing.T) {
 
 	mk := func(ref string, payoutDay int) {
 		t.Helper()
+		checkIn := time.Date(2026, 2, payoutDay, 0, 0, 0, 0, time.UTC)
+		checkOut := checkIn.AddDate(0, 0, 1)
+		stay, err := st.CreateNamedStayRecord(ctx, store.NamedStayCreateInput{
+			PropertyID: prop.ID, DisplayName: ref, StayType: store.StayTypeBookingCom,
+			CheckInDate: checkIn.Format("2006-01-02"), CheckOutDate: checkOut.Format("2006-01-02"), SourceReference: ref,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := st.CreateBookingPayout(ctx, &store.FinanceBookingPayout{
 			PropertyID:      prop.ID,
 			ReferenceNumber: ref,
 			NetCents:        1000,
 			PayoutDate:      time.Date(2026, 2, payoutDay, 10, 0, 0, 0, time.UTC),
-			CheckInDate:     sql.NullString{String: "2026-02-01", Valid: true},
-			CheckOutDate:    sql.NullString{String: "2026-02-02", Valid: true},
+			CheckInDate:     sql.NullString{String: checkIn.Format("2006-01-02"), Valid: true},
+			CheckOutDate:    sql.NullString{String: checkOut.Format("2006-01-02"), Valid: true},
+			NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 		}); err != nil {
 			t.Fatal(err)
 		}

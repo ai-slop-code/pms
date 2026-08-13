@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -154,7 +153,7 @@ func TestMessages_PatchRejectsInvalidPlaceholder(t *testing.T) {
 	}
 }
 
-func TestMessages_GenerateForOccupancy(t *testing.T) {
+func TestMessages_GenerateForStay(t *testing.T) {
 	st := testDB(t)
 	ctx := context.Background()
 	hash := testPasswordHash(t, "secret123")
@@ -170,30 +169,20 @@ func TestMessages_GenerateForOccupancy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runID, err := st.StartOccupancySyncRun(ctx, prop.ID, "test")
+	start := time.Now().UTC().Add(24 * time.Hour).Truncate(24 * time.Hour)
+	end := start.Add(3 * 24 * time.Hour)
+	stay, err := st.CreateNamedStayRecord(ctx, store.NamedStayCreateInput{
+		PropertyID:      prop.ID,
+		DisplayName:     "Test Guest",
+		StayType:        store.StayTypeBookingCom,
+		CheckInDate:     start.Format("2006-01-02"),
+		CheckOutDate:    end.Format("2006-01-02"),
+		SourceChannel:   "booking_ics",
+		SourceReference: "msg-test-uid-1",
+		CreatedByUserID: owner.ID,
+	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	start := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
-	end := start.Add(3 * 24 * time.Hour)
-	if err := st.UpsertOccupancy(ctx, &store.Occupancy{
-		PropertyID:     prop.ID,
-		SourceType:     "manual",
-		SourceEventUID: "msg-test-uid-1",
-		StartAt:        start,
-		EndAt:          end,
-		Status:         "active",
-		RawSummary:     sql.NullString{String: "Test Guest", Valid: true},
-		ContentHash:    "hash1",
-	}, runID); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.FinishOccupancySyncRun(ctx, runID, "success", nil, nil, 1, 1); err != nil {
-		t.Fatal(err)
-	}
-	occ, err := st.GetOccupancyBySourceEventUID(ctx, prop.ID, "msg-test-uid-1")
-	if err != nil || occ == nil {
-		t.Fatal("occupancy not found")
 	}
 
 	srv := &Server{Store: st, SessionTTL: time.Hour}
@@ -204,7 +193,8 @@ func TestMessages_GenerateForOccupancy(t *testing.T) {
 	client := &http.Client{}
 
 	var genRes struct {
-		OccupancyID int64 `json:"occupancy_id"`
+		StayID      int64           `json:"stay_id"`
+		OccupancyID json.RawMessage `json:"occupancy_id"`
 		Messages    []struct {
 			LanguageCode  string `json:"language_code"`
 			Title         string `json:"title"`
@@ -214,11 +204,17 @@ func TestMessages_GenerateForOccupancy(t *testing.T) {
 		NukiAvailable bool `json:"nuki_available"`
 	}
 	status := doAuthedJSONRequest(t, client, http.MethodGet,
-		ts.URL+"/api/properties/"+strconv.FormatInt(prop.ID, 10)+"/messages/generate?occupancy_id="+strconv.FormatInt(occ.ID, 10),
+		ts.URL+"/api/properties/"+strconv.FormatInt(prop.ID, 10)+"/messages/generate?stay_id="+strconv.FormatInt(stay.ID, 10),
 		cookies, nil, &genRes)
 
 	if status != http.StatusOK {
 		t.Fatalf("status=%d want 200", status)
+	}
+	if genRes.StayID != stay.ID {
+		t.Fatalf("stay_id=%d want %d", genRes.StayID, stay.ID)
+	}
+	if genRes.OccupancyID != nil {
+		t.Fatalf("unexpected occupancy_id in response: %s", genRes.OccupancyID)
 	}
 	if len(genRes.Messages) < 5 {
 		t.Fatalf("expected at least 5 messages, got %d", len(genRes.Messages))
@@ -250,6 +246,13 @@ func TestMessages_GenerateForOccupancy(t *testing.T) {
 	}
 	if !enFound {
 		t.Error("expected EN message in output")
+	}
+
+	status = doAuthedJSONRequest(t, client, http.MethodGet,
+		ts.URL+"/api/properties/"+strconv.FormatInt(prop.ID, 10)+"/messages/generate?occupancy_id=123",
+		cookies, nil, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("occupancy_id alias status=%d want 400", status)
 	}
 }
 

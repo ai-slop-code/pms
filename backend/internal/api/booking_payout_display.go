@@ -190,8 +190,8 @@ func parseCSVAmountToCents(v string) (int, error) {
 }
 
 // financeBookingPayoutSummary is a single line for invoice/finance pickers: listing/host from CSV
-// snapshot, else guest name, else mapped occupancy summary, else property display name.
-func financeBookingPayoutSummary(raw, guest, occSummary sql.NullString, propertyName string) *string {
+// snapshot, else guest name, else mapped named-stay display name, else property display name.
+func financeBookingPayoutSummary(raw, guest, namedStayDisplayName sql.NullString, propertyName string) *string {
 	if h := bookingPayoutHostName(raw); h != nil {
 		return h
 	}
@@ -201,8 +201,8 @@ func financeBookingPayoutSummary(raw, guest, occSummary sql.NullString, property
 			return &s
 		}
 	}
-	if occSummary.Valid {
-		if s := strings.TrimSpace(occSummary.String); s != "" {
+	if namedStayDisplayName.Valid {
+		if s := strings.TrimSpace(namedStayDisplayName.String); s != "" {
 			s = fixCSVMojibake(s)
 			return &s
 		}

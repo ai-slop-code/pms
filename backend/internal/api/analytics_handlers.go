@@ -373,12 +373,12 @@ func (s *Server) getAnalyticsOutlook(w http.ResponseWriter, r *http.Request) {
 
 	// Preload active stays covering up to 90 days out for reuse.
 	end90 := todayMidnight.AddDate(0, 0, 90)
-	stays, err := s.Store.ListActiveOccupanciesInDateRange(r.Context(), pid, todayMidnight, end90)
+	stays, err := s.Store.ListActiveStaysInDateRange(r.Context(), pid, todayMidnight, end90)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	closedStays, err := s.Store.ListClosedOccupanciesInDateRange(r.Context(), pid, todayMidnight, end90)
+	availabilityBlockers, err := s.Store.ListAvailabilityBlockersInDateRange(r.Context(), pid, todayMidnight, end90)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
@@ -388,7 +388,7 @@ func (s *Server) getAnalyticsOutlook(w http.ResponseWriter, r *http.Request) {
 	for _, days := range []int{30, 60, 90} {
 		winEnd := todayMidnight.AddDate(0, 0, days)
 		nights := store.NightsSoldInRange(stays, todayMidnight, winEnd)
-		avail := store.BookableNightsInRange(closedStays, todayMidnight, winEnd)
+		avail := store.BookableNightsInRange(availabilityBlockers, todayMidnight, winEnd)
 		gross, _, _, _, matchedIDs, err := s.Store.SumPayoutGrossNetForStays(r.Context(), pid, todayMidnight, winEnd)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "database error")
@@ -403,7 +403,7 @@ func (s *Server) getAnalyticsOutlook(w http.ResponseWriter, r *http.Request) {
 			if !matched[st.ID] {
 				continue
 			}
-			matchedNights += store.NightsSoldInRange([]store.OccupancyLite{st}, todayMidnight, winEnd)
+			matchedNights += store.NightsSoldInRange([]store.StayLite{st}, todayMidnight, winEnd)
 		}
 		unmatchedNights := nights - matchedNights
 		if unmatchedNights < 0 {
@@ -666,13 +666,13 @@ func (s *Server) getAnalyticsPerformance(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) computePerformanceKPIs(r *http.Request, pid int64, from, to time.Time, loc *time.Location) (*analyticsPerformanceKPIs, error) {
-	stays, err := s.Store.ListActiveOccupanciesInDateRange(r.Context(), pid, from, to)
+	stays, err := s.Store.ListActiveStaysInDateRange(r.Context(), pid, from, to)
 	if err != nil {
 		return nil, err
 	}
 	nights := store.NightsSoldInRange(stays, from, to)
-	closedStays, _ := s.Store.ListClosedOccupanciesInDateRange(r.Context(), pid, from, to)
-	avail := store.BookableNightsInRange(closedStays, from, to)
+	availabilityBlockers, _ := s.Store.ListAvailabilityBlockersInDateRange(r.Context(), pid, from, to)
+	avail := store.BookableNightsInRange(availabilityBlockers, from, to)
 	gross, net, commission, fees, matchedIDs, err := s.Store.SumPayoutGrossNetForStays(r.Context(), pid, from, to)
 	if err != nil {
 		return nil, err
@@ -686,7 +686,7 @@ func (s *Server) computePerformanceKPIs(r *http.Request, pid int64, from, to tim
 		if !matched[st.ID] {
 			continue
 		}
-		matchedNights += store.NightsSoldInRange([]store.OccupancyLite{st}, from, to)
+		matchedNights += store.NightsSoldInRange([]store.StayLite{st}, from, to)
 	}
 	var adr int64
 	if matchedNights > 0 {
@@ -700,12 +700,15 @@ func (s *Server) computePerformanceKPIs(r *http.Request, pid int64, from, to tim
 	if gross > 0 {
 		takeRate = float64(commission+fees) / float64(gross)
 	}
-	// PMS_19 §10.3.1: availability vs guest occupancy over the bookable-nights
-	// denominator. Both read night-level truth from occupancy_nights.
+	// Availability and guest occupancy both read canonical named-stay nights and
+	// property availability blocks.
 	fromDate := from.In(loc).Format("2006-01-02")
 	toDate := to.In(loc).Format("2006-01-02")
-	availabilityNights, guestNights, _ := s.Store.OccupancyMetricNights(r.Context(), pid, fromDate, toDate)
-	bookable := store.BookableNightsInRange(closedStays, from, to)
+	availabilityNights, guestNights, err := s.Store.OccupancyMetricNights(r.Context(), pid, fromDate, toDate)
+	if err != nil {
+		return nil, err
+	}
+	bookable := store.BookableNightsInRange(availabilityBlockers, from, to)
 	return &analyticsPerformanceKPIs{
 		NightsSold: nights, AvailableNights: avail,
 		OccupancyRate: safeDiv(float64(nights), float64(avail)),
@@ -845,21 +848,12 @@ func (s *Server) getAnalyticsPace(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	// Require >=13 months of history for LY overlay.
-	oldest := time.Time{}
-	_ = s.Store.DB.QueryRowContext(r.Context(), `SELECT MIN(imported_at) FROM occupancies WHERE property_id = ?`, pid).Scan(new(string))
-	lyAvailable := true
-	// If window minus 1 year is before earliest data we don't have LY.
-	var oldestStr string
-	_ = s.Store.DB.QueryRowContext(r.Context(), `SELECT COALESCE(MIN(imported_at), '') FROM occupancies WHERE property_id = ?`, pid).Scan(&oldestStr)
-	if oldestStr != "" {
-		if ot, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-			oldest = ot
-			if winStart.AddDate(-1, 0, 0).Before(oldest.AddDate(0, 0, -1)) {
-				lyAvailable = false
-			}
-		}
+	oldest, err := s.Store.OldestNamedStayFirstKnownAt(r.Context(), pid)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
 	}
+	lyAvailable := oldest != nil && !winStart.AddDate(-1, 0, 0).Before(oldest.AddDate(0, 0, -1))
 	mapTo := func(series []store.PaceCurveRow) []analyticsPacePoint {
 		out := make([]analyticsPacePoint, 0, len(series))
 		for _, p := range series {
@@ -991,7 +985,7 @@ type guestReconcileStatsResponse struct {
 	EntryLikeEvents   int    `json:"entry_like_events"`
 	UpsertedDays      int    `json:"upserted_days"`
 	FallbackAnyEvent  bool   `json:"fallback_any_event"`
-	OccupancyKeyCount int    `json:"occupancy_key_count"`
+	NamedStayKeyCount int    `json:"named_stay_key_count"`
 	CleanerAliasCount int    `json:"cleaner_alias_count"`
 	RequestedSinceUTC string `json:"requested_since_utc"`
 }
@@ -1054,7 +1048,7 @@ func (s *Server) runGuestCheckinReconcile(w http.ResponseWriter, r *http.Request
 			EntryLikeEvents:   stats.EntryLikeEvents,
 			UpsertedDays:      stats.UpsertedDays,
 			FallbackAnyEvent:  stats.FallbackAnyEvent,
-			OccupancyKeyCount: stats.OccupancyKeyCount,
+			NamedStayKeyCount: stats.NamedStayKeyCount,
 			CleanerAliasCount: stats.CleanerAliasCount,
 			RequestedSinceUTC: stats.RequestedSinceUTC,
 		}

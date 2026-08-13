@@ -29,26 +29,6 @@ func seedGuestHeatmapFixtures(t *testing.T) (string, []*http.Cookie, int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID, err := st.StartOccupancySyncRun(ctx, prop.ID, "manual")
-	if err != nil {
-		t.Fatal(err)
-	}
-	occ := &store.Occupancy{
-		PropertyID:     prop.ID,
-		SourceType:     "booking_ics",
-		SourceEventUID: "uid-h",
-		StartAt:        time.Date(2026, 4, 9, 0, 0, 0, 0, time.UTC),
-		EndAt:          time.Date(2026, 4, 12, 0, 0, 0, 0, time.UTC),
-		Status:         "active",
-		ContentHash:    "h",
-	}
-	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
-		t.Fatal(err)
-	}
-	row, err := st.GetOccupancyBySourceEventUID(ctx, prop.ID, "uid-h")
-	if err != nil {
-		t.Fatal(err)
-	}
 	nowText := time.Now().UTC().Format(time.RFC3339)
 	res, err := st.DB.ExecContext(ctx, `
 		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
@@ -60,19 +40,13 @@ func seedGuestHeatmapFixtures(t *testing.T) (string, []*http.Cookie, int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DB.ExecContext(ctx, `
-		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
-		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, row.ID, prop.ID, stayID, nowText); err != nil {
-		t.Fatal(err)
-	}
-
 	// Two unlock rows in range (different days so each gets a row), plus
 	// one outside the range that must be excluded.
 	insert := func(day string, ts time.Time) {
 		t.Helper()
 		if err := st.UpsertNukiGuestDailyEntry(ctx, &store.NukiGuestDailyEntry{
 			PropertyID:         prop.ID,
-			OccupancyID:        sql.NullInt64{Int64: row.ID, Valid: true},
+			NamedStayID:        sql.NullInt64{Int64: stayID, Valid: true},
 			DayDate:            day,
 			FirstEntryAt:       ts,
 			NukiEventReference: sql.NullString{String: "evt-" + day, Valid: true},

@@ -5,10 +5,11 @@ properties. It consolidates the day-to-day operations that an owner or
 co-host otherwise spreads across spreadsheets, calendars, locker apps and
 ad-hoc notes:
 
-- **Occupancy** — pulls iCal feeds from Booking.com / Airbnb / direct
-  channels and reconciles them into a single timeline per property.
-- **Access management** — issues, rotates and revokes Nuki keypad codes
-  per stay, with automatic expiry windows.
+- **Availability and stays** — records Booking.com iCal blocks as source
+  evidence, keeps operator-owned named stays as business truth, and renders
+  both on one property timeline.
+- **Access management** — issues, rotates and revokes Nuki keypad codes for
+  named stays, with automatic expiry windows.
 - **Cleaning** — schedules, logs and analyses cleaner activity, plus
   per-property fees, adjustments, payouts and optional Google Calendar
   cleaning events.
@@ -16,7 +17,7 @@ ad-hoc notes:
   reconciles imported booking-payout reports against actual stays.
 - **Invoicing** — generates compliant PDF invoices with sequential numbers,
   configurable templates and per-property branding.
-- **Messaging** — produces guest-ready message templates from stay data
+- **Messaging** — produces guest-ready message templates from named-stay data
   (check-in, parking, Wi-Fi, cleaning fees, etc.).
 - **Analytics** — occupancy %, ADR, RevPAR, cleaning load and revenue
   breakdowns by property / month / channel.
@@ -24,6 +25,16 @@ ad-hoc notes:
 The reference deployment runs as three small containers (Caddy → nginx →
 Go API) on a single VPS. SQLite is the default datastore; the schema and
 queries are written so a future migration to PostgreSQL is mechanical.
+
+The final PMS 21 domain model separates raw Booking.com blocks
+(`raw_booking_blocks` + nights), operator-owned stays (`named_stays` +
+nights), source provenance (`stay_source_links`), and non-stay closures
+(`property_availability_blocks`). Legacy occupancy-as-stay identities and the
+public occupancy export are compatibility history, not the target
+architecture. Final cleanup is governed by
+[PMS 21 Legacy Occupancy Removal](spec/PMS_21_Legacy_Occupancy_Removal_Spec.md);
+its production release windows and destructive migration require separate
+operator evidence and approval.
 
 **Highlights**
 
@@ -102,6 +113,11 @@ To consume the published images instead of building locally, replace the
 `build:` blocks in [`deploy/docker-compose.yml`](deploy/docker-compose.yml)
 with `image: ghcr.io/<owner>/<repo>-backend:latest` (and the same for
 the frontend), then `docker compose pull && docker compose up -d`.
+
+Mutable tags are acceptable for local evaluation. PMS 21 production cleanup
+must resolve the approved backend image to an immutable digest and use that
+same digest for readiness, migration, verification, and recreation; see the
+[PMS 21 operations runbook](docs/pms-21-operations-cutover-runbook.md).
 
 ### Pointing the SPA at a custom backend
 

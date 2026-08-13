@@ -520,85 +520,10 @@ func (s *Store) BuildPlaceholderValuesForNamedStay(ctx context.Context, property
 	}, nil
 }
 
-func (s *Store) BuildPlaceholderValues(ctx context.Context, propertyID, occupancyID int64) (*MessagePlaceholderValues, error) {
-	stayID, err := s.ResolveNamedStayIDForOccupancy(ctx, propertyID, occupancyID)
-	if err == nil && stayID > 0 {
-		return s.BuildPlaceholderValuesForNamedStay(ctx, propertyID, stayID)
-	}
-	if !s.propertyHasNamedStays(ctx, propertyID) {
-		return s.legacyBuildPlaceholderValues(ctx, propertyID, occupancyID)
-	}
-	return nil, fmt.Errorf("named stay mapping: %w", err)
-}
-
-func (s *Store) legacyBuildPlaceholderValues(ctx context.Context, propertyID, occupancyID int64) (*MessagePlaceholderValues, error) {
-	prop, err := s.GetProperty(ctx, propertyID)
-	if err != nil {
-		return nil, fmt.Errorf("property: %w", err)
-	}
-	profile, err := s.GetPropertyProfile(ctx, propertyID)
-	if err != nil {
-		return nil, fmt.Errorf("profile: %w", err)
-	}
-	occ, err := s.GetOccupancyByID(ctx, propertyID, occupancyID)
-	if err != nil {
-		return nil, fmt.Errorf("occupancy: %w", err)
-	}
-	loc, err := time.LoadLocation(prop.Timezone)
-	if err != nil {
-		loc = time.UTC
-	}
-	var address string
-	if prop.AddressLine1.Valid {
-		parts := []string{prop.AddressLine1.String}
-		if prop.City.Valid {
-			parts = append(parts, prop.City.String)
-		}
-		if prop.PostalCode.Valid {
-			parts = append(parts, prop.PostalCode.String)
-		}
-		address = strings.Join(parts, ", ")
-	}
-	nukiCode := "—"
-	code, err := s.GetNukiCodeByOccupancyID(ctx, propertyID, occupancyID)
-	if err == nil && code != nil && code.Status == "generated" && code.GeneratedPINPlain.Valid && code.GeneratedPINPlain.String != "" {
-		nukiCode = code.GeneratedPINPlain.String
-	}
-	wifiName := ""
-	if profile.WifiSSID.Valid {
-		wifiName = profile.WifiSSID.String
-	}
-	wifiPass := ""
-	if profile.WifiPassword.Valid {
-		wifiPass = profile.WifiPassword.String
-	}
-	parking := ""
-	if profile.ParkingInstructions.Valid {
-		parking = profile.ParkingInstructions.String
-	}
-	phone := ""
-	if profile.ContactPhone.Valid {
-		phone = profile.ContactPhone.String
-	}
-	return &MessagePlaceholderValues{
-		PropertyName:    prop.Name,
-		PropertyAddress: address,
-		StayStart:       occ.StartAt.In(loc).Format("02/01/2006"),
-		StayEnd:         occ.EndAt.In(loc).Format("02/01/2006"),
-		CheckInTime:     profile.DefaultCheckInTime,
-		CheckOutTime:    profile.DefaultCheckOutTime,
-		NukiCode:        nukiCode,
-		WifiName:        wifiName,
-		WifiPassword:    wifiPass,
-		ParkingInfo:     parking,
-		ContactPhone:    phone,
-	}, nil
-}
-
 // BuildCleaningPlaceholderValues constructs placeholder values for the cleaning-staff
 // template: a list of upcoming stays formatted as bullet points with the cleaning
 // window (check-out → check-in, from property profile config) and a fixed "2x hostia"
-// label for the guest count. Occupancies with end_at before `now` are excluded.
+// label for the guest count. Stays with check_out_date before `now` are excluded.
 func (s *Store) BuildCleaningPlaceholderValues(ctx context.Context, propertyID int64, now time.Time) (*MessagePlaceholderValues, int, error) {
 	prop, err := s.GetProperty(ctx, propertyID)
 	if err != nil {
@@ -640,7 +565,7 @@ func (s *Store) BuildCleaningPlaceholderValues(ctx context.Context, propertyID i
 	for _, stay := range stays {
 		endLocal := parsePropertyDate(stay.CheckOutDate, loc)
 		// Compare on the local calendar date so stays that check out today are
-		// included even if end_at is stored at UTC midnight.
+		// included regardless of the current local time.
 		endDay := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day(), 0, 0, 0, 0, loc)
 		if endDay.Before(today) {
 			continue

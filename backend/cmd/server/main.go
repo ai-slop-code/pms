@@ -68,16 +68,13 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	if err := mig.Up(db); err != nil {
+	if err := mig.UpStartup(db); err != nil {
 		log.Fatal("migrate: ", err)
 	}
 	if err := relocateLegacyFinanceAttachments(db, cfg.DataDir); err != nil {
 		log.Printf("attachment migration: %v", err)
 	}
-	st := &store.Store{DB: db, OccupancyLegacyWriteDisabled: cfg.OccupancyLegacyWriteDisabled}
-	if err := st.BackfillUpstreamOwnership(context.Background()); err != nil {
-		log.Printf("occupancy upstream-ownership backfill: %v", err)
-	}
+	st := &store.Store{DB: db}
 	if cfg.MasterKey != "" {
 		box, err := secretbox.New(cfg.MasterKey)
 		if err != nil {
@@ -103,7 +100,7 @@ func main() {
 		}
 		log.Printf("created first super_admin user %s (must change password on first login)", cfg.FirstSuperadmin.Email)
 	}
-	occSvc := &occupancy.Service{Store: st, RawBlocksDualWrite: cfg.RawBlocksDualWrite}
+	occSvc := &occupancy.Service{Store: st}
 	var googleCalendarClient cleaningcalendar.CalendarClient
 	if raw := os.Getenv("PMS_GOOGLE_SERVICE_ACCOUNT_JSON"); raw != "" {
 		client, err := cleaningcalendar.NewServiceAccountClient([]byte(raw), nil)
@@ -159,7 +156,6 @@ func main() {
 		TOTPDevBypass:           cfg.TOTPDevBypass,
 		AllowedOrigins:          cfg.CORSOrigins,
 		TrustedProxy:            cfg.TrustedProxy,
-		OccupancyExportDisabled: cfg.OccupancyExportDisabled,
 	}
 	instanceID := generateInstanceID()
 	log.Printf("scheduler instance id: %s", instanceID)
@@ -272,34 +268,6 @@ func main() {
 			}
 		}
 		metrics.RecordSchedulerRun("cleaning_reconcile", "ran")
-	})
-
-	go runScheduler(rootCtx, "guest_reconcile", cfg.CleaningReconcileInterval, func(bg context.Context) {
-		ok, err := st.TryAcquireJobLease(bg, "guest_reconcile", instanceID, leaseTTL(cfg.CleaningReconcileInterval))
-		if err != nil {
-			metrics.RecordSchedulerRun("guest_reconcile", "error")
-			log.Printf("guest reconcile scheduler: lease error: %v", err)
-			return
-		}
-		if !ok {
-			metrics.RecordSchedulerRun("guest_reconcile", "skipped")
-			return
-		}
-		// Reuse the Nuki-configured property list — guest reconcile only
-		// makes sense where the Smartlock log can be fetched. The
-		// reconciler internally no-ops when no occupancy↔code map exists.
-		ids, err := st.ListPropertyIDsWithNukiConfig(bg)
-		if err != nil {
-			metrics.RecordSchedulerRun("guest_reconcile", "error")
-			log.Printf("guest reconcile scheduler: list properties: %v", err)
-			return
-		}
-		for _, id := range ids {
-			if _, err := nukiSvc.ReconcileGuestDailyEntries(bg, id); err != nil {
-				log.Printf("guest reconcile property %d: %v", id, err)
-			}
-		}
-		metrics.RecordSchedulerRun("guest_reconcile", "ran")
 	})
 
 	go runScheduler(rootCtx, "guest_entries_reconcile", cfg.CleaningReconcileInterval, func(bg context.Context) {

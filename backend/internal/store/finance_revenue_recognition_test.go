@@ -11,6 +11,15 @@ import (
 
 func insertRevenueRecognitionBooking(t *testing.T, st *Store, propertyID int64, reference, checkIn, checkOut string, grossCents int, hasPayout bool, status string) {
 	t.Helper()
+	stayCheckOut := checkOut
+	if stayCheckOut == "" || stayCheckOut <= checkIn {
+		start, err := time.Parse("2006-01-02", checkIn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stayCheckOut = start.AddDate(0, 0, 1).Format("2006-01-02")
+	}
+	stay := createFinanceNamedStay(t, st, propertyID, reference, checkIn, stayCheckOut)
 	row := &FinanceBookingPayout{
 		PropertyID:      propertyID,
 		ReferenceNumber: reference,
@@ -18,6 +27,7 @@ func insertRevenueRecognitionBooking(t *testing.T, st *Store, propertyID int64, 
 		PayoutDate:      time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
 		AmountCents:     sql.NullInt64{Int64: int64(grossCents), Valid: true},
 		GuestName:       sql.NullString{String: reference + " Guest", Valid: true},
+		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}
 	if checkIn != "" {
 		row.CheckInDate = sql.NullString{String: checkIn, Valid: true}
@@ -64,7 +74,7 @@ func TestComputeFinanceRevenueRecognition_ProrationConservesGross(t *testing.T) 
 	if jan.GrossRevenueCents+feb.GrossRevenueCents != 10000 {
 		t.Fatalf("allocated total=%d want 10000", jan.GrossRevenueCents+feb.GrossRevenueCents)
 	}
-	if len(feb.Bookings) != 1 || feb.Bookings[0].RecognizedNights != 2 || !feb.Bookings[0].Unmatched {
+	if len(feb.Bookings) != 1 || feb.Bookings[0].RecognizedNights != 2 || feb.Bookings[0].Unmatched {
 		t.Fatalf("unexpected February rows: %+v", feb.Bookings)
 	}
 }

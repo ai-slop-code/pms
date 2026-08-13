@@ -42,7 +42,6 @@ type invoiceFileRow struct {
 
 type invoiceRow struct {
 	ID                  int64                `json:"id"`
-	OccupancyID         *int64               `json:"occupancy_id"`
 	NamedStayID         *int64               `json:"named_stay_id"`
 	BookingPayoutID     *int64               `json:"booking_payout_id"`
 	InvoiceNumber       string               `json:"invoice_number"`
@@ -85,7 +84,6 @@ type invoiceSequencePreviewResponse struct {
 }
 
 type invoiceRequestBody struct {
-	OccupancyID            *int64                `json:"occupancy_id"`
 	NamedStayID            *int64                `json:"named_stay_id"`
 	BookingPayoutID        *int64                `json:"booking_payout_id"`
 	BookingPayoutReference *string               `json:"booking_payout_reference"`
@@ -100,16 +98,6 @@ type invoiceRequestBody struct {
 	Customer               *invoicePartySnapshot `json:"customer"`
 }
 
-type invoiceOccupancyCandidate struct {
-	ID               int64   `json:"id"`
-	StartAt          string  `json:"start_at"`
-	EndAt            string  `json:"end_at"`
-	Status           string  `json:"status"`
-	Summary          string  `json:"summary"`
-	GuestDisplayName *string `json:"guest_display_name,omitempty"`
-	HasPayoutData    bool    `json:"has_payout_data"`
-}
-
 type invoiceNamedStayCandidate struct {
 	ID                 int64   `json:"id"`
 	DisplayName        string  `json:"display_name"`
@@ -122,12 +110,11 @@ type invoiceNamedStayCandidate struct {
 	HasFinanceData     bool    `json:"has_finance_data"`
 }
 
-type invoiceOccupancyCandidatesResponse struct {
-	Occupancies []invoiceOccupancyCandidate `json:"occupancies"`
-	Stays       []invoiceNamedStayCandidate `json:"stays"`
+type invoiceStayCandidatesResponse struct {
+	Stays []invoiceNamedStayCandidate `json:"stays"`
 }
 
-func (s *Server) listInvoiceOccupancyCandidates(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listInvoiceStayCandidates(w http.ResponseWriter, r *http.Request) {
 	_, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.Invoices, permissions.LevelRead)
 	if !ok {
 		return
@@ -154,7 +141,7 @@ func (s *Server) listInvoiceOccupancyCandidates(w http.ResponseWriter, r *http.R
 			HasFinanceData:     st.HasFinanceData,
 		})
 	}
-	WriteJSON(w, http.StatusOK, invoiceOccupancyCandidatesResponse{Occupancies: []invoiceOccupancyCandidate{}, Stays: out})
+	WriteJSON(w, http.StatusOK, invoiceStayCandidatesResponse{Stays: out})
 }
 
 func (s *Server) listInvoicePayoutLinkCandidates(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +183,7 @@ func (s *Server) listInvoicePayoutLinkCandidates(w http.ResponseWriter, r *http.
 			CheckOutDate:           nullStringPtr(rr.CheckOutDate),
 			GuestName:              fixCSVMojibakePtr(nullStringPtr(rr.GuestName)),
 			HostName:               bookingPayoutHostName(rr.RawRowJSON),
-			PayoutSummary:          financeBookingPayoutSummary(rr.RawRowJSON, rr.GuestName, rr.OccupancySummary, propName),
+			PayoutSummary:          financeBookingPayoutSummary(rr.RawRowJSON, rr.GuestName, rr.NamedStayDisplayName, propName),
 			ReservationStatus:      nullStringPtr(rr.ReservationStatus),
 			Currency:               nullStringPtr(rr.Currency),
 			PaymentStatus:          nullStringPtr(rr.PaymentStatus),
@@ -206,11 +193,7 @@ func (s *Server) listInvoicePayoutLinkCandidates(w http.ResponseWriter, r *http.
 			NetCents:               rr.NetCents,
 			PayoutDate:             rr.PayoutDate.UTC().Format(time.RFC3339),
 			TransactionID:          nullInt64Ptr(rr.TransactionID),
-			OccupancyID:            nullInt64Ptr(rr.OccupancyID),
-			NamedStayID:            nullInt64Ptr(rr.NamedStayID),
-			OccupancyStartAt:       nullTimePtr(rr.OccupancyStartAt),
-			OccupancyEndAt:         nullTimePtr(rr.OccupancyEndAt),
-			OccupancySummary:       fixCSVMojibakePtr(nullStringPtr(rr.OccupancySummary)),
+			NamedStayID:            rr.NamedStayID.Int64,
 			LinkedInvoiceID:        nullInt64Ptr(rr.LinkedInvoiceID),
 			HasPayoutData:          rr.HasPayoutData,
 			HasStatementData:       rr.HasStatementData,
@@ -541,33 +524,15 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 			row.CreatedBy = sql.NullInt64{Int64: actor.ID, Valid: true}
 		}
 	}
-	if body.OccupancyID != nil {
-		if *body.OccupancyID <= 0 {
-			row.OccupancyID = sql.NullInt64{}
-			row.NamedStayID = sql.NullInt64{}
-		} else {
-			stayID, err := s.Store.ResolveNamedStayIDForOccupancy(r.Context(), propertyID, *body.OccupancyID)
-			if err == nil && stayID > 0 {
-				row.NamedStayID = sql.NullInt64{Int64: stayID, Valid: true}
-			} else if _, err := s.Store.GetOccupancyByID(r.Context(), propertyID, *body.OccupancyID); err != nil {
-				return nil, fmt.Errorf("invalid occupancy_id")
-			}
-			row.OccupancyID = sql.NullInt64{Int64: *body.OccupancyID, Valid: true}
-		}
-	}
 	if body.NamedStayID != nil {
 		if *body.NamedStayID <= 0 {
 			row.NamedStayID = sql.NullInt64{}
-			row.OccupancyID = sql.NullInt64{}
 		} else {
 			stay, err := s.Store.GetNamedStay(r.Context(), propertyID, *body.NamedStayID)
 			if err != nil {
 				return nil, fmt.Errorf("invalid named_stay_id")
 			}
 			row.NamedStayID = sql.NullInt64{Int64: stay.ID, Valid: true}
-			if stay.LegacyOccupancyID.Valid {
-				row.OccupancyID = stay.LegacyOccupancyID
-			}
 		}
 	}
 	if current != nil && body.BookingPayoutID != nil && *body.BookingPayoutID == 0 {
@@ -582,14 +547,12 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 				row.NamedStayID = linkedPayout.NamedStayID
 			}
 		}
-		if linkedPayout.OccupancyID.Valid {
-			if row.OccupancyID.Valid && row.OccupancyID.Int64 != linkedPayout.OccupancyID.Int64 {
-				return nil, fmt.Errorf("occupancy_id does not match booking payout stay")
-			}
-			if !row.OccupancyID.Valid {
-				row.OccupancyID = linkedPayout.OccupancyID
-			}
-		}
+	}
+	if !row.NamedStayID.Valid || row.NamedStayID.Int64 <= 0 {
+		return nil, fmt.Errorf("named_stay_id is required")
+	}
+	if linkedPayout != nil && (!linkedPayout.NamedStayID.Valid || linkedPayout.NamedStayID.Int64 != row.NamedStayID.Int64) {
+		return nil, fmt.Errorf("booking payout does not match named_stay_id")
 	}
 	if raw := strings.TrimSpace(body.Language); raw != "" {
 		row.Language = strings.ToLower(raw)
@@ -769,7 +732,6 @@ func invoiceToRow(propertyID int64, row store.Invoice, files []store.InvoiceFile
 	}
 	out := invoiceRow{
 		ID:                row.ID,
-		OccupancyID:       nullInt64Ptr(row.OccupancyID),
 		NamedStayID:       nullInt64Ptr(row.NamedStayID),
 		BookingPayoutID:   nullInt64Ptr(row.FinanceBookingPayoutID),
 		InvoiceNumber:     row.InvoiceNumber,

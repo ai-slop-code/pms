@@ -111,18 +111,16 @@ type syncStatusWidget struct {
 }
 
 type dashboardUpcomingStayRow struct {
-	StayID      int64   `json:"stay_id"`
-	OccupancyID int64   `json:"occupancy_id,omitempty"`
-	Summary     *string `json:"summary"`
-	StartAt     string  `json:"start_at"`
-	EndAt       string  `json:"end_at"`
-	Status      string  `json:"status"`
+	StayID  int64   `json:"stay_id"`
+	Summary *string `json:"summary"`
+	StartAt string  `json:"start_at"`
+	EndAt   string  `json:"end_at"`
+	Status  string  `json:"status"`
 }
 
 type dashboardActiveNukiCodeRow struct {
 	NukiCodeID    int64   `json:"nuki_code_id"`
 	StayID        int64   `json:"stay_id"`
-	OccupancyID   *int64  `json:"occupancy_id,omitempty"`
 	Summary       *string `json:"summary"`
 	CodeLabel     *string `json:"code_label"`
 	CodeMasked    *string `json:"code_masked"`

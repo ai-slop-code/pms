@@ -37,6 +37,13 @@ func TestRegenerateInvoice_RefreshesAmountFromLinkedPayout(t *testing.T) {
 	}
 
 	payoutDate := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	stay, err := st.CreateNamedStayRecord(ctx, store.NamedStayCreateInput{
+		PropertyID: prop.ID, DisplayName: "Test Guest", StayType: store.StayTypeBookingCom,
+		CheckInDate: "2026-05-04", CheckOutDate: "2026-05-05", SourceReference: "INV-REGEN-REF",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := st.CreateBookingPayout(ctx, &store.FinanceBookingPayout{
 		PropertyID:      prop.ID,
 		ReferenceNumber: "INV-REGEN-REF",
@@ -47,6 +54,7 @@ func TestRegenerateInvoice_RefreshesAmountFromLinkedPayout(t *testing.T) {
 		CheckOutDate:    sql.NullString{String: "2026-05-05", Valid: true},
 		GuestName:       sql.NullString{String: "Test Guest", Valid: true},
 		RawRowJSON:      sql.NullString{String: `{"amount":"56.89","booking number":"INV-REGEN-REF"}`, Valid: true},
+		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -6,12 +6,17 @@ It is written for a normal operator, not a developer.
 
 ## What This Feature Does
 
-PMS watches reservations imported from your occupancy/iCal sync. For every eligible guest checkout, PMS creates one cleaning event in the Google Calendar you choose.
+PMS imports Booking.com ICS entries as raw unavailable blocks first; an ICS
+block is not assumed to be a guest reservation. For raw block nights that are
+not covered by a named stay, PMS creates provisional cleaning placeholders.
+After an operator creates or promotes a named stay, that named stay becomes the
+final source for its guest-checkout cleaning event.
 
 Default event titles:
 
 | Situation | Google Calendar event title |
 | --- | --- |
+| Raw ICS block night not covered by a named stay | `Upratovanie` (provisional) |
 | A guest checks out and another guest checks in the same day | `Upratovanie: Pride Host` |
 | A guest checks out and nobody checks in the same day | `Upratovanie: Bez Hosta` |
 
@@ -34,6 +39,24 @@ If another guest checks in the same day at `14:00`, PMS creates the event from `
 Do not manually edit PMS-created cleaning event titles in Google Calendar. PMS may overwrite them on the next sync.
 
 The cleaner should have read-only access to the cleaning calendar.
+
+### Raw Blocks And Named Stays
+
+Booking.com ICS is an availability feed. PMS stores each event as a raw booking
+block and stores its covered nights separately. Active uncovered raw nights
+produce one provisional cleaning placeholder per checkout date so cleaning work
+is not missed while the real stay is still unknown.
+
+Named stays are separate, operator-owned business records. An active named stay
+with cleaning enabled produces one final event on its checkout date. Promoting
+all or part of a raw block to a named stay removes the provisional placeholders
+for the covered nights; raw nights left outside the named stay remain
+provisional. ICS sync can update or remove raw evidence, but it does not cancel,
+resize, rename, or otherwise change a named stay.
+
+The final model does not expose occupancy IDs or legacy occupancy repair APIs.
+Use the Availability calendar's raw-block, named-stay, and availability-block
+workflows instead.
 
 ### Google Calendar ID
 
@@ -277,7 +300,8 @@ Click `Save calendar settings`.
 
 Click `Reconcile now` or `Sync cleaning calendar`.
 
-PMS will scan upcoming and recently changed reservations and create/update cleaning events.
+PMS will scan upcoming and recently changed raw booking blocks and named stays,
+then create, update, or remove the corresponding cleaning events.
 
 ### Step 4: Check The Event Table
 
@@ -294,6 +318,10 @@ Columns:
 | Status | Sync status |
 | Message | Error, warning, or last sync timestamp |
 
+The table can contain provisional raw-block rows and final named-stay rows.
+Provisional rows use the plain `Upratovanie` title; same-day guest title logic
+applies only to final named-stay checkout events.
+
 Statuses:
 
 | Status | Meaning |
@@ -307,34 +335,43 @@ If a row is `error`, use the `Retry` button after fixing the cause.
 
 ## How PMS Decides Event Title
 
-PMS checks the checkout date in the property's timezone.
+An uncovered raw block night creates a provisional event titled exactly
+`Upratovanie`. Configurable title labels do not apply until a named stay owns
+the checkout.
 
-If another eligible reservation starts on that same date, the title uses the same-day label:
+For a named stay, PMS checks the checkout date in the property's timezone.
+
+If another active named stay starts on that same date, the title uses the same-day label:
 
 ```text
 Upratovanie: Pride Host
 ```
 
-If no eligible reservation starts on that same date, the title uses the no-guest label:
+If no active named stay starts on that same date, the title uses the no-guest label:
 
 ```text
 Upratovanie: Bez Hosta
 ```
 
-If a new reservation appears later and changes the same-day status, PMS updates only the title. It does not move the event time.
+If a new named stay appears later and changes the same-day status, PMS updates
+the title and reconciles the event end to one hour before that stay's check-in.
 
 Example:
 
-1. PMS imports a booking that checks out on Friday.
+1. PMS has a named stay that checks out on Friday.
 2. No Friday arrival exists yet.
 3. PMS creates `Upratovanie: Bez Hosta`.
-4. Later PMS imports a new booking that checks in on Friday.
+4. Later an active named stay is added with a Friday check-in.
 5. PMS updates the existing event title to `Upratovanie: Pride Host`.
 6. PMS does not create a duplicate event.
 
 ## How PMS Decides Event Time
 
 Event start comes from the property's configured checkout time.
+
+For provisional raw-block events, PMS uses the configured default duration.
+For final named-stay events, a same-day named-stay arrival can shorten the event
+to end one hour before check-in.
 
 Example:
 
@@ -343,7 +380,7 @@ Property checkout time: 09:00
 Cleaning event starts: 09:00
 ```
 
-If there is a same-day check-in when the event is first created, PMS ends the event one hour before check-in.
+If there is a same-day named-stay check-in when the final event is first created, PMS ends the event one hour before check-in.
 
 Example:
 
@@ -353,7 +390,7 @@ Same-day check-in time: 14:00
 Cleaning event: 09:00 - 13:00
 ```
 
-If there is no same-day check-in when the event is first created, PMS uses the default duration.
+If there is no same-day named-stay check-in when the event is first created, PMS uses the default duration.
 
 Example:
 
@@ -363,32 +400,44 @@ Default duration: 180 minutes
 Cleaning event: 09:00 - 12:00
 ```
 
-If a same-day booking appears later, PMS updates only the title. The event time remains as originally created.
+If a same-day named stay appears later, reconciliation updates both the title
+and the event end. If that arrival is removed, reconciliation restores the
+configured default-duration end.
 
 ## What Creates A Cleaning Event
 
-PMS creates a cleaning event when all of these are true:
+PMS creates a provisional raw-block event when Google cleaning sync and the
+calendar ID are configured, the raw block/night is active, and no active named
+stay covers that night. Overlapping raw blocks are coalesced into one
+provisional event for a property checkout date.
+
+PMS creates a final named-stay event when all of these are true:
 
 | Rule | Required value |
 | --- | --- |
 | Google cleaning sync | Enabled |
 | Google Calendar ID | Filled in |
-| Reservation status | Active or updated |
-| Reservation type | Normal guest stay or externally-sold stay |
-| Closed maintenance block | No |
+| Named-stay status | Active |
+| Cleaning required | Enabled on the named stay |
 
-PMS does not create cleaning events for cancelled reservations, deleted-source reservations, or rows marked as closed maintenance blocks.
+PMS does not create final events for cancelled or archived named stays, named
+stays with cleaning disabled, or property availability blocks. If raw ICS
+evidence disappears, its provisional event is removed; this does not cancel a
+separate named stay.
 
-Externally-sold stays do create cleaning events because they represent real guest stays.
+Externally-sold named stays create cleaning events when they are active and
+cleaning is enabled because they represent real guest stays.
 
 ## Day-To-Day Usage
 
 Normal workflow:
 
-1. PMS imports reservations from the occupancy/iCal feed.
-2. PMS creates or updates cleaning events automatically.
-3. The cleaner opens the shared Google Calendar and sees the cleaning schedule.
-4. If a reservation changes, PMS updates the managed event on the next sync.
+1. PMS imports raw unavailable blocks from the ICS feed.
+2. PMS creates provisional placeholders for uncovered raw nights.
+3. The operator creates or promotes the real guest ranges as named stays.
+4. PMS replaces affected provisional placeholders with final named-stay checkout events.
+5. The cleaner opens the shared Google Calendar and sees the cleaning schedule.
+6. If a raw block or named stay changes, PMS reconciles the managed event on the next sync.
 
 You usually only need to open the PMS Cleaning page if you want to check sync status or fix an error.
 
@@ -428,7 +477,7 @@ Most likely causes:
 | --- | --- |
 | Calendar ID is wrong | Copy the Calendar ID again from Google Calendar settings |
 | Calendar is not shared with service account | Share it with `Make changes to events` |
-| Event was manually deleted | Click `Retry`; PMS may recreate it if the reservation is still eligible |
+| Event was manually deleted | Click `Retry`; PMS may recreate it if the raw block or named stay is still eligible |
 
 ### No Events Are Created
 
@@ -437,8 +486,8 @@ Check these in order:
 1. Is Google cleaning sync enabled in PMS?
 2. Is the Calendar ID filled in?
 3. Is the Google client configured on the server?
-4. Did occupancy/iCal sync import reservations?
-5. Are the reservations active, not cancelled?
+4. Did ICS sync import active raw booking blocks, or is there an active named stay?
+5. For a final event, is cleaning enabled on the named stay?
 6. Is the checkout date inside the reconciliation window?
 7. Does the event table show errors?
 
@@ -464,12 +513,13 @@ Fix:
 
 If the title says `Bez Hosta` but there is a same-day guest:
 
-1. Confirm the same-day booking exists in PMS Occupancy.
-2. Confirm the same-day booking is active, not cancelled or closed.
-3. Run occupancy sync.
+1. Confirm the same-day arrival exists as an active named stay in PMS Availability.
+2. Confirm the named stay is active, not cancelled or archived.
+3. Reconcile the relevant named-stay data; ICS sync alone does not create or edit named stays.
 4. Run cleaning calendar reconcile.
 
-If the same-day booking was imported after the cleaning event already existed, PMS updates only the title by design.
+If the same-day named stay was added after the cleaning event already existed,
+run reconciliation so PMS updates its title and end time.
 
 ### The Time Is Wrong
 
@@ -481,9 +531,10 @@ Check property settings:
 
 Event start follows checkout time.
 
-Same-day event end is one hour before check-in, but only if same-day status existed when the event was first created.
+Same-day event end is one hour before the active named stay's check-in.
 
-If a same-day booking appears later, PMS changes only the title and keeps the original time window.
+If a same-day named stay appears or disappears later, reconciliation updates the
+managed event's title and time window.
 
 ## Security Notes
 
@@ -523,4 +574,4 @@ Use this checklist when setting up a new property.
 14. Confirm title settings.
 15. Save settings.
 16. Click `Reconcile now`.
-17. Check Google Calendar for `Upratovanie: ...` events.
+17. Check Google Calendar for provisional `Upratovanie` and final `Upratovanie: ...` events.

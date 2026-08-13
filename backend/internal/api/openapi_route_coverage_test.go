@@ -71,6 +71,73 @@ func TestOpenAPIRouteCoverageAndContractStatus(t *testing.T) {
 	}
 }
 
+func TestOpenAPIPMS21OperationsHaveConcreteContracts(t *testing.T) {
+	specBytes, err := os.ReadFile("../../../spec/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := string(specBytes)
+	operations, routeOnlyAnchors := parseOpenAPIOperations(t, spec)
+	byRoute := make(map[string]openAPIOperation, len(operations))
+	for _, operation := range operations {
+		byRoute[operation.Method+" "+operation.Path] = operation
+	}
+
+	affected := []string{
+		"POST /properties/{id}/occupancy-sync/run",
+		"GET /properties/{id}/occupancy-sync/runs",
+		"GET /properties/{id}/occupancy-source",
+		"PATCH /properties/{id}/occupancy-source",
+		"GET /properties/{id}/cleaning-calendar/settings",
+		"PATCH /properties/{id}/cleaning-calendar/settings",
+		"GET /properties/{id}/cleaning-calendar/google/calendars",
+		"POST /properties/{id}/cleaning-calendar/google/connect",
+		"POST /properties/{id}/cleaning-calendar/google/disconnect",
+		"GET /properties/{id}/cleaning-calendar/events",
+		"GET /properties/{id}/cleaning-calendar/runs",
+		"POST /properties/{id}/cleaning-calendar/reconcile",
+		"POST /properties/{id}/cleaning-calendar/events/{eventId}/retry",
+		"POST /properties/{id}/finance/imports/preview",
+		"POST /properties/{id}/finance/imports/commit",
+		"GET /properties/{id}/finance/imports",
+		"POST /properties/{id}/finance/booking-payouts/rematch",
+		"PATCH /properties/{id}/finance/booking-payouts/{referenceNumber}/map",
+		"GET /properties/{id}/invoices/stay-candidates",
+		"GET /properties/{id}/invoices/payout-link-candidates",
+		"GET /properties/{id}/invoices",
+		"POST /properties/{id}/invoices",
+		"GET /properties/{id}/invoices/{invoiceId}",
+		"PATCH /properties/{id}/invoices/{invoiceId}",
+		"POST /properties/{id}/invoices/{invoiceId}/regenerate",
+		"GET /properties/{id}/invoices/{invoiceId}/download",
+	}
+	for route := range byRoute {
+		if strings.Contains(route, "/nuki/") || strings.Contains(route, "/analytics/") {
+			affected = append(affected, route)
+		}
+	}
+	for _, route := range affected {
+		operation, ok := byRoute[route]
+		if !ok {
+			t.Errorf("affected operation is not documented: %s", route)
+			continue
+		}
+		routeOnly := strings.Contains(operation.Block, "x-contract-status: route-only")
+		if operation.Alias != "" {
+			routeOnly = routeOnlyAnchors[operation.Alias]
+		}
+		if routeOnly || !hasConcreteSuccessResponse(operation.Block) {
+			t.Errorf("affected operation lacks a concrete success contract: %s", route)
+		}
+	}
+
+	for _, alias := range []string{"occupancy_id", "occupancy_status", "guest_display_name"} {
+		if strings.Contains(spec, alias+":") || strings.Contains(spec, "- "+alias) {
+			t.Errorf("OpenAPI exposes removed alias %q", alias)
+		}
+	}
+}
+
 func TestOpenAPIProbeOperationsArePublic(t *testing.T) {
 	spec, err := os.ReadFile("../../../spec/openapi.yaml")
 	if err != nil {
@@ -124,6 +191,7 @@ func registeredRoutes(t *testing.T) map[string]bool {
 		if strings.HasPrefix(route, "/api/") {
 			route = strings.TrimPrefix(route, "/api")
 		}
+		route = strings.ReplaceAll(route, ":[0-9]+", "")
 		registered[strings.ToUpper(method)+" "+route] = true
 		return nil
 	})

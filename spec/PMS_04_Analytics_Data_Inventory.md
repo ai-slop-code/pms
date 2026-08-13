@@ -6,6 +6,13 @@ This document catalogs every analytical signal currently captured by the PMS dat
 
 **Schema source:** `backend/internal/migrate/*.up.sql` (SQLite). Store logic: `backend/internal/store/`. API aggregation: `backend/internal/api/`.
 
+**PMS 21 authority:** final analytics use named stays and
+`named_stay_nights` for sold/capacity truth, property availability blocks for
+non-stay reductions, retained source/sync data for freshness and provenance,
+and named-stay-linked finance data for revenue. Legacy `occupancies` details
+are historical only where explicitly labelled; final schema/API contracts have
+no occupancy IDs or legacy occupancy repair endpoints.
+
 **Multi-tenancy:** Almost all business tables include `property_id`. Users link to properties via `properties.owner_user_id` and `property_user_permissions`.
 
 ---
@@ -35,36 +42,51 @@ This document catalogs every analytical signal currently captured by the PMS dat
 
 ---
 
-## 2. Occupancy (Booking.com ICS sync)
+## 2. Availability and named stays (Booking.com ICS sync)
 
-**Tables:** `occupancies`, `occupancy_raw_events`, `occupancy_sync_runs`, `occupancy_sources`, `occupancy_api_tokens`
+**Tables:** `occupancy_sources`, `occupancy_raw_events`,
+`occupancy_sync_runs`, `raw_booking_blocks`, `raw_booking_block_nights`,
+`named_stays`, `named_stay_nights`, `stay_source_links`,
+`property_availability_blocks`
 
-### Raw signals per stay
+### Raw source and stay signals
 
-- `start_at`, `end_at` (UTC), `status` (`active | updated | cancelled | deleted_from_source`)
-- `source_type` (`booking_ics` or synthetic `booking_payout`), `source_event_uid`, `raw_summary`, `guest_display_name`
-- `imported_at`, `last_synced_at`, `content_hash` (change detection), `last_sync_run_id`
-- **Closure label (PMS_14):** `closure_state` (`closed | external_sale | NULL`), `closure_reason`, `closure_category` (`owner_stay | maintenance | soft_block | other`), `closed_by_user_id`, `closed_at`, `external_net_amount_cents`, `external_currency`, `external_channel` (`airbnb | direct | walk_in | other`).
+- Raw block half-open local dates, source UID, source status, summary/evidence,
+  content hash, sync run, and first/last-seen timestamps.
+- Named-stay half-open dates, display name, stay type, lifecycle, review status,
+  outcome, cleaning-required state, canonical `named_stays.first_known_at`,
+  canonical `named_stays.cancellation_effective_at`, and active night set.
+- Stay-source linkage, source coverage, and source-health warnings.
+- Availability-block type/status and named-stay type/review/outcome fields
+  replace legacy closure labels as behavior-bearing analytics inputs.
 
 ### Sync run signals
 
-- Per-run `started_at` / `finished_at`, `status`, `events_seen`, `occupancies_upserted`, `http_status`, `trigger` (`scheduled | manual`), `error_message`
+- Per-run start/finish, status, source events seen, raw blocks/nights changed,
+  source-link warnings, HTTP status, trigger, and error details.
 
 ### Metrics derivable
 
-- **Occupancy / nights booked** per month / quarter / year, per property and portfolio-wide
-- **Occupancy rate** = `nights_sold / bookable_nights`, where `bookable_nights = calendar_nights − closed_nights` (PMS_14 §4). `external_sale` rows count toward the numerator; `closed` rows are removed from both numerator and denominator.
-- **External-sale revenue** — operator-entered `external_net_amount_cents`, prorated by overlap nights, contributes to gross revenue alongside Booking payouts.
+- **Sold/occupied nights** per month / quarter / year from active
+  `named_stay_nights` whose stay type/review/outcome is sold-eligible.
+- **Occupancy rate** = sold eligible named-stay nights / bookable nights;
+  bookable nights exclude active non-stay availability blocks and PMS 21
+  non-sold stay types as specified.
+- **External-stay revenue** from canonical named-stay/finance fields, prorated
+  for partial overlaps under the analytics contract.
 - **Average length of stay**, distribution
-- **Lead time** (between `imported_at` and `start_at`)
-- **Booking pace / pickup curve** (cumulative bookings by day before arrival)
-- **Cancellation / modification rate** via status transitions and `content_hash` churn
+- **Lead time** from `named_stays.first_known_at` to arrival.
+- **Booking pace / pickup curve** from canonical historical timestamps.
+- **Cancellation / modification rate** from named-stay lifecycle and canonical
+  `named_stays.cancellation_effective_at`, with PMS 17 outcome semantics.
 - Peak vs off-peak seasonality
 - Weekday vs weekend mix
 - ICS feed reliability: success ratio, sync latency, error taxonomy, HTTP status distribution
-- Token usage (B2B JSON export consumers via `last_used_at`)
+- Source-link health and raw-block churn without treating raw blocks as sold.
 
-> Not stored: room / listing-level price per night, ADR — the ICS feed doesn't carry rates. RevPAR / ADR are reconstructed from Booking.com payouts and statements (see §6).
+> Not stored in raw blocks: room/listing price per night or ADR. RevPAR/ADR
+> require named-stay-linked Booking.com finance data or canonical manual
+> external revenue (see Section 6).
 
 ---
 
@@ -75,7 +97,7 @@ This document catalogs every analytical signal currently captured by the PMS dat
 ### Raw signals
 
 - Code lifecycle: `status` (`not_generated | generated | revoked`), `valid_from`, `valid_until`, `created_at`, `updated_at`, `revoked_at`, `error_message`
-- Linkage `occupancy_id` ↔ stay
+- Required linkage `named_stay_id` to the same-property stay
 - Per-sync counters: processed / created / updated / revoked / failed
 - Event log with type, message, JSON payload, timestamp
 - Keypad mirror: enabled flag, `last_seen_at`, raw API payload
@@ -83,7 +105,7 @@ This document catalogs every analytical signal currently captured by the PMS dat
 ### Metrics derivable
 
 - Codes generated vs revoked over time; success vs failure ratio per sync run
-- **Time-to-generate** (occupancy import → first `generated`)
+- **Time-to-generate** (canonical stay first-known time → first `generated`)
 - Active codes overlapping any date (live access)
 - Failure recurrence and error categorization
 - Keypad inventory size, churn (`last_seen_at` drift), orphaned / expired codes
@@ -145,7 +167,10 @@ This document catalogs every analytical signal currently captured by the PMS dat
 
 ## 6. Booking.com bookings — payouts + statement (commission, fees, cancellations)
 
-**Table:** `finance_bookings` (renamed from `finance_booking_payouts` in migration 000021; FKs to `finance_transactions` and `occupancies`; `finance_imports` + `finance_booking_merges` are the per-upload audit tables introduced by FEAT-04).
+**Table:** `finance_bookings` (renamed from `finance_booking_payouts` in
+migration 000021; final canonical rows link to `finance_transactions` and a
+required same-property named stay; `finance_imports` +
+`finance_booking_merges` retain per-upload evidence).
 
 The table is **lifecycle-aware**: each row may carry payout-derived data, statement-derived data, or both, distinguished by the `has_payout_data` and `has_statement_data` flags. The `(property_id, source_channel, reference_number)` unique index is the canonical merge key.
 
@@ -158,7 +183,9 @@ The table is **lifecycle-aware**: each row may carry payout-derived data, statem
 - Money columns: `amount_cents` (gross), `original_amount_cents`, `commission_cents`, `commission_pct` (statement-reported %), `payment_service_fee_cents`, `net_cents`
 - Inventory: `persons`, `rooms`, `room_nights`
 - Source flags: `has_payout_data`, `has_statement_data`, raw payloads `raw_payout_row_json`, `raw_statement_row_json`. Both flags are surfaced verbatim in the `GET /api/properties/{id}/finance/booking-payouts` JSON and rendered as the **Sources** column on the Booking Payouts UI (FEAT-06) so operators can tell payout-only, statement-only, and merged rows apart at a glance.
-- Linkage: `transaction_id` (auto-created ledger entry — uses net only), `occupancy_id` (matched stay) and the explicit reverse FK `occupancies.finance_booking_id`
+- Linkage: `transaction_id` (auto-created ledger entry, uses net only) and
+  required `named_stay_id`. Unmatched input remains preview/staging/rejection
+  evidence rather than an ownerless canonical finance booking.
 
 ### Metrics derivable
 
@@ -168,10 +195,12 @@ The table is **lifecycle-aware**: each row may carry payout-derived data, statem
 - **Booking.com commission %** = `commission / gross`; portfolio-wide and per stay
 - **Effective take-rate** = `(commission + payment_service_fee) / gross`
 - **Net payout** time-series, payout cadence (`payout_date` distribution)
-- **ADR** (`gross / nights`), **RevPAR** (`gross / available nights`) once joined to occupancy
+- **ADR** (`gross / sold nights`), **RevPAR** (`gross / bookable nights`) once
+  joined to the canonical named stay and its nights
 - **Reservation status mix** (paid, no-show, cancelled, etc.)
 - Payment service fee burden over time
-- **Payout-to-stay matching quality**: % rows with `occupancy_id` set vs orphaned
+- **Payout-to-stay matching quality**: preview/staging match and rejection
+  outcomes; committed canonical rows are always named-stay linked
 - Repeat guest detection (by `guest_name` — noisy but possible)
 - Currency mix on the platform side (ledger is EUR-only)
 
@@ -201,7 +230,8 @@ The frontend hides these charts until at least one statement row exists for the 
 - Dates: `issue_date`, `taxable_supply_date`, `due_date`, `stay_start_date`, `stay_end_date`
 - `amount_total_cents`, `currency`, `payment_status`, `payment_note`, `version`
 - Frozen JSON snapshots (`supplier_snapshot_json`, `customer_snapshot_json`) — contain VAT IDs, ICO / DIC, addresses
-- Linkage: `occupancy_id`, `finance_booking_id` (the canonical FEAT-04 FK; the `finance_booking_payout_id` column on invoices was renamed in 000021's data path but kept its name to minimise churn — it now points at `finance_bookings.id`)
+- Linkage: required `named_stay_id` and optional finance-booking provenance.
+  When the finance link is present, it belongs to the same property and stay.
 - PDF files: `version`, `file_size_bytes`, `created_at`
 
 ### Metrics derivable
@@ -242,7 +272,7 @@ Every reporting axis below is supported by stored timestamps:
 
 | Axis | Source |
 |---|---|
-| Stay arrival / departure date | `occupancies.start_at` / `end_at` |
+| Stay arrival / departure date | `named_stays.check_in_date` / `check_out_date` and `named_stay_nights` |
 | ICS feed reliability over time | `occupancy_sync_runs.started_at` / `finished_at` |
 | Nuki integration health | `nuki_sync_runs`, `nuki_event_logs.created_at` |
 | Code validity | `nuki_access_codes.valid_from` / `valid_until` |
@@ -256,7 +286,9 @@ Every reporting axis below is supported by stored timestamps:
 
 ## What's already aggregated and exposed via API
 
-- **Dashboard** (`getDashboardSummary`): last sync state (occupancy + Nuki), upcoming 5 stays, active 5 Nuki codes, current-month cleaning summary (days + salary), current-month finance summary (in / out / net), 3 most recent invoices.
+- **Dashboard** (`getDashboardSummary`): last source-sync state, upcoming named
+  stays, active Nuki codes, current-month cleaning and finance summaries, and
+  recent invoices.
 - **Finance summary** (`/finance/summary`): all-time + selected month / year totals, property income, cleaner expense, **cleaner margin %**, per-category breakdown.
 - **Cleaning**: monthly summary, **24-hour entry heatmap**, yearly stats (counted days per month).
 - **Booking payouts**: enriched list with linked stay window + linked invoice id.
@@ -266,7 +298,8 @@ Every reporting axis below is supported by stored timestamps:
 
 ## Known gaps to flag proactively
 
-1. **No room rate / ADR data** in occupancy itself — ICS doesn't carry it. Gross revenue and ADR can only be reconstructed via `finance_bookings.amount_cents` (FEAT-04 / FEAT-05).
+1. **No room rate / ADR data** in raw ICS blocks. Gross revenue and ADR require
+   named-stay-linked finance data or canonical manual external revenue.
 2. **Ledger only stores net payouts** for booking income — gross / commission / fees / statement-only fields live on `finance_bookings` and need to be joined for a full P&L.
 3. **No VAT breakdown column** on invoices — only `amount_total_cents`. Tax analytics require a schema extension.
 4. **No outbound-message log** — we render but don't persist sends / opens.

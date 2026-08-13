@@ -77,7 +77,6 @@ describe('DashboardView', () => {
         sync_status: { occupancy: 'ok', nuki: 'ok' },
         upcoming_stays: [
           {
-            occupancy_id: 11,
             nuki_code_id: 21,
             stay_id: 31,
             summary: 'Jane Guest',
