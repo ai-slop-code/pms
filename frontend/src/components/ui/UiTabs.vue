@@ -29,7 +29,7 @@ function onKey(e: KeyboardEvent, index: number) {
   const currentTab = props.tabs[index]
   if (!currentTab) return
   const currentIdx = enabled.findIndex((t) => t.id === currentTab.id)
-  let nextIdx = currentIdx
+  let nextIdx: number
   if (e.key === 'ArrowRight') nextIdx = (currentIdx + 1) % enabled.length
   else if (e.key === 'ArrowLeft') nextIdx = (currentIdx - 1 + enabled.length) % enabled.length
   else if (e.key === 'Home') nextIdx = 0
