@@ -3,6 +3,20 @@
 ## Purpose
 This folder contains the full specification package for the PMS project and is intended to be handed to an AI coding agent as the implementation source of truth.
 
+## Current Authority
+
+For availability and stay identity, the final authority is
+`PMS_21_Legacy_Occupancy_Removal_Spec.md`, supported by ADR-007. The final
+model uses raw booking blocks, named stays and named-stay nights, source links,
+and property availability blocks. Earlier documents that describe
+`occupancies`, occupancy IDs, public occupancy export, or synthetic finance
+occupancies are historical implementation evidence where they conflict with
+that final model.
+
+This authority statement defines the target architecture only. It does not
+claim Release A/B production windows, exception resolution, a restore drill,
+or destructive cleanup have completed.
+
 ## Files
 
 ### `PMS_00_Implementation_Prompt.md`
@@ -59,20 +73,26 @@ occupied/financial stays, but PMS suppresses or removes the managed cleaning
 event until the owner restores default behavior.
 
 ### `PMS_19_Booking_ICS_Reconciliation_Spec.md`
-Bulletproof Booking.com ICS reconciliation contract covering upstream event
-identity, generated/manual split rows, source disappearance, duplicate active
-occupancy prevention, repair of existing bad rows, and July 2026 acceptance
-tests.
+Historical predecessor to PMS 21 covering upstream identity, split-row repair,
+and July 2026 acceptance examples. Its overloaded occupancy representation
+model is superseded; retain it as design and incident evidence.
 
 ### `PMS_21_Raw_Booking_Blocks_Named_Stays_Migration_Plan.md`
-Staged migration from the overloaded legacy occupancy model to first-class raw
-Booking.com blocks, named stays, stay nights, source links, and availability
-blocks.
+Historical staged migration plan from the overloaded legacy occupancy model to
+first-class raw Booking.com blocks, named stays, stay nights, source links, and
+availability blocks. Its pre-production and compatibility status is
+superseded by the final cleanup specification.
 
 ### `PMS_21_Legacy_Occupancy_Removal_Spec.md`
 Post-cutover cleanup contract for removing legacy occupancy writes, reads,
 routes, DTOs, UI, integration foreign keys, tables, flags, and transitional
 tooling while preserving source, business, integration, and audit history.
+This is the current PMS 21 authority.
+
+### `docs/adr/ADR-007-final-occupancy-model-and-canonical-stay-ownership.md`
+Final architecture decision superseding ADR-005's compatibility window and
+ADR-006's permission for unmatched canonical finance bookings. The historical
+ADRs remain unchanged.
 
 ## Recommended Reading Order
 1. `PMS_00_Implementation_Prompt.md`
@@ -97,9 +117,10 @@ tooling while preserving source, business, integration, and audit history.
 - **Google Calendar API**: https://developers.google.com/calendar/api
 
 ## Historical v1 Scope Note
-The following describes the original v1 scope and is not the current target after
-PMS 15 and PMS 21. Public occupancy export and n8n guidance are retired by the
-PMS 21 migration and cleanup specifications.
+The following describes the original v1 scope and is not the current target
+after PMS 15 and PMS 21. Public occupancy export, token management, and n8n
+export guidance have no place in the final model and are removed through the
+gated PMS 21 cleanup sequence.
 
 Direct Google Calendar integration was not part of v1. The intended v1 approach was:
 - sync occupancies from ICS
@@ -107,7 +128,8 @@ Direct Google Calendar integration was not part of v1. The intended v1 approach 
 - use `n8n` externally if Google Calendar synchronization is needed
 
 Current Google Calendar cleaning behavior is specified by
-`PMS_15_Google_Calendar_Cleaning_Events_Spec.md` and the PMS 21 documents.
+`PMS_15_Google_Calendar_Cleaning_Events_Spec.md` and the PMS 21 documents,
+using named-stay or raw-block ownership rather than an occupancy ID.
 
 ## Suggested Usage
 - Use `PMS_00_Implementation_Prompt.md` when starting implementation with an AI coding agent.

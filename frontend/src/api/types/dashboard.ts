@@ -7,7 +7,6 @@ export interface SyncStatusWidget {
 
 export interface UpcomingStayWidget {
   stay_id: number
-  occupancy_id?: number
   summary: string | null
   start_at: string
   end_at: string
@@ -17,8 +16,6 @@ export interface UpcomingStayWidget {
 export interface ActiveNukiCodeWidget {
   nuki_code_id: number
   stay_id: number
-  /** @deprecated Legacy compatibility identity. */
-  occupancy_id?: number
   summary: string | null
   code_label: string | null
   code_masked: string | null
@@ -38,6 +35,7 @@ export interface FinanceMonthWidget {
   incoming: number
   outgoing: number
   net: number
+  recognized_gross: number
 }
 
 export interface RecentInvoiceWidget {

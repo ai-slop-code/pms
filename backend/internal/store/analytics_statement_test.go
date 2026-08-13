@@ -15,6 +15,24 @@ import (
 func insertStatementBooking(t *testing.T, st *Store, pid int64, ref, bookedOn, checkIn, checkOut, status string, persons, nights int, amount, commission int64) int64 {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
+	stayStatus := NamedStayStatusActive
+	var cancelledAt interface{}
+	if status == "CANCELLED" {
+		stayStatus = NamedStayStatusCancelled
+		cancelledAt = now
+	}
+	stayResult, err := st.DB.ExecContext(context.Background(), `
+		INSERT INTO named_stays
+			(property_id, display_name, stay_type, check_in_date, check_out_date, status,
+			 cleaning_required, source_channel, source_reference, review_status,
+			 nuki_generation_status, first_known_at, cancellation_effective_at, created_at, updated_at)
+		VALUES (?, 'Test Guest', 'booking_com', ?, ?, ?, 1, 'booking_com', ?, 'confirmed',
+			'not_applicable', ?, ?, ?, ?)`,
+		pid, checkIn, checkOut, stayStatus, ref, bookedOn, cancelledAt, now, now)
+	if err != nil {
+		t.Fatalf("insert statement named stay %s: %v", ref, err)
+	}
+	stayID, _ := stayResult.LastInsertId()
 	res, err := st.DB.ExecContext(context.Background(), `
 		INSERT INTO finance_bookings
 			(property_id, reference_number, source_channel,
@@ -23,7 +41,7 @@ func insertStatementBooking(t *testing.T, st *Store, pid int64, ref, bookedOn, c
 			 guest_name, reservation_status, currency, payment_status,
 			 amount_cents, commission_cents, payment_service_fee_cents, net_cents,
 			 persons, rooms, room_nights,
-			 payout_date, row_type, status,
+			 payout_date, row_type, status, named_stay_id,
 			 created_at, updated_at)
 		VALUES (?, ?, 'booking_com',
 			0, 1,
@@ -31,14 +49,14 @@ func insertStatementBooking(t *testing.T, st *Store, pid int64, ref, bookedOn, c
 			'Test Guest', ?, 'EUR', 'paid',
 			?, ?, 0, 0,
 			?, 1, ?,
-			?, 'stay', ?,
+			?, 'stay', ?, ?,
 			?, ?)`,
 		pid, ref,
 		bookedOn, checkIn, checkOut,
 		status,
 		amount, commission,
 		persons, nights,
-		bookedOn, status,
+		bookedOn, status, stayID,
 		now, now,
 	)
 	if err != nil {
@@ -343,7 +361,8 @@ func TestHasAnyStatementData_TogglesWithStatementRows(t *testing.T) {
 	}
 
 	// A pure payout row (has_statement_data=0) must not flip the flag.
-	insertPayout(t, st, pid, "PAY-1", nil, "2026-04-01", "2026-04-05", 30000, 4500, 200, 25300)
+	stayID := insertAnalyticsStay(t, st, pid, "PAY-1", "2026-04-01T15:00:00Z", "2026-04-03T10:00:00Z", "active", "Payout Guest", "2026-03-01T00:00:00Z")
+	insertPayout(t, st, pid, "PAY-1", stayID, "2026-04-01", "2026-04-05", 30000, 4500, 200, 25300)
 	if got, err := st.HasAnyStatementData(ctx, pid); err != nil || got {
 		t.Fatalf("payout-only: err=%v has=%v", err, got)
 	}

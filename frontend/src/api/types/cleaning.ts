@@ -67,8 +67,6 @@ export interface CleaningCalendarSettings {
 
 export interface CleaningCalendarEventRow {
   id: number
-  /** @deprecated Legacy compatibility identity. */
-  occupancy_id?: number
   named_stay_id?: number
   raw_booking_block_id?: number
   cleaning_identity?: string
@@ -78,7 +76,6 @@ export interface CleaningCalendarEventRow {
   starts_at: string
   ends_at: string
   same_day_arrival: boolean
-  next_occupancy_id?: number
   title: string
   status: 'pending' | 'synced' | 'error' | 'removed'
   warning_message?: string

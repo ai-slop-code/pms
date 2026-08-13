@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -140,7 +141,7 @@ func (s *Store) FinanceBookingByReference(ctx context.Context, propertyID int64,
 // UpsertFinanceBookingFromCanonical inserts a new finance_bookings row
 // (or updates the existing one identified by id when id > 0) using the
 // merger's CanonicalBooking shape. Returns the row id.
-func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyID int64, existingID int64, b statements.CanonicalBooking) (int64, error) {
+func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyID int64, existingID, namedStayID int64, b statements.CanonicalBooking) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if existingID > 0 {
 		_, err := s.DB.ExecContext(ctx, `
@@ -176,7 +177,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 				raw_statement_row_json = COALESCE(?, raw_statement_row_json),
 				status = ?,
 				updated_at = ?
-			WHERE id = ?`,
+			WHERE id = ? AND property_id = ?`,
 			boolToInt(b.HasPayoutData), boolToInt(b.HasStatementData),
 			ptrToNullString(b.BookedOn),
 			ptrToNullString(b.CheckInDate), ptrToNullString(b.CheckOutDate),
@@ -191,7 +192,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 			ptrToNullString(b.PropertyLabel), ptrToNullString(b.Country),
 			ptrToNullString(b.RawPayoutRowJSON), ptrToNullString(b.RawStatementRowJSON),
 			ptrToNullString(canonicalStatusForDB(b)),
-			now, existingID,
+			now, existingID, propertyID,
 		)
 		if err != nil {
 			return existingID, err
@@ -206,6 +207,16 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 			}
 		}
 		return existingID, nil
+	}
+	if namedStayID <= 0 {
+		return 0, fmt.Errorf("named_stay_id is required")
+	}
+	var stayPropertyID int64
+	if err := s.DB.QueryRowContext(ctx, `SELECT property_id FROM named_stays WHERE id = ?`, namedStayID).Scan(&stayPropertyID); err != nil {
+		return 0, fmt.Errorf("invalid named_stay_id: %w", err)
+	}
+	if stayPropertyID != propertyID {
+		return 0, fmt.Errorf("named_stay_id does not belong to property")
 	}
 	netCents := 0
 	if b.NetCents != nil {
@@ -231,7 +242,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 	}
 	res, err := s.DB.ExecContext(ctx, `
 		INSERT INTO finance_bookings (
-			property_id, reference_number, source_channel,
+			property_id, named_stay_id, reference_number, source_channel,
 			has_payout_data, has_statement_data,
 			booked_on, check_in_date, check_out_date,
 			guest_name, booker_name, guest_request,
@@ -244,8 +255,8 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 			raw_payout_row_json, raw_statement_row_json,
 			status,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		propertyID, b.ReferenceNumber, channel,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		propertyID, namedStayID, b.ReferenceNumber, channel,
 		boolToInt(b.HasPayoutData), boolToInt(b.HasStatementData),
 		ptrToNullString(b.BookedOn),
 		ptrToNullString(b.CheckInDate), ptrToNullString(b.CheckOutDate),
@@ -265,55 +276,14 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
-}
-
-// CancelOccupancyForBooking marks the occupancy linked to a finance
-// booking as cancelled (status='cancelled'). It is a no-op when no
-// occupancy is linked. Cancelled rows are kept (never deleted) so
-// historical analytics remain queryable.
-func (s *Store) CancelOccupancyForBooking(ctx context.Context, bookingID int64) (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.DB.ExecContext(ctx, `
-		UPDATE occupancies
-		   SET status = 'cancelled',
-		       last_synced_at = ?
-		 WHERE finance_booking_id = ? AND status != 'cancelled'`,
-		now, bookingID,
-	)
+	bookingID, err := res.LastInsertId()
 	if err != nil {
 		return 0, err
 	}
-	if res == nil {
-		return 0, nil
+	if _, err := s.ConfirmNamedStayWithFinanceEvidence(ctx, propertyID, namedStayID); err != nil {
+		return 0, err
 	}
-	n, _ := res.RowsAffected()
-	return n, nil
-}
-
-// LinkBookingToOccupancy wires a finance_bookings row to an occupancy
-// in both directions: finance_bookings.occupancy_id and
-// occupancies.finance_booking_id. No-op when ids are zero.
-func (s *Store) LinkBookingToOccupancy(ctx context.Context, propertyID int64, referenceNumber string, occupancyID, bookingID int64) error {
-	if bookingID <= 0 || occupancyID <= 0 {
-		return nil
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := s.DB.ExecContext(ctx, `
-		UPDATE finance_bookings
-		   SET occupancy_id = ?, updated_at = ?
-		 WHERE id = ? AND (occupancy_id IS NULL OR occupancy_id != ?)`,
-		occupancyID, now, bookingID, occupancyID); err != nil {
-		return err
-	}
-	if _, err := s.DB.ExecContext(ctx, `
-		UPDATE occupancies
-		   SET finance_booking_id = ?, last_synced_at = ?
-		 WHERE id = ? AND (finance_booking_id IS NULL OR finance_booking_id != ?)`,
-		bookingID, now, occupancyID, bookingID); err != nil {
-		return err
-	}
-	return nil
+	return bookingID, nil
 }
 
 // UpsertBookingFinanceTransaction creates or updates the cash-basis
@@ -393,21 +363,6 @@ func (s *Store) UpdateFinanceImportCounts(ctx context.Context, importID int64, i
 	return err
 }
 
-// LinkOccupancyToBooking sets occupancies.finance_booking_id when the
-// caller has resolved a payout row to an occupancy.
-func (s *Store) LinkOccupancyToBooking(ctx context.Context, occupancyID, bookingID int64) error {
-	if occupancyID <= 0 || bookingID <= 0 {
-		return nil
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.DB.ExecContext(ctx, `
-		UPDATE occupancies
-		   SET finance_booking_id = ?, last_synced_at = ?
-		 WHERE id = ? AND (finance_booking_id IS NULL OR finance_booking_id != ?)`,
-		bookingID, now, occupancyID, bookingID)
-	return err
-}
-
 // ---------------- helpers ----------------
 
 func ptrFromNullString(v sql.NullString) *string {
@@ -477,39 +432,4 @@ func canonicalStatusForDB(b statements.CanonicalBooking) *string {
 		return &v
 	}
 	return nil
-}
-
-// MoveFinanceMappingTx moves a finance booking link from one occupancy to
-// another (PMS_19 §10.4). Used when a named stay unambiguously replaces the
-// aggregate block that held the finance mapping. No-op if the source has no
-// mapping or the destination already has one.
-func (s *Store) MoveFinanceMappingTx(ctx context.Context, tx *sql.Tx, propertyID, fromOccupancyID, toOccupancyID int64) (bool, error) {
-	if fromOccupancyID <= 0 || toOccupancyID <= 0 || fromOccupancyID == toOccupancyID {
-		return false, nil
-	}
-	var bookingID sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT finance_booking_id FROM occupancies WHERE property_id = ? AND id = ?`, propertyID, fromOccupancyID).Scan(&bookingID); err != nil {
-		return false, err
-	}
-	if !bookingID.Valid {
-		return false, nil
-	}
-	var destBooking sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT finance_booking_id FROM occupancies WHERE property_id = ? AND id = ?`, propertyID, toOccupancyID).Scan(&destBooking); err != nil {
-		return false, err
-	}
-	if destBooking.Valid {
-		return false, nil // destination already mapped; leave both as-is
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := tx.ExecContext(ctx, `UPDATE finance_bookings SET occupancy_id = ?, updated_at = ? WHERE property_id = ? AND id = ?`, toOccupancyID, now, propertyID, bookingID.Int64); err != nil {
-		return false, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE occupancies SET finance_booking_id = ?, last_synced_at = ? WHERE id = ?`, bookingID.Int64, now, toOccupancyID); err != nil {
-		return false, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE occupancies SET finance_booking_id = NULL, last_synced_at = ? WHERE id = ?`, now, fromOccupancyID); err != nil {
-		return false, err
-	}
-	return true, nil
 }

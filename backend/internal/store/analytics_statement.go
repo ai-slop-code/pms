@@ -15,7 +15,7 @@ import (
 // statement-aware rows are returned as the empty slice — the API layer
 // then renders the "no statement data" empty state.
 
-const statementFinanciallyMaterializedStatus = `(UPPER(COALESCE(status, '')) IN ('OK', '') OR outcome_override IN ('cancelled_non_refundable', 'no_show'))`
+const statementFinanciallyMaterializedStatus = `(UPPER(COALESCE(fb.status, '')) IN ('OK', '') OR COALESCE(fb.outcome_override, ns.stay_outcome, '') IN ('cancelled_non_refundable', 'no_show'))`
 
 // ---------- Cancellation rate ----------
 
@@ -31,17 +31,17 @@ type CancellationCohortRow struct {
 	Rate      float64
 }
 
-// ListCancellationByBookingCohort groups cancellations by the month
-// of `booked_on`. Used for the "marketing/lead-quality" view.
+// ListCancellationByBookingCohort groups cancellations by the month of the
+// canonical first-known timestamp. Used for the "marketing/lead-quality" view.
 func (s *Store) ListCancellationByBookingCohort(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time, loc *time.Location) ([]CancellationCohortRow, error) {
-	return s.cancellationCohort(ctx, propertyID, fromUTC, toUTC, loc, "booked_on")
+	return s.cancellationCohort(ctx, propertyID, fromUTC, toUTC, loc, "ns.first_known_at")
 }
 
 // ListCancellationByArrivalCohort groups cancellations by the month
 // of `check_in_date`. Used for the operational "next 30 days exposure"
 // view.
 func (s *Store) ListCancellationByArrivalCohort(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time, loc *time.Location) ([]CancellationCohortRow, error) {
-	return s.cancellationCohort(ctx, propertyID, fromUTC, toUTC, loc, "check_in_date")
+	return s.cancellationCohort(ctx, propertyID, fromUTC, toUTC, loc, "ns.check_in_date")
 }
 
 func (s *Store) cancellationCohort(ctx context.Context, propertyID int64, fromUTC, toUTC time.Time, loc *time.Location, dateCol string) ([]CancellationCohortRow, error) {
@@ -49,16 +49,16 @@ func (s *Store) cancellationCohort(ctx context.Context, propertyID int64, fromUT
 		loc = time.UTC
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT fb.`+dateCol+` AS d,
+		SELECT `+dateCol+` AS d,
 		       UPPER(COALESCE(fb.status, '')) AS st,
 		       COALESCE(fb.outcome_override, ns.stay_outcome, '') AS outcome
 		  FROM finance_bookings fb
-		  LEFT JOIN named_stays ns
+		  JOIN named_stays ns
 		    ON ns.property_id = fb.property_id
 		   AND ns.id = fb.named_stay_id
 		 WHERE fb.property_id = ?
 		   AND fb.has_statement_data = 1
-		   AND fb.`+dateCol+` IS NOT NULL`, propertyID)
+		   AND `+dateCol+` IS NOT NULL`, propertyID)
 	if err != nil {
 		return nil, err
 	}
@@ -136,13 +136,14 @@ func (s *Store) ListLeadTimeStatementBuckets(ctx context.Context, propertyID int
 		loc = time.UTC
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT booked_on, check_in_date
-		  FROM finance_bookings
-		 WHERE property_id = ?
-		   AND has_statement_data = 1
+		SELECT ns.first_known_at, ns.check_in_date
+		  FROM finance_bookings fb
+		  JOIN named_stays ns ON ns.id = fb.named_stay_id AND ns.property_id = fb.property_id
+		 WHERE fb.property_id = ?
+		   AND fb.has_statement_data = 1
 		   AND `+statementFinanciallyMaterializedStatus+`
-		   AND booked_on IS NOT NULL
-		   AND check_in_date IS NOT NULL`, propertyID)
+		   AND ns.first_known_at IS NOT NULL
+		   AND ns.check_in_date IS NOT NULL`, propertyID)
 	if err != nil {
 		return nil, err
 	}
@@ -208,16 +209,17 @@ func (s *Store) ListPersonsDistribution(ctx context.Context, propertyID int64, f
 		loc = time.UTC
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT COALESCE(persons, 0) AS p,
-		       COALESCE(amount_cents, 0) AS gross,
-		       COALESCE(room_nights, 0) AS nights,
-		       check_in_date
-		  FROM finance_bookings
-		 WHERE property_id = ?
-		   AND has_statement_data = 1
+		SELECT COALESCE(fb.persons, 0) AS p,
+		       COALESCE(fb.amount_cents, 0) AS gross,
+		       COALESCE(fb.room_nights, 0) AS nights,
+		       ns.check_in_date
+		  FROM finance_bookings fb
+		  JOIN named_stays ns ON ns.id = fb.named_stay_id AND ns.property_id = fb.property_id
+		 WHERE fb.property_id = ?
+		   AND fb.has_statement_data = 1
 		   AND `+statementFinanciallyMaterializedStatus+`
-		   AND check_in_date IS NOT NULL
-		   AND COALESCE(persons, 0) > 0`, propertyID)
+		   AND ns.check_in_date IS NOT NULL
+		   AND COALESCE(fb.persons, 0) > 0`, propertyID)
 	if err != nil {
 		return nil, err
 	}
@@ -263,8 +265,8 @@ func (s *Store) ListPersonsDistribution(ctx context.Context, propertyID int64, f
 
 // ---------- Commission rate trend + per-stay ----------
 
-// CommissionTrendRow reports the weighted commission rate per booked-on
-// month: Σ commission / Σ amount over active stays.
+// CommissionTrendRow reports the weighted commission rate per canonical
+// first-known month: Σ commission / Σ amount over active stays.
 type CommissionTrendRow struct {
 	Month           string
 	CommissionCents int64
@@ -278,14 +280,15 @@ func (s *Store) ListCommissionRateTrend(ctx context.Context, propertyID int64, f
 		loc = time.UTC
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT booked_on,
-		       COALESCE(commission_cents, 0),
-		       COALESCE(amount_cents, 0)
-		  FROM finance_bookings
-		 WHERE property_id = ?
-		   AND has_statement_data = 1
+		SELECT ns.first_known_at,
+		       COALESCE(fb.commission_cents, 0),
+		       COALESCE(fb.amount_cents, 0)
+		  FROM finance_bookings fb
+		  JOIN named_stays ns ON ns.id = fb.named_stay_id AND ns.property_id = fb.property_id
+		 WHERE fb.property_id = ?
+		   AND fb.has_statement_data = 1
 		   AND `+statementFinanciallyMaterializedStatus+`
-		   AND booked_on IS NOT NULL`, propertyID)
+		   AND ns.first_known_at IS NOT NULL`, propertyID)
 	if err != nil {
 		return nil, err
 	}
@@ -346,18 +349,19 @@ func (s *Store) ListCommissionPerStay(ctx context.Context, propertyID int64, fro
 		loc = time.UTC
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, reference_number,
-		       COALESCE(guest_name, ''),
-		       COALESCE(check_in_date, ''),
-		       COALESCE(check_out_date, ''),
-		       COALESCE(amount_cents, 0),
-		       COALESCE(commission_cents, 0)
-		  FROM finance_bookings
-		 WHERE property_id = ?
-		   AND has_statement_data = 1
+		SELECT fb.id, fb.reference_number,
+		       COALESCE(fb.guest_name, ''),
+		       COALESCE(ns.check_in_date, ''),
+		       COALESCE(ns.check_out_date, ''),
+		       COALESCE(fb.amount_cents, 0),
+		       COALESCE(fb.commission_cents, 0)
+		  FROM finance_bookings fb
+		  JOIN named_stays ns ON ns.id = fb.named_stay_id AND ns.property_id = fb.property_id
+		 WHERE fb.property_id = ?
+		   AND fb.has_statement_data = 1
 		   AND `+statementFinanciallyMaterializedStatus+`
-		   AND check_in_date IS NOT NULL
-		 ORDER BY check_in_date DESC, id DESC`, propertyID)
+		   AND ns.check_in_date IS NOT NULL
+		 ORDER BY ns.check_in_date DESC, fb.id DESC`, propertyID)
 	if err != nil {
 		return nil, err
 	}

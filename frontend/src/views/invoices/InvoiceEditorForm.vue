@@ -6,15 +6,15 @@ import UiInput from '@/components/ui/UiInput.vue'
 import UiSelect from '@/components/ui/UiSelect.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import { apiUrl } from '@/api/http'
-import { occupancyOptionLabel, payoutOptionLabel } from './format'
+import { stayOptionLabel, payoutOptionLabel } from './format'
 import type {
   Invoice,
-  InvoiceOccupancyOption as OccupancyOption,
+  InvoiceNamedStayOption as StayOption,
   InvoiceBookingPayoutOption as BookingPayoutOption,
 } from '@/api/types/invoice'
 
 export interface InvoiceFormState {
-  occupancy_id: string
+  named_stay_id: string
   booking_payout_id: string
   language: 'sk' | 'en'
   issue_date: string
@@ -41,7 +41,7 @@ defineProps<{
   regenerating: boolean
   selectedId: number | null
   selectedInvoice: Invoice | null
-  occupancyOptions: OccupancyOption[]
+  stayOptions: StayOption[]
   payoutOptions: BookingPayoutOption[]
 }>()
 
@@ -76,24 +76,25 @@ const emit = defineEmits<{
           size="sm"
           :loading="regenerating"
           @click="emit('regenerate')"
-        >Regenerate PDF</UiButton>
+          >Regenerate PDF</UiButton
+        >
       </div>
     </div>
 
     <form @submit.prevent="emit('submit')">
       <div class="form-grid">
         <UiSelect
-          :model-value="form.occupancy_id"
-          label="Stay (optional)"
+          :model-value="form.named_stay_id"
+          label="Named stay"
           class="form-grid__full"
+          required
           @update:model-value="emit('selectStay', String($event))"
         >
           <option value="">— Select stay —</option>
-          <option v-for="o in occupancyOptions" :key="o.id" :value="String(o.id)">
-            {{ occupancyOptionLabel(o) }}
+          <option v-for="stay in stayOptions" :key="stay.id" :value="String(stay.id)">
+            {{ stayOptionLabel(stay) }}
           </option>
         </UiSelect>
-        <UiInput v-model="form.occupancy_id" label="Named stay ID" inputmode="numeric" placeholder="or type id" />
         <UiSelect
           :model-value="form.booking_payout_id"
           label="Mapped Booking.com payout (optional)"
@@ -157,12 +158,14 @@ const emit = defineEmits<{
         </p>
         <p>{{ selectedInvoice.supplier.address_line_1 || '—' }}</p>
         <p>
-          {{ [selectedInvoice.supplier.postal_code, selectedInvoice.supplier.city].filter(Boolean).join(' ') || '—' }}
+          {{
+            [selectedInvoice.supplier.postal_code, selectedInvoice.supplier.city].filter(Boolean).join(' ') ||
+            '—'
+          }}
         </p>
         <p>{{ selectedInvoice.supplier.country || '—' }}</p>
         <p class="muted">
-          ICO: {{ selectedInvoice.supplier.ico || '—' }} ·
-          DIC: {{ selectedInvoice.supplier.dic || '—' }} ·
+          ICO: {{ selectedInvoice.supplier.ico || '—' }} · DIC: {{ selectedInvoice.supplier.dic || '—' }} ·
           VAT ID: {{ selectedInvoice.supplier.vat_id || '—' }}
         </p>
       </div>

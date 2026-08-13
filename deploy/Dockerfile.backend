@@ -34,12 +34,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w" -o /out/pms-healthcheck ./cmd/healthcheck
 
-# Guarded PMS 21 audit/apply CLI. The runtime entrypoint remains pms-server;
-# operators invoke this binary explicitly with docker compose run --entrypoint.
+# Operator-only PMS 21 Release C audit/apply entrypoint. It is packaged in the
+# same immutable image used for the audit, cleanup, and server recreation.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /out/pms21-migration ./cmd/pms21-migration
+    go build -trimpath -ldflags="-s -w" -o /out/pms21-cleanup ./cmd/pms21-cleanup
 
 # ---- runtime stage (distroless, non-root) ---------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
@@ -47,7 +47,7 @@ FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 WORKDIR /app
 COPY --from=build /out/pms-server /app/pms-server
 COPY --from=build /out/pms-healthcheck /app/pms-healthcheck
-COPY --from=build /out/pms21-migration /app/pms21-migration
+COPY --from=build /out/pms21-cleanup /app/pms21-cleanup
 
 ENV PMS_ENV=production \
     DATABASE_PATH=/var/lib/pms/pms.db

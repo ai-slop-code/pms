@@ -85,6 +85,14 @@ function apiRouter(handlers: Record<string, () => unknown>) {
     if (url.includes('/finance/transactions')) return Promise.resolve({ transactions: [] })
     if (url.includes('/finance/summary')) return Promise.resolve(emptySummary)
     if (url.includes('/finance/recurring-rules')) return Promise.resolve({ rules: [] })
+    if (url.includes('/finance/revenue-recognition')) {
+      return Promise.resolve({
+        month: '2026-04',
+        gross_revenue_cents: 0,
+        bookings: [],
+        excluded_bookings: [],
+      })
+    }
     if (url.includes('/finance/months/') && url.includes('/sync-generated')) {
       return Promise.resolve({
         ok: true,
@@ -160,6 +168,51 @@ describe('FinanceView', () => {
     await flushPromises()
     expect(w.text()).toContain('Synced')
     expect(w.text()).toContain('Generated entries last synced')
+  })
+
+  it('renders payout-backed gross revenue in a separate Revenue tab', async () => {
+    seedProperty()
+    apiRouter({
+      '/finance/revenue-recognition': () => ({
+        month: '2026-04',
+        gross_revenue_cents: 6666,
+        bookings: [
+          {
+            booking_id: 41,
+            reference_number: 'REVENUE-1',
+            guest_name: 'Revenue Guest',
+            check_in_date: '2026-03-31',
+            check_out_date: '2026-04-03',
+            gross_cents: 10000,
+            stay_nights: 3,
+            recognized_nights: 2,
+            recognized_gross_cents: 6666,
+            unmatched: true,
+            cancelled: false,
+            no_show: false,
+          },
+        ],
+        excluded_bookings: [],
+      }),
+    })
+    const w = mount(FinanceView)
+    await flushPromises()
+
+    expect(w.text()).toContain('Recognized gross')
+    const revenueTab = w.findAll('button').find((button) => button.text() === 'Revenue')
+    expect(revenueTab).toBeTruthy()
+    await revenueTab!.trigger('click')
+    await flushPromises()
+
+    expect(w.text()).toContain('Revenue Guest')
+    expect(w.text()).toContain('REVENUE-1')
+    expect(w.text()).toContain('2 of 3')
+    expect(w.text()).toContain('Unmatched')
+    expect(
+      apiMock.mock.calls.some(
+        ([url]) => typeof url === 'string' && url.includes('/finance/revenue-recognition?month='),
+      ),
+    ).toBe(true)
   })
 
   it('calls the generated-entry sync endpoint from the toolbar', async () => {
@@ -243,6 +296,14 @@ describe('FinanceView', () => {
       if (url.includes('/finance/transactions')) return Promise.resolve({ transactions: [] })
       if (url.includes('/finance/summary')) return Promise.resolve(emptySummary)
       if (url.includes('/finance/recurring-rules')) return Promise.resolve({ rules: [] })
+      if (url.includes('/finance/revenue-recognition')) {
+        return Promise.resolve({
+          month: '2026-04',
+          gross_revenue_cents: 0,
+          bookings: [],
+          excluded_bookings: [],
+        })
+      }
       return Promise.resolve({})
     })
 

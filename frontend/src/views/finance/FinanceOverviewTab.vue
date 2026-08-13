@@ -5,7 +5,7 @@ import UiKpiCard from '@/components/ui/UiKpiCard.vue'
 import { formatEuros } from '@/utils/format'
 import type { FinanceSummary } from '@/api/types/finance'
 
-const props = defineProps<{ summary: FinanceSummary | null }>()
+const props = defineProps<{ summary: FinanceSummary | null; recognizedGrossCents: number }>()
 
 const eur = (cents?: number | null) => formatEuros(cents ?? 0)
 const monthlyNetPositive = computed(() => (props.summary?.monthly_net_cents || 0) >= 0)
@@ -33,6 +33,20 @@ const monthlyNetLabel = computed(() =>
           label="Cleaner margin"
           :value="`${(summary.cleaner_margin * 100).toFixed(1)}%`"
           :tone="summary.cleaner_margin >= 0.5 ? 'success' : 'warning'"
+        />
+      </div>
+    </UiSection>
+
+    <UiSection
+      title="Revenue recognition"
+      description="Gross booking revenue allocated across the occupied nights in the selected month."
+    >
+      <div class="kpi-grid">
+        <UiKpiCard
+          label="Recognized gross"
+          :value="eur(recognizedGrossCents)"
+          hint="Based on stay nights, not payout date"
+          tone="success"
         />
       </div>
     </UiSection>

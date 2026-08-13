@@ -55,10 +55,10 @@ func TestOccupancyCalendarViewStage5CombinesRawNamedAndAvailability(t *testing.T
 	}
 	if _, err := st.DB.ExecContext(ctx, `
 		INSERT INTO cleaning_calendar_events (
-			property_id, occupancy_id, named_stay_id, checkout_date, cleaning_kind, google_calendar_id,
+			property_id, named_stay_id, checkout_date, cleaning_kind, cleaning_identity, google_calendar_id,
 			cleaning_date, starts_at, ends_at, title, status, error_message, created_at, updated_at
 		)
-		VALUES (?, ?, ?, '2026-07-12', 'named_stay', 'calendar-id', '2026-07-12', ?, ?, 'Upratovanie: Stage Five Guest', 'error', 'google failed', ?, ?)`, pid, stay.LegacyOccupancyID.Int64, stay.ID, now, now, now, now); err != nil {
+		VALUES (?, ?, '2026-07-12', 'named_stay', ?, 'calendar-id', '2026-07-12', ?, ?, 'Upratovanie: Stage Five Guest', 'error', 'google failed', ?, ?)`, pid, stay.ID, NamedStayCleaningIdentity(pid, stay.ID, "2026-07-12"), now, now, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.DB.ExecContext(ctx, `
@@ -180,6 +180,47 @@ func TestCalendarNamedStayCountsAsSoldMatchesAnalyticsRules(t *testing.T) {
 	}
 }
 
+func TestCalendarNamedStayExposesCanonicalReviewAndOutcome(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	stay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Rejected No-show", StayType: StayTypeBookingCom,
+		CheckInDate: "2026-12-01", CheckOutDate: "2026-12-02", ReviewStatus: "needs_review",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateNamedStayReview(ctx, pid, stay.ID, 1, "rejected", "duplicate reservation"); err != nil {
+		t.Fatal(err)
+	}
+	outcome := StayOutcomeNoShow
+	canonical, err := st.UpdateNamedStayOutcome(ctx, pid, stay.ID, 1, &outcome, "guest did not arrive")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := st.ListCalendarNamedStays(ctx, pid, "2026-12-01", "2027-01-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("named stays=%d want 1", len(rows))
+	}
+	got := rows[0]
+	if got.ReviewStatus != canonical.ReviewStatus.String || got.ReviewStatus != "rejected" {
+		t.Fatalf("review status=%q want rejected", got.ReviewStatus)
+	}
+	if got.ReviewReason == nil || *got.ReviewReason != "duplicate reservation" {
+		t.Fatalf("review reason=%v", got.ReviewReason)
+	}
+	if got.Outcome == nil || *got.Outcome != StayOutcomeNoShow {
+		t.Fatalf("outcome=%v", got.Outcome)
+	}
+	if got.OutcomeReason == nil || *got.OutcomeReason != "guest did not arrive" {
+		t.Fatalf("outcome reason=%v", got.OutcomeReason)
+	}
+}
+
 func TestAvailabilityBlockStage5CreateRejectsNamedStayOverlap(t *testing.T) {
 	st, pid := recTestProperty(t)
 	ctx := context.Background()
@@ -215,6 +256,109 @@ func TestAvailabilityBlockStage5CreateRejectsNamedStayOverlap(t *testing.T) {
 	}
 	if block.BlockType != "off_market" || block.Reason == nil || *block.Reason != "Owner repair" {
 		t.Fatalf("bad block: %#v", block)
+	}
+}
+
+func TestNamedStayLifecycleRejectsActiveAvailabilityBlockOverlap(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	block, err := st.CreateAvailabilityBlock(ctx, pid, AvailabilityBlockInput{
+		BlockType: "closed", StartDate: "2026-10-10", EndDate: "2026-10-13", Reason: "Repair",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Adjacent guest", StayType: StayTypeExternal,
+		CheckInDate: "2026-10-08", CheckOutDate: "2026-10-10",
+	}); err != nil {
+		t.Fatalf("half-open adjacent create: %v", err)
+	}
+	if _, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Blocked guest", StayType: StayTypeExternal,
+		CheckInDate: "2026-10-09", CheckOutDate: "2026-10-11",
+	}); !errors.Is(err, ErrNamedStayOverlap) {
+		t.Fatalf("create overlap err=%v want %v", err, ErrNamedStayOverlap)
+	}
+
+	stay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Moving guest", StayType: StayTypeExternal,
+		CheckInDate: "2026-10-15", CheckOutDate: "2026-10-17",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{
+		CheckInDate: ptrString("2026-10-12"), CheckOutDate: ptrString("2026-10-14"),
+	}); !errors.Is(err, ErrNamedStayOverlap) {
+		t.Fatalf("range update overlap err=%v want %v", err, ErrNamedStayOverlap)
+	}
+
+	if _, err := st.UpdateNamedStayStatus(ctx, pid, stay.ID, NamedStayStatusCancelled, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{
+		CheckInDate: ptrString("2026-10-11"), CheckOutDate: ptrString("2026-10-13"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateNamedStayStatus(ctx, pid, stay.ID, NamedStayStatusActive, 1); !errors.Is(err, ErrNamedStayOverlap) {
+		t.Fatalf("reactivation overlap err=%v want %v", err, ErrNamedStayOverlap)
+	}
+
+	var ownerID int64
+	if err := st.DB.QueryRowContext(ctx, `SELECT owner_user_id FROM properties WHERE id = ?`, pid).Scan(&ownerID); err != nil {
+		t.Fatal(err)
+	}
+	other, err := st.CreateProperty(ctx, ownerID, "Other", "UTC", "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: other.ID, DisplayName: "Other property guest", StayType: StayTypeExternal,
+		CheckInDate: "2026-10-10", CheckOutDate: "2026-10-13",
+	}); err != nil {
+		t.Fatalf("cross-property create: %v", err)
+	}
+	if _, err := st.UpdateAvailabilityBlock(ctx, pid, block.ID, AvailabilityBlockInput{
+		BlockType: block.BlockType, StartDate: block.StartDate, EndDate: block.EndDate, Status: "cancelled",
+	}); !errors.Is(err, ErrNamedStayInvalidRange) {
+		t.Fatalf("invalid block status err=%v want %v", err, ErrNamedStayInvalidRange)
+	}
+
+	archived, err := st.UpdateAvailabilityBlock(ctx, pid, block.ID, AvailabilityBlockInput{
+		BlockType: block.BlockType, StartDate: block.StartDate, EndDate: block.EndDate,
+		Reason: "Repair", Status: "archived",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.Status != "archived" {
+		t.Fatalf("status=%q want archived", archived.Status)
+	}
+	listed, err := st.ListCalendarAvailabilityBlocks(ctx, pid, "2026-10-01", "2026-11-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Status != "archived" {
+		t.Fatalf("archived block not available for reactivation: %#v", listed)
+	}
+	freedStay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Freed guest", StayType: StayTypeExternal,
+		CheckInDate: "2026-10-10", CheckOutDate: "2026-10-12",
+	})
+	if err != nil {
+		t.Fatalf("archive did not free dates: %v", err)
+	}
+	if _, err := st.UpdateAvailabilityBlock(ctx, pid, block.ID, AvailabilityBlockInput{
+		BlockType: block.BlockType, StartDate: block.StartDate, EndDate: block.EndDate,
+		Reason: "Repair", Status: "active",
+	}); !errors.Is(err, ErrNamedStayOverlap) {
+		t.Fatalf("block reactivation err=%v want %v", err, ErrNamedStayOverlap)
+	}
+	if freedStay.Status != NamedStayStatusActive {
+		t.Fatalf("freed stay status=%q", freedStay.Status)
 	}
 }
 

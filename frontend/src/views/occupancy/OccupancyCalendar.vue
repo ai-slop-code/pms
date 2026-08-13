@@ -9,20 +9,17 @@ import UiKpiCard from '@/components/ui/UiKpiCard.vue'
 import UiSection from '@/components/ui/UiSection.vue'
 import UiTable from '@/components/ui/UiTable.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
-import { hasCleaningCalendarExclusion, stayOutcomeLabel, stayOutcomeTone } from './closure'
+import { stayOutcomeLabel, stayOutcomeTone } from './outcome'
 import { parseMonthKey } from '@/utils/month'
-import { nightsCount, activeNights } from './status'
 import type {
   CalendarAvailabilityBlock,
   CalendarNamedStay,
   CalendarRawBookingBlock,
-  Occupancy as Occ,
   OccupancyCalendarView,
 } from '@/api/types/occupancy'
 
 const props = defineProps<{
   month: string
-  occupancies: Occ[]
   calendar?: OccupancyCalendarView | null
 }>()
 
@@ -31,7 +28,6 @@ const emit = defineEmits<{
   prev: []
   next: []
   current: []
-  'cell-click': [payload: { dateKey: string; stays: Occ[] }]
   'calendar-cell-click': [payload: CalendarCellPayload]
 }>()
 
@@ -135,62 +131,24 @@ const calendarCells = computed<CalendarCell[]>(() => {
       })
       continue
     }
-    let count = 0
-    let checkIns = 0
-    let closedCount = 0
-    let externalSaleCount = 0
-    let cleaningExcludedCount = 0
-    let stayCount = 0
-    for (const o of props.occupancies) {
-      if (o.status === 'deleted_from_source' || o.superseded) continue
-      const inNight = activeNights(o).has(key)
-      if (inNight) {
-        stayCount++
-        if (hasCleaningCalendarExclusion(o)) cleaningExcludedCount++
-        if (o.closure_state === 'closed') closedCount++
-        else if (o.closure_state === 'external_sale') {
-          externalSaleCount++
-          count++
-        } else count++
-      }
-      if (o.start_at?.slice(0, 10) === key && o.closure_state !== 'closed') checkIns++
-    }
     days.push({
       ...emptyCell(),
       label: d,
       key,
-      count,
-      checkIns,
-      closedCount,
-      externalSaleCount,
-      cleaningExcludedCount,
-      stayCount,
     })
   }
   while (days.length % 7 !== 0) days.push(emptyCell())
   return days
 })
 
-function staysOnDay(dateKey: string): Occ[] {
-  return props.occupancies.filter((o) => {
-    if (o.status === 'deleted_from_source' || o.superseded) return false
-    return activeNights(o).has(dateKey)
-  })
-}
-
 function onCellClick(c: CalendarCell) {
-  if (props.calendar) {
-    if (!c.key) return
-    emit('calendar-cell-click', {
-      dateKey: c.key,
-      rawBlocks: c.rawBlocks,
-      namedStays: c.namedStays,
-      availabilityBlocks: c.availabilityBlocks,
-    })
-    return
-  }
-  if (!c.key || c.stayCount === 0) return
-  emit('cell-click', { dateKey: c.key, stays: staysOnDay(c.key) })
+  if (!props.calendar || !c.key) return
+  emit('calendar-cell-click', {
+    dateKey: c.key,
+    rawBlocks: c.rawBlocks,
+    namedStays: c.namedStays,
+    availabilityBlocks: c.availabilityBlocks,
+  })
 }
 
 function onCellKeydown(e: KeyboardEvent, c: CalendarCell) {
@@ -249,9 +207,7 @@ const calendarWeeks = computed<CalendarWeek[]>(() => {
   const weeks: CalendarWeek[] = []
   for (let i = 0; i < calendarCells.value.length; i += 7) {
     const cells = calendarCells.value.slice(i, i + 7)
-    const { staySegments, laneCount } = props.calendar
-      ? buildStaySegments(cells)
-      : { staySegments: [], laneCount: 0 }
+    const { staySegments, laneCount } = buildStaySegments(cells)
     weeks.push({ cells, staySegments, laneCount })
   }
   return weeks
@@ -260,24 +216,15 @@ const calendarWeeks = computed<CalendarWeek[]>(() => {
 function cellAriaLabel(c: CalendarCell): string {
   if (c.label === '' || !c.key) return ''
   const parts: string[] = [c.key]
-  if (props.calendar) {
-    if (c.namedStays.length)
-      parts.push(`${c.namedStays.length} named stay${c.namedStays.length > 1 ? 's' : ''}`)
-    if (c.rawBlocks.length && !c.namedStays.length)
-      parts.push(`${c.rawBlocks.length} raw booking block${c.rawBlocks.length > 1 ? 's' : ''}`)
-    if (c.availabilityBlocks.length)
-      parts.push(
-        `${c.availabilityBlocks.length} availability block${c.availabilityBlocks.length > 1 ? 's' : ''}`,
-      )
-    if (!c.stayCount) parts.push('empty night')
-    return parts.join(', ')
-  }
-  if (c.count) parts.push(`${c.count} occupied night${c.count > 1 ? 's' : ''}`)
-  else parts.push('no occupancy')
-  if (c.closedCount) parts.push(`${c.closedCount} closed`)
-  if (c.externalSaleCount) parts.push(`${c.externalSaleCount} externally sold`)
-  if (c.cleaningExcludedCount) parts.push(`${c.cleaningExcludedCount} with no cleaning event`)
-  if (c.checkIns) parts.push(`${c.checkIns} check-in${c.checkIns > 1 ? 's' : ''}`)
+  if (c.namedStays.length)
+    parts.push(`${c.namedStays.length} named stay${c.namedStays.length > 1 ? 's' : ''}`)
+  if (c.rawBlocks.length && !c.namedStays.length)
+    parts.push(`${c.rawBlocks.length} raw booking block${c.rawBlocks.length > 1 ? 's' : ''}`)
+  if (c.availabilityBlocks.length)
+    parts.push(
+      `${c.availabilityBlocks.length} availability block${c.availabilityBlocks.length > 1 ? 's' : ''}`,
+    )
+  if (!c.stayCount) parts.push('empty night')
   return parts.join(', ')
 }
 
@@ -316,7 +263,8 @@ function stayBandTitle(segment: CalendarStaySegment) {
     segment.nukiError ? 'Nuki error' : '',
     segment.cleaningError ? 'cleaning error' : '',
   ].filter(Boolean)
-  const continuation = segment.continuesBefore || segment.continuesAfter ? 'continues across week boundary' : ''
+  const continuation =
+    segment.continuesBefore || segment.continuesAfter ? 'continues across week boundary' : ''
   return [
     `${stayChipLabel(segment.stay)} · ${segment.stay.check_in_date} → ${segment.stay.check_out_date}`,
     continuation,
@@ -347,34 +295,13 @@ const staysInMonth = computed(() =>
             .filter(Boolean)
             .join(', '),
           hasPayoutData: false,
-          outcome: null,
+          outcome: s.outcome,
           cleaningExcluded: !s.cleaning_required,
           stayType: s.stay_type,
           nukiStatus: s.nuki_generation_status,
         }))
         .sort((a, b) => a.start.localeCompare(b.start))
-    : props.occupancies
-        .filter((o) => o.status !== 'deleted_from_source' && !o.superseded)
-        .map((o) => ({
-          id: o.id,
-          summary: o.raw_summary || 'Stay',
-          start: o.start_at?.slice(0, 10),
-          end: o.end_at?.slice(0, 10),
-          nights: nightsCount(o.start_at, o.end_at),
-          status: o.status,
-          uid: o.source_event_uid,
-          hasPayoutData: !!o.has_payout_data,
-          outcome: o.stay_outcome,
-          cleaningExcluded: hasCleaningCalendarExclusion(o),
-          stayType:
-            o.closure_state === 'closed'
-              ? 'closed'
-              : o.closure_state === 'external_sale'
-                ? 'external'
-                : 'legacy',
-          nukiStatus: '',
-        }))
-        .sort((a, b) => a.start.localeCompare(b.start)),
+    : [],
 )
 
 const monthNightSummary = computed(() => {
@@ -398,18 +325,7 @@ const monthNightSummary = computed(() => {
       else if (unavailable) closedNights++
       else if (props.calendar.raw_blocks.some((b) => b.status === 'active' && b.covered_nights.includes(key)))
         rawOnlyNights++
-      continue
     }
-    let occupied = false
-    let closed = false
-    for (const o of props.occupancies) {
-      if (o.status === 'deleted_from_source' || o.status === 'cancelled' || o.superseded) continue
-      if (!activeNights(o).has(key)) continue
-      if (o.closure_state === 'closed') closed = true
-      else occupied = true // active or external_sale both count as sold per PMS_14 §4
-    }
-    if (occupied) occupiedNights++
-    else if (closed) closedNights++
   }
   // Bookable = calendar days minus closed nights (PMS_14 §4).
   const bookable = Math.max(0, daysInMonth - closedNights)
@@ -468,7 +384,7 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
 
     <div class="kpi-grid">
       <UiKpiCard
-        :label="calendar ? 'Named guest nights' : 'Occupied nights'"
+        label="Named guest nights"
         :value="monthNightSummary.occupiedNights"
         :hint="`of ${monthNightSummary.daysInMonth} days`"
       />
@@ -478,18 +394,7 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
         tone="warning"
         hint="not bookable"
       />
-      <UiKpiCard
-        v-if="calendar"
-        :label="calendar ? 'Raw-only nights' : 'Unoccupied nights'"
-        :value="calendar ? monthNightSummary.rawOnlyNights : monthNightSummary.unoccupiedNights"
-        tone="default"
-      />
-      <UiKpiCard
-        v-if="!calendar"
-        label="Unoccupied nights"
-        :value="monthNightSummary.unoccupiedNights"
-        tone="default"
-      />
+      <UiKpiCard label="Raw-only nights" :value="monthNightSummary.rawOnlyNights" tone="default" />
       <UiKpiCard
         label="Occupancy"
         :value="`${monthNightSummary.occupancyPct}%`"
@@ -516,8 +421,8 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
             :key="i"
             class="calendar__cell"
             :style="{ gridColumn: i + 1, gridRow: '1' }"
-            :role="c.label === '' ? 'presentation' : calendar || c.stayCount ? 'button' : 'gridcell'"
-            :tabindex="calendar && c.label !== '' ? 0 : c.stayCount ? 0 : undefined"
+            :role="c.label === '' ? 'presentation' : 'button'"
+            :tabindex="c.label !== '' ? 0 : undefined"
             :aria-label="cellAriaLabel(c) || undefined"
             :class="{
               'calendar__cell--empty': c.label === '',
@@ -525,75 +430,41 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
               'calendar__cell--occupied': !!c.count,
               'calendar__cell--closed': !!c.closedCount && !c.count,
               'calendar__cell--external-sale': !!c.externalSaleCount,
-              'calendar__cell--raw': calendar && !!c.rawBlocks.length && !c.namedStays.length,
-              'calendar__cell--clickable': calendar ? c.label !== '' : !!c.stayCount,
+              'calendar__cell--raw': !!c.rawBlocks.length && !c.namedStays.length,
+              'calendar__cell--clickable': c.label !== '',
             }"
             @click="onCellClick(c)"
             @keydown="onCellKeydown($event, c)"
           >
             <template v-if="c.label !== ''">
               <div class="calendar__day">{{ c.label }}</div>
-              <template v-if="calendar">
+              <div
+                class="calendar__band-space"
+                :style="{ height: `${Math.max(1, week.laneCount) * stayLaneHeight}px` }"
+              >
                 <div
-                  class="calendar__band-space"
-                  :style="{ height: `${Math.max(1, week.laneCount) * stayLaneHeight}px` }"
-                >
-                  <div
-                    v-if="c.rawBlocks.length && !c.namedStays.length"
-                    class="calendar__chip calendar__chip--raw"
-                    aria-hidden="true"
-                    :title="rawBlockTitle(c.rawBlocks)"
-                  >
-                    raw{{ c.rawBlocks.length > 1 ? ` ×${c.rawBlocks.length}` : '' }}
-                  </div>
-                </div>
-                <div
-                  v-if="c.availabilityBlocks.length"
-                  class="calendar__chip calendar__chip--closed"
+                  v-if="c.rawBlocks.length && !c.namedStays.length"
+                  class="calendar__chip calendar__chip--raw"
                   aria-hidden="true"
+                  :title="rawBlockTitle(c.rawBlocks)"
                 >
-                  blocked
+                  raw{{ c.rawBlocks.length > 1 ? ` ×${c.rawBlocks.length}` : '' }}
                 </div>
-                <div
-                  v-if="c.cleaningErrorCount && !c.namedStays.length"
-                  class="calendar__chip calendar__chip--danger"
-                  aria-hidden="true"
-                >
-                  Cleaning error
-                </div>
-              </template>
-              <template v-else>
-                <div v-if="c.count" class="calendar__chip" aria-hidden="true">
-                  {{ c.count }} night{{ c.count > 1 ? 's' : '' }}
-                </div>
-                <div
-                  v-if="c.closedCount"
-                  class="calendar__chip calendar__chip--closed"
-                  aria-hidden="true"
-                  :title="`${c.closedCount} closed night${c.closedCount > 1 ? 's' : ''}`"
-                >
-                  closed
-                </div>
-                <div
-                  v-if="c.externalSaleCount"
-                  class="calendar__chip calendar__chip--external"
-                  aria-hidden="true"
-                  :title="`${c.externalSaleCount} externally-sold night${c.externalSaleCount > 1 ? 's' : ''}`"
-                >
-                  ext. sale
-                </div>
-                <div
-                  v-if="c.cleaningExcludedCount"
-                  class="calendar__chip calendar__chip--cleaning-excluded"
-                  aria-hidden="true"
-                  :title="`${c.cleaningExcludedCount} stay${c.cleaningExcludedCount > 1 ? 's' : ''} with no cleaning event`"
-                >
-                  No cleaning event
-                </div>
-                <div v-if="c.checkIns" class="calendar__chip calendar__chip--checkin" aria-hidden="true">
-                  {{ c.checkIns }} check-in{{ c.checkIns > 1 ? 's' : '' }}
-                </div>
-              </template>
+              </div>
+              <div
+                v-if="c.availabilityBlocks.length"
+                class="calendar__chip calendar__chip--closed"
+                aria-hidden="true"
+              >
+                blocked
+              </div>
+              <div
+                v-if="c.cleaningErrorCount && !c.namedStays.length"
+                class="calendar__chip calendar__chip--danger"
+                aria-hidden="true"
+              >
+                Cleaning error
+              </div>
             </template>
           </div>
           <button
@@ -607,19 +478,25 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
             :aria-label="stayBandTitle(segment)"
             @click.stop="onStaySegmentClick(week, segment)"
           >
-            <span v-if="segment.continuesBefore" class="calendar__stay-continuation" aria-hidden="true">‹</span>
+            <span v-if="segment.continuesBefore" class="calendar__stay-continuation" aria-hidden="true"
+              >‹</span
+            >
             <span class="calendar__stay-label">{{ stayChipLabel(segment.stay) }}</span>
-            <span v-if="segment.sourceWarning || segment.nukiError || segment.cleaningError" class="calendar__stay-alert" aria-hidden="true">!</span>
-            <span v-if="segment.continuesAfter" class="calendar__stay-continuation" aria-hidden="true">›</span>
+            <span
+              v-if="segment.sourceWarning || segment.nukiError || segment.cleaningError"
+              class="calendar__stay-alert"
+              aria-hidden="true"
+              >!</span
+            >
+            <span v-if="segment.continuesAfter" class="calendar__stay-continuation" aria-hidden="true"
+              >›</span
+            >
           </button>
         </div>
       </div>
       <p class="calendar__note">
-        {{
-          calendar
-            ? 'Raw Booking.com coverage is shown until a named stay covers the night. Connected ribbons represent one continuous stay.'
-            : 'Cells show nightly occupancy. One stay can span multiple nights.'
-        }}
+        Raw Booking.com coverage is shown until a named stay covers the night. Connected ribbons represent one
+        continuous stay.
       </p>
     </UiCard>
 
@@ -631,10 +508,10 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
             <th>Check-out</th>
             <th class="num">Nights</th>
             <th>Summary</th>
-            <th v-if="calendar">Type</th>
+            <th>Type</th>
             <th>Outcome</th>
             <th>Cleaning</th>
-            <th>{{ calendar ? 'Nuki' : 'Payout' }}</th>
+            <th>Nuki</th>
           </tr>
         </template>
         <tr v-for="s in staysInMonth" :key="s.id">
@@ -644,7 +521,7 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
             <strong>{{ s.nights }}</strong>
           </td>
           <td>{{ s.summary }}</td>
-          <td v-if="calendar">{{ stayTypeLabel(s.stayType) }}</td>
+          <td>{{ stayTypeLabel(s.stayType) }}</td>
           <td>
             <UiBadge v-if="s.outcome" :tone="stayOutcomeTone(s.outcome)">
               {{ stayOutcomeLabel(s.outcome) }}
@@ -657,16 +534,12 @@ function rawBlockTitle(blocks: CalendarRawBookingBlock[]) {
           </td>
           <td>
             <UiBadge
-              v-if="calendar"
               :tone="
                 s.nukiStatus === 'error' ? 'danger' : s.nukiStatus === 'generated' ? 'success' : 'neutral'
               "
               dot
             >
               {{ s.nukiStatus || 'not_applicable' }}
-            </UiBadge>
-            <UiBadge v-else :tone="s.hasPayoutData ? 'success' : 'neutral'" dot>
-              {{ s.hasPayoutData ? 'Linked' : 'Pending' }}
             </UiBadge>
           </td>
         </tr>

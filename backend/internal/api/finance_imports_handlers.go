@@ -273,13 +273,23 @@ func (s *Server) postFinanceImportPreview(w http.ResponseWriter, r *http.Request
 			StatusChanged: outcome.StatusChanged,
 			ChangedFields: outcome.Changed,
 		}
+		stay, err := s.Store.FindNamedStayForFinanceStayDates(r.Context(), pid, row.ReferenceNumber, row.CheckInDate, row.CheckOutDate, row.GuestName)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "match named stay")
+			return
+		}
+		entry.NamedStayMatch = stay
+		if outcome.Action == statements.ActionInsert && stay == nil {
+			preview.Rejected = append(preview.Rejected, statements.Rejection{
+				Reason: "no matching named stay for " + row.ReferenceNumber,
+			})
+			continue
+		}
 		if parsed.Source == statements.SourcePayout {
 			entry.BookingIncomeID = bookingIncomeID
 			entry.NetCents = row.NetCents
 			entry.PayoutDate = row.PayoutDate
 			entry.PayoutID = row.PayoutID
-			stay, _ := s.Store.FindNamedStayForFinanceStayDates(r.Context(), pid, row.ReferenceNumber, row.CheckInDate, row.CheckOutDate, row.GuestName)
-			entry.NamedStayMatch = stay
 		}
 		preview.Plan = append(preview.Plan, entry)
 	}
@@ -407,7 +417,11 @@ func (s *Server) postFinanceImportCommit(w http.ResponseWriter, r *http.Request)
 	}
 
 	for _, entry := range preview.Plan {
-		bookingID, err := s.Store.UpsertFinanceBookingFromCanonical(r.Context(), pid, entry.ExistingID, entry.Result)
+		var namedStayID int64
+		if entry.NamedStayMatch != nil {
+			namedStayID = entry.NamedStayMatch.ID
+		}
+		bookingID, err := s.Store.UpsertFinanceBookingFromCanonical(r.Context(), pid, entry.ExistingID, namedStayID, entry.Result)
 		if err != nil {
 			imp.RowCountRejected++
 			continue
@@ -460,11 +474,11 @@ func (s *Server) postFinanceImportCommit(w http.ResponseWriter, r *http.Request)
 
 // commitPayoutBookingSideEffects handles the cash-basis bookkeeping that
 // the legacy importFinanceBookingPayouts handler used to do inline:
-// a finance_transactions row plus an occupancy mapping. The booking
+// a finance_transactions row plus a named-stay mapping. The booking
 // row itself was already written by UpsertFinanceBookingFromCanonical.
 func (s *Server) commitPayoutBookingSideEffects(ctx context.Context, propertyID, bookingID int64, entry financePreviewPlanEntry, loc *time.Location) {
-	// Resolve named-stay mapping for new payouts. Finance imports must not
-	// silently create stay-like legacy occupancies or named stays.
+	// Existing rows may still need the match applied. Inserts already carry
+	// this identity in their canonical write.
 	stay := entry.NamedStayMatch
 	if stay != nil {
 		_ = s.Store.LinkBookingToNamedStay(ctx, propertyID, bookingID, stay.ID)

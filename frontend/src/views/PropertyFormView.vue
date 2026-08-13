@@ -43,7 +43,7 @@ function cancel() {
   <div class="property-form-page">
     <UiPageHeader
       title="New property"
-      lede="Create a property to start importing occupancies and finance data."
+      lede="Create a property to start importing raw Booking.com blocks, named stays, and finance data."
     />
 
     <UiInlineBanner v-if="error" tone="danger" :title="error" />

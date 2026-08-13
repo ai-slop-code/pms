@@ -20,6 +20,8 @@ func OpenTestDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	// Runtime tests use the final schema so every supported workflow is
+	// exercised with the legacy occupancy objects absent.
 	if err := migrate.Up(db); err != nil {
 		t.Fatal(err)
 	}

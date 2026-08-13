@@ -7,28 +7,11 @@ import (
 	"time"
 )
 
-func seedNukiGuestEntryOccupancy(t *testing.T, st *Store, propertyID int64, runID int64, uid string, startDay int) int64 {
+func seedNukiGuestEntryStay(t *testing.T, st *Store, propertyID int64, uid string, startDay int) int64 {
 	t.Helper()
 	ctx := context.Background()
 	start := time.Date(2026, 4, startDay, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 0, 2)
-	occ := &Occupancy{
-		PropertyID:     propertyID,
-		SourceType:     "booking_ics",
-		SourceEventUID: uid,
-		StartAt:        start,
-		EndAt:          end,
-		Status:         "active",
-		RawSummary:     sql.NullString{String: uid, Valid: true},
-		ContentHash:    "h-" + uid,
-	}
-	if err := st.UpsertOccupancy(ctx, occ, runID); err != nil {
-		t.Fatal(err)
-	}
-	row, err := st.GetOccupancyBySourceEventUID(ctx, propertyID, uid)
-	if err != nil || row == nil {
-		t.Fatalf("get after upsert (uid=%s): %v", uid, err)
-	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := st.DB.ExecContext(ctx, `
 		INSERT INTO named_stays (property_id, display_name, stay_type, check_in_date, check_out_date, status, cleaning_required, source_channel, source_reference, review_status, nuki_generation_status, created_at, updated_at)
@@ -41,12 +24,7 @@ func seedNukiGuestEntryOccupancy(t *testing.T, st *Store, propertyID int64, runI
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DB.ExecContext(ctx, `
-		INSERT INTO occupancy_stay_migration_map (old_occupancy_id, property_id, named_stay_id, migration_kind, notes, created_at)
-		VALUES (?, ?, ?, 'named_stay', 'test_fixture', ?)`, row.ID, propertyID, stayID, now); err != nil {
-		t.Fatal(err)
-	}
-	return row.ID
+	return stayID
 }
 
 func TestUpsertNukiGuestDailyEntry_DedupAndOverwrite(t *testing.T) {
@@ -61,26 +39,22 @@ func TestUpsertNukiGuestDailyEntry_DedupAndOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID, err := st.StartOccupancySyncRun(ctx, p.ID, "manual")
-	if err != nil {
-		t.Fatal(err)
-	}
-	occID := seedNukiGuestEntryOccupancy(t, st, p.ID, runID, "uid-A", 10)
+	stayID := seedNukiGuestEntryStay(t, st, p.ID, "uid-A", 10)
 
-	// Insert two unlocks for the same (occupancy, day). The reconciler is
+	// Insert two unlocks for the same (named stay, day). The reconciler is
 	// supposed to feed the earlier one; simulate it overwriting a stale
 	// later value.
 	later := time.Date(2026, 4, 10, 18, 30, 0, 0, time.UTC)
 	earlier := time.Date(2026, 4, 10, 14, 5, 0, 0, time.UTC)
 	if err := st.UpsertNukiGuestDailyEntry(ctx, &NukiGuestDailyEntry{
-		PropertyID: p.ID, OccupancyID: sql.NullInt64{Int64: occID, Valid: true}, DayDate: "2026-04-10",
+		PropertyID: p.ID, NamedStayID: sql.NullInt64{Int64: stayID, Valid: true}, DayDate: "2026-04-10",
 		FirstEntryAt:       later,
 		NukiEventReference: sql.NullString{String: "evt-late", Valid: true},
 	}); err != nil {
 		t.Fatalf("upsert later: %v", err)
 	}
 	if err := st.UpsertNukiGuestDailyEntry(ctx, &NukiGuestDailyEntry{
-		PropertyID: p.ID, OccupancyID: sql.NullInt64{Int64: occID, Valid: true}, DayDate: "2026-04-10",
+		PropertyID: p.ID, NamedStayID: sql.NullInt64{Int64: stayID, Valid: true}, DayDate: "2026-04-10",
 		FirstEntryAt:       earlier,
 		NukiEventReference: sql.NullString{String: "evt-early", Valid: true},
 	}); err != nil {
@@ -91,7 +65,7 @@ func TestUpsertNukiGuestDailyEntry_DedupAndOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("rows=%d want 1 (dedup by (occ,day))", len(rows))
+		t.Fatalf("rows=%d want 1 (dedup by (stay,day))", len(rows))
 	}
 	if !rows[0].FirstEntryAt.Equal(earlier) {
 		t.Fatalf("FirstEntryAt=%v want %v (overwrite must apply)", rows[0].FirstEntryAt, earlier)
@@ -103,7 +77,6 @@ func TestUpsertNukiGuestDailyEntry_DedupAndOverwrite(t *testing.T) {
 
 func TestUpsertNukiGuestDailyEntry_UsesNamedStayIdentityWithoutOccupancy(t *testing.T) {
 	st := testStore(t)
-	st.OccupancyLegacyWriteDisabled = true
 	ctx := context.Background()
 	u, err := st.CreateUser(ctx, "named-only-guest-log@test.local", "hash", "owner")
 	if err != nil {
@@ -135,8 +108,20 @@ func TestUpsertNukiGuestDailyEntry_UsesNamedStayIdentityWithoutOccupancy(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].OccupancyID.Valid || rows[0].NamedStayID.Int64 != stay.ID || !rows[0].FirstEntryAt.Equal(entry.FirstEntryAt) {
+	if len(rows) != 1 || rows[0].NamedStayID.Int64 != stay.ID || !rows[0].FirstEntryAt.Equal(entry.FirstEntryAt) {
 		t.Fatalf("named-only guest entry: %+v", rows)
+	}
+}
+
+func TestUpsertNukiGuestDailyEntry_RequiresNamedStayID(t *testing.T) {
+	st := testStore(t)
+	err := st.UpsertNukiGuestDailyEntry(context.Background(), &NukiGuestDailyEntry{
+		PropertyID:   1,
+		DayDate:      "2026-04-10",
+		FirstEntryAt: time.Date(2026, 4, 10, 15, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("expected missing named_stay_id to be rejected")
 	}
 }
 
@@ -152,47 +137,29 @@ func TestListNukiGuestDailyEntriesInRange_FiltersClosedAndCancelled(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID, err := st.StartOccupancySyncRun(ctx, p.ID, "manual")
-	if err != nil {
-		t.Fatal(err)
-	}
-	activeID := seedNukiGuestEntryOccupancy(t, st, p.ID, runID, "uid-active", 10)
-	closedID := seedNukiGuestEntryOccupancy(t, st, p.ID, runID, "uid-closed", 12)
-	externalID := seedNukiGuestEntryOccupancy(t, st, p.ID, runID, "uid-external", 14)
+	activeID := seedNukiGuestEntryStay(t, st, p.ID, "uid-active", 10)
+	closedStayID := seedNukiGuestEntryStay(t, st, p.ID, "uid-closed", 12)
+	externalID := seedNukiGuestEntryStay(t, st, p.ID, "uid-external", 14)
 
-	if err := st.CloseOccupancy(ctx, p.ID, closedID, u.ID, "owner stay", "owner_stay"); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	closedStayID, err := st.ResolveNamedStayIDForOccupancy(ctx, p.ID, closedID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := st.DB.ExecContext(ctx, `UPDATE named_stays SET stay_type = 'maintenance' WHERE id = ?`, closedStayID); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.MarkOccupancyExternalSale(ctx, p.ID, externalID, u.ID, 12000, "EUR", "direct", ""); err != nil {
-		t.Fatalf("external_sale: %v", err)
-	}
-	externalStayID, err := st.ResolveNamedStayIDForOccupancy(ctx, p.ID, externalID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.DB.ExecContext(ctx, `UPDATE named_stays SET stay_type = 'external' WHERE id = ?`, externalStayID); err != nil {
+	if _, err := st.DB.ExecContext(ctx, `UPDATE named_stays SET stay_type = 'external' WHERE id = ?`, externalID); err != nil {
 		t.Fatal(err)
 	}
 
-	insert := func(occID int64, day string, hour int) {
+	insert := func(stayID int64, day string, hour int) {
 		t.Helper()
 		ts := time.Date(2026, 4, parseDayHelper(day), hour, 0, 0, 0, time.UTC)
 		if err := st.UpsertNukiGuestDailyEntry(ctx, &NukiGuestDailyEntry{
-			PropertyID: p.ID, OccupancyID: sql.NullInt64{Int64: occID, Valid: true}, DayDate: day,
+			PropertyID: p.ID, NamedStayID: sql.NullInt64{Int64: stayID, Valid: true}, DayDate: day,
 			FirstEntryAt: ts,
 		}); err != nil {
-			t.Fatalf("upsert (%d,%s): %v", occID, day, err)
+			t.Fatalf("upsert (%d,%s): %v", stayID, day, err)
 		}
 	}
 	insert(activeID, "2026-04-10", 14)
-	insert(closedID, "2026-04-12", 15)
+	insert(closedStayID, "2026-04-12", 15)
 	insert(externalID, "2026-04-14", 16)
 
 	rows, err := st.ListNukiGuestDailyEntriesInRange(ctx, p.ID, "2026-04-01", "2026-04-30")
@@ -204,13 +171,13 @@ func TestListNukiGuestDailyEntriesInRange_FiltersClosedAndCancelled(t *testing.T
 	}
 	got := map[int64]bool{}
 	for _, r := range rows {
-		got[r.OccupancyID.Int64] = true
+		got[r.NamedStayID.Int64] = true
 	}
 	if !got[activeID] || !got[externalID] {
-		t.Fatalf("missing expected occupancy ids: %v", got)
+		t.Fatalf("missing expected stay ids: %v", got)
 	}
-	if got[closedID] {
-		t.Fatalf("closed occupancy must be excluded")
+	if got[closedStayID] {
+		t.Fatalf("maintenance stay must be excluded")
 	}
 
 	// Range narrowing: limit to 2026-04-13..2026-04-15 — only external row.
@@ -218,7 +185,7 @@ func TestListNukiGuestDailyEntriesInRange_FiltersClosedAndCancelled(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || !rows[0].OccupancyID.Valid || rows[0].OccupancyID.Int64 != externalID {
+	if len(rows) != 1 || rows[0].NamedStayID.Int64 != externalID {
 		t.Fatalf("range filter: rows=%d want 1 (external only)", len(rows))
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 )
@@ -12,7 +11,7 @@ import (
 func stage4RawBlock(t *testing.T, st *Store, propertyID int64, uid, checkIn, checkOut string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	if err := st.ReconcileBookingICSSync(ctx, propertyID, UpstreamSourceBookingICS, []DesiredBlock{block(uid, checkIn, checkOut)}, dt("2026-07-01"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+	if err := st.ReconcileBookingICSSync(ctx, propertyID, UpstreamSourceBookingICS, []DesiredBlock{block(uid, checkIn, checkOut)}, dt("2026-07-01"), &SyncCounters{}); err != nil {
 		t.Fatal(err)
 	}
 	var blockID int64
@@ -37,14 +36,18 @@ func TestNamedStayStage4_PromoteRawBlockPartialPreservesRawCoverage(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stay.ID == 0 || !stay.LegacyOccupancyID.Valid {
-		t.Fatalf("stay ids not populated: %#v", stay)
+	if stay.ID == 0 {
+		t.Fatalf("stay id not populated: %#v", stay)
 	}
 	if !stay.CleaningRequired {
 		t.Fatal("booking_com cleaning_required=false, want true")
 	}
 	if !stay.NukiGenerationStatus.Valid || stay.NukiGenerationStatus.String != NukiGenerationPending {
 		t.Fatalf("nuki_generation_status=%v want pending", stay.NukiGenerationStatus)
+	}
+	wantFirstKnown := dt("2026-07-01")
+	if !stay.FirstKnownAt.Equal(wantFirstKnown) {
+		t.Fatalf("first_known_at=%s want raw imported_at %s", stay.FirstKnownAt, wantFirstKnown)
 	}
 
 	var namedNights int
@@ -68,30 +71,12 @@ func TestNamedStayStage4_PromoteRawBlockPartialPreservesRawCoverage(t *testing.T
 	if linkStatus != "active" {
 		t.Fatalf("link_status=%s want active", linkStatus)
 	}
-	var mappedStayID int64
-	if err := st.DB.QueryRowContext(ctx, `SELECT named_stay_id FROM occupancy_stay_migration_map WHERE old_occupancy_id = ?`, stay.LegacyOccupancyID.Int64).Scan(&mappedStayID); err != nil {
+	var legacyTables int
+	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'occupancies'`).Scan(&legacyTables); err != nil {
 		t.Fatal(err)
 	}
-	if mappedStayID != stay.ID {
-		t.Fatalf("mapped stay id=%d want %d", mappedStayID, stay.ID)
-	}
-	var legacyNamedNights int
-	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM occupancy_nights WHERE occupancy_id = ? AND active = 1`, stay.LegacyOccupancyID.Int64).Scan(&legacyNamedNights); err != nil {
-		t.Fatal(err)
-	}
-	if legacyNamedNights != 2 {
-		t.Fatalf("legacy named occupancy nights=%d want 2", legacyNamedNights)
-	}
-	var legacyRawNights int
-	if err := st.DB.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM occupancy_nights n
-		JOIN occupancies o ON o.id = n.occupancy_id
-		WHERE o.property_id = ? AND o.source_event_uid = ? AND n.active = 1`, pid, "stage4-partial@booking.com").Scan(&legacyRawNights); err != nil {
-		t.Fatal(err)
-	}
-	if legacyRawNights != 1 {
-		t.Fatalf("legacy raw leftover nights=%d want 1", legacyRawNights)
+	if legacyTables != 0 {
+		t.Fatalf("legacy occupancy tables=%d want 0", legacyTables)
 	}
 
 	updated, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{
@@ -107,12 +92,6 @@ func TestNamedStayStage4_PromoteRawBlockPartialPreservesRawCoverage(t *testing.T
 	}
 	if linkedCheckIn != "2026-07-09" || linkedCheckOut != "2026-07-11" {
 		t.Fatalf("linked range=%s/%s want 2026-07-09/2026-07-11", linkedCheckIn, linkedCheckOut)
-	}
-	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM occupancy_nights WHERE occupancy_id = ? AND active = 1`, updated.LegacyOccupancyID.Int64).Scan(&legacyNamedNights); err != nil {
-		t.Fatal(err)
-	}
-	if legacyNamedNights != 2 {
-		t.Fatalf("legacy named occupancy nights after update=%d want 2", legacyNamedNights)
 	}
 }
 
@@ -180,12 +159,11 @@ func TestNamedStayStage4_OverlapAndStatusLifecycle(t *testing.T) {
 	}
 }
 
-func TestNamedStayStage11_LegacyWriteDisabledDoesNotCreateDerivedOccupancy(t *testing.T) {
+func TestNamedStayCreateDoesNotCreateDerivedOccupancy(t *testing.T) {
 	st, pid := recTestProperty(t)
-	st.OccupancyLegacyWriteDisabled = true
 	ctx := context.Background()
 
-	stay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+	_, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
 		PropertyID:      pid,
 		DisplayName:     "Stage Eleven Guest",
 		StayType:        StayTypeExternal,
@@ -196,22 +174,14 @@ func TestNamedStayStage11_LegacyWriteDisabledDoesNotCreateDerivedOccupancy(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stay.LegacyOccupancyID.Valid {
-		t.Fatalf("legacy occupancy id=%d, want null", stay.LegacyOccupancyID.Int64)
-	}
-	var legacyRows int
-	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM occupancies WHERE property_id = ? AND source_event_uid = ?`, pid, "named_stay:"+fmt.Sprint(stay.ID)).Scan(&legacyRows); err != nil {
+	var legacyTables int
+	if err := st.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_schema
+		WHERE type = 'table' AND name IN ('occupancies', 'occupancy_stay_migration_map')`).Scan(&legacyTables); err != nil {
 		t.Fatal(err)
 	}
-	if legacyRows != 0 {
-		t.Fatalf("derived legacy occupancies=%d want 0", legacyRows)
-	}
-	var mapRows int
-	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM occupancy_stay_migration_map WHERE property_id = ? AND named_stay_id = ?`, pid, stay.ID).Scan(&mapRows); err != nil {
-		t.Fatal(err)
-	}
-	if mapRows != 0 {
-		t.Fatalf("legacy migration map rows=%d want 0", mapRows)
+	if legacyTables != 0 {
+		t.Fatalf("legacy occupancy tables=%d want 0", legacyTables)
 	}
 }
 
@@ -269,7 +239,7 @@ func TestSourceLinkHealth_DisappearShrinkAndRecover(t *testing.T) {
 	}
 	assertLink("active", "")
 
-	counters := &SyncCounters{RawBlocksDualWrite: true}
+	counters := &SyncCounters{}
 	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, nil, dt("2026-07-19"), counters); err != nil {
 		t.Fatal(err)
 	}
@@ -285,11 +255,11 @@ func TestSourceLinkHealth_DisappearShrinkAndRecover(t *testing.T) {
 		t.Fatalf("sync mutated named stay: %+v", unchanged)
 	}
 
-	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{block(uid, "2026-07-20", "2026-07-22")}, dt("2026-07-19"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{block(uid, "2026-07-20", "2026-07-22")}, dt("2026-07-19"), &SyncCounters{}); err != nil {
 		t.Fatal(err)
 	}
 	assertLink("conflict", "raw_coverage_gap")
-	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{block(uid, "2026-07-20", "2026-07-23")}, dt("2026-07-19"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{block(uid, "2026-07-20", "2026-07-23")}, dt("2026-07-19"), &SyncCounters{}); err != nil {
 		t.Fatal(err)
 	}
 	assertLink("active", "")
@@ -316,7 +286,7 @@ func TestNamedStayUpdate_AllowsUnrelatedEditsWithSourceWarnings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, tc.desiredBlocks, dt("2026-07-19"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+			if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, tc.desiredBlocks, dt("2026-07-19"), &SyncCounters{}); err != nil {
 				t.Fatal(err)
 			}
 			if tc.nullSourceID {
@@ -365,7 +335,7 @@ func TestNamedStayUpdate_AllowsUnionOfAdjacentRawBlocks(t *testing.T) {
 	ctx := context.Background()
 	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{
 		block("union-a", "2026-08-10", "2026-08-12"), block("union-b", "2026-08-12", "2026-08-14"),
-	}, dt("2026-07-01"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+	}, dt("2026-07-01"), &SyncCounters{}); err != nil {
 		t.Fatal(err)
 	}
 	var firstID, secondID int64
@@ -406,7 +376,7 @@ func TestNamedStayUpdate_RejectsGapInRawBlockUnion(t *testing.T) {
 	ctx := context.Background()
 	if err := st.ReconcileBookingICSSync(ctx, pid, UpstreamSourceBookingICS, []DesiredBlock{
 		block("gap-a", "2026-09-10", "2026-09-12"), block("gap-b", "2026-09-13", "2026-09-15"),
-	}, dt("2026-07-01"), &SyncCounters{RawBlocksDualWrite: true}); err != nil {
+	}, dt("2026-07-01"), &SyncCounters{}); err != nil {
 		t.Fatal(err)
 	}
 	var firstID, secondID int64
@@ -430,5 +400,107 @@ func TestNamedStayUpdate_RejectsGapInRawBlockUnion(t *testing.T) {
 	_, err = st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{CheckOutDate: ptrString("2026-09-15")})
 	if !errors.Is(err, ErrNamedStayOutsideBlock) {
 		t.Fatalf("gap update error=%v", err)
+	}
+}
+
+func TestNamedStayLifecycleMetadata(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	stay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Lifecycle Guest", StayType: StayTypeExternal,
+		CheckInDate: "2026-10-10", CheckOutDate: "2026-10-12", CreatedByUserID: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stay.FirstKnownAt.IsZero() {
+		t.Fatal("first_known_at was not set on create")
+	}
+
+	outcome := StayOutcomeNoShow
+	stay, err = st.UpdateNamedStayOutcome(ctx, pid, stay.ID, 1, &outcome, "  guest did not arrive  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stay.StayOutcome.String != StayOutcomeNoShow || stay.StayOutcomeReason.String != "guest did not arrive" ||
+		stay.StayOutcomeActorUserID.Int64 != 1 || !stay.StayOutcomeMarkedAt.Valid {
+		t.Fatalf("outcome metadata=%+v", stay)
+	}
+
+	stay, err = st.UpdateNamedStayReview(ctx, pid, stay.ID, 1, "rejected", "  duplicate evidence  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stay.ReviewStatus.String != "rejected" || stay.ReviewReason.String != "duplicate evidence" ||
+		stay.ReviewActorUserID.Int64 != 1 || !stay.ReviewedAt.Valid {
+		t.Fatalf("review metadata=%+v", stay)
+	}
+	var storedStatus string
+	var resolution sql.NullString
+	if err := st.DB.QueryRowContext(ctx, `SELECT review_status, review_resolution FROM named_stays WHERE id = ?`, stay.ID).Scan(&storedStatus, &resolution); err != nil {
+		t.Fatal(err)
+	}
+	if storedStatus != "needs_review" || resolution.String != "rejected" {
+		t.Fatalf("stored review state=%q/%v want needs_review/rejected", storedStatus, resolution)
+	}
+
+	stay, err = st.UpdateNamedStayStatus(ctx, pid, stay.ID, NamedStayStatusCancelled, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stay.CancellationEffectiveAt.Valid {
+		t.Fatal("cancellation_effective_at was not set")
+	}
+	cancelledAt := stay.CancellationEffectiveAt.Time
+	stay, err = st.UpdateNamedStayStatus(ctx, pid, stay.ID, NamedStayStatusCancelled, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stay.CancellationEffectiveAt.Time.Equal(cancelledAt) {
+		t.Fatalf("repeated cancellation overwrote timestamp: got %s want %s", stay.CancellationEffectiveAt.Time, cancelledAt)
+	}
+	stay, err = st.UpdateNamedStayStatus(ctx, pid, stay.ID, NamedStayStatusActive, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stay.CancellationEffectiveAt.Valid {
+		t.Fatal("cancellation_effective_at was not cleared on reactivation")
+	}
+
+	stay, err = st.UpdateNamedStayOutcome(ctx, pid, stay.ID, 1, nil, "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stay.StayOutcome.Valid || stay.StayOutcomeReason.Valid || stay.StayOutcomeActorUserID.Valid || stay.StayOutcomeMarkedAt.Valid {
+		t.Fatalf("outcome clear left metadata: %+v", stay)
+	}
+}
+
+func TestNamedStayCRUDNeverWritesLegacyOccupanciesOrMigrationMap(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	rawID := stage4RawBlock(t, st, pid, "canonical-only", "2026-11-01", "2026-11-04")
+	stay, err := st.PromoteRawBookingBlockToNamedStay(ctx, pid, rawID, NamedStayCreateInput{
+		DisplayName: "Canonical Guest", StayType: StayTypeBookingCom,
+		CheckInDate: "2026-11-01", CheckOutDate: "2026-11-04", CreatedByUserID: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Canonical Guest Updated"
+	if _, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{DisplayName: &name, UpdatedByUserID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateNamedStayStatus(ctx, pid, stay.ID, NamedStayStatusCancelled, 1); err != nil {
+		t.Fatal(err)
+	}
+	var legacyTables int
+	if err := st.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_schema
+		WHERE type = 'table' AND name IN ('occupancies', 'occupancy_stay_migration_map')`).Scan(&legacyTables); err != nil {
+		t.Fatal(err)
+	}
+	if legacyTables != 0 {
+		t.Fatalf("legacy occupancy tables=%d want 0", legacyTables)
 	}
 }

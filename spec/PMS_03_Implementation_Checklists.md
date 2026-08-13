@@ -3,6 +3,11 @@
 ## How to Use
 This file is a verification checklist for the AI developer agent. Each item should be demonstrably implemented, not only scaffolded.
 
+The completed items in Sections 1-11 are retained as historical delivery
+evidence for the pre-cleanup application. They do not prove PMS 21 final
+cleanup. Section 12 is the active final-model checklist and remains unchecked
+until repository and production evidence exists.
+
 ## Implementation status (do not lose track)
 
 **Last updated:** 2026-04-23 (UI/UX polish pass — spec/PMS_08_UI_UX_Polish_Spec.md — closed out: added `UiDateInput` primitive; AnalyticsView stripped of every inline hex, with class-based bar charts consuming `--color-primary` / `--success-fg` and token-scaled spacing; Finance already tabbed (Overview / Transactions / Recurring / Categories / Monthly breakdown); `UiTable` gained a `stack` prop that collapses rows into stacked cards under 640 px using `data-label` attributes (§5 of PMS_08); Vitest coverage expanded to all 19 primitives — new specs for `UiDialog` (focus trap, Escape + backdrop close, focus restore, persistent lockout), `UiCard`, `UiSelect`, `UiEmptyState`, `UiIconButton`, `UiPageHeader`, `UiSection`, `UiSkeleton`, `UiTable`, `UiTag`, `UiToast` / `ToastStack`, `UiToolbar`, and `UiDateInput`; copy pass swept display-side `.slice(0, 10)` ISO dates in AnalyticsView and BookingPayoutsView through `formatShortDate` + `isoTitle` so the exact timestamp lives in `title=""`; `--color-on-primary` token added so LoginView and other brand-on-primary surfaces no longer reach for raw `#fff`; last hex fallbacks inside `var(--success-fg, #047857)` in Messages/Occupancy removed — a repo-wide grep for `#[0-9a-fA-F]{3,6}` outside `tokens.css` is now clean. ShellView already wires a polite `aria-live` route-change announcer. Per user directive the `@axe-core/cli` npm script and Playwright visual-snapshot suite remain the only explicit exclusions from PMS_08 and are tracked as future hardening. Previous: Analytics Module shipped + Analytics polish pass …)
@@ -10,7 +15,7 @@ This file is a verification checklist for the AI developer agent. Each item shou
 | Area | Status |
 |------|--------|
 | **Phase 1 — Foundations** (auth, roles, properties, permissions, audit, dashboard API/UI) | **Done** — see `backend/`, `frontend/` |
-| **Phase 2 — Occupancy / ICS** | **Done** *(see migration `000002_occupancy`, `internal/occupancy`, Occupancy UI, token export)* |
+| **Phase 2 — Historical occupancy / ICS** | **Done (historical)** *(legacy normalized occupancy UI and token export shipped; those contracts are superseded by PMS 21)* |
 | **Phase 3 — Nuki / Cleaning** | **Done** *(Nuki lifecycle + retries; cleaning analytics + salary + finance linkage)* |
 | **Phase 4 — Finance / Invoices / Messages** | **Done** *(booking payout import + mapping + mojibake repair; invoice PDF versioning; property-scoped multilingual templates)* |
 | **Phase 5 — Hardening** | **Shipped** *(Phase A security blockers H1–H3, Phase B reliability items M1–M3 + M5, and Phase C scale items M4a/M4b + L1 all landed; frontend Vitest scaffold and error-state reliability tests in place. Full Playwright end-to-end coverage and optional observability polish remain as non-blocking follow-ups — see §11)* |
@@ -77,10 +82,11 @@ Use `✅` = demonstrably done, `⬜` = not done or not yet verifiable. Notes in 
 - ✅ Occupancies can be filtered meaningfully. *(month + status on list tab.)*
 - ✅ Sync errors/statuses are visible. *(sync history table + dashboard occupancy sync summary when user has occupancy read.)*
 
-### JSON Export
-- ✅ Authenticated JSON occupancy endpoint exists. *(`GET /api/properties/{id}/occupancy-export?token=…`, no session.)*
-- ✅ Export token can be managed securely. *(hashed at rest; plaintext shown once on create; revoke.)*
-- ✅ JSON output includes stay dates and source metadata.
+### Historical JSON Export
+- ✅ The authenticated occupancy export and token management shipped in the
+  legacy model. They are historical evidence, not final functionality.
+- ⬜ Final cleanup removes the export route, token APIs, token storage, UI, and
+  caller guidance after caller gates pass. See Section 12.
 
 ### Future-Proofing
 - ✅ Source model supports future providers beyond Booking.com. *(`occupancy_sources.source_type` string, default `booking_ics`.)*
@@ -101,10 +107,13 @@ Use `✅` = demonstrably done, `⬜` = not done or not yet verifiable. Notes in 
 - ✅ Default check-out time is configurable.
 
 ### Generation
-- ✅ Access code can be generated from an occupancy.
-- ✅ Validity window uses occupancy dates plus configured check-in/check-out times.
+- ✅ Legacy access code generation from an occupancy shipped.
+- ⬜ Final access code generation uses a required same-property named stay and
+  no occupancy fallback.
+- ✅ Validity window uses stay dates plus configured check-in/check-out times.
 - ✅ Automatic generation after occupancy sync is supported or clearly queued. *(manual occupancy sync triggers Nuki sync; scheduler also chains occupancy -> Nuki sync.)*
-- ✅ Re-imported occupancies do not create duplicate codes. *(unique key by `property_id + occupancy_id` and upsert behavior.)*
+- ✅ Legacy reconciliation avoided duplicate codes; PMS 21 must preserve IDs,
+  PINs, external IDs, and history while moving final uniqueness to named stays.
 
 ### Lifecycle
 - ✅ Generated/current code list exists.
@@ -186,7 +195,9 @@ Use `✅` = demonstrably done, `⬜` = not done or not yet verifiable. Notes in 
 
 ### Invoice Creation
 - ✅ Manual invoice creation flow exists. *(POST endpoint + Vue form in `InvoicesView.vue`.)*
-- ✅ One stay can be linked to one invoice. *(partial unique index `ux_invoices_property_occupancy`; occupancy picker in UI.)*
+- ✅ One-stay invoice behavior shipped through the legacy occupancy link.
+- ⬜ Final invoices require a same-property `named_stay_id`; any optional finance
+  link must reference the same stay.
 - ✅ Invoice language supports Slovak and English. *(language field on invoice; PDF renders SK/EN labels, footer, service summary.)*
 - ✅ Issue date is captured.
 - ✅ Taxable supply date is captured.
@@ -224,8 +235,10 @@ Use `✅` = demonstrably done, `⬜` = not done or not yet verifiable. Notes in 
 - ✅ Template placeholders are validated. *(`ValidateTemplatePlaceholders` rejects unsupported `{{...}}` tokens; API returns 400 with details.)*
 
 ### Generation
-- ✅ Messages are generated per occupancy/stay row. *(occupancy picker in Generate tab; API `GET .../messages/generate?occupancy_id=...`.)*
-- ✅ Generated message includes stay dates. *(`{{stay_start}}` / `{{stay_end}}` resolved from occupancy dates in property timezone.)*
+- ✅ Legacy messages were generated per occupancy/stay row.
+- ⬜ Final messages use `stay_id`/named-stay identity only and reject
+  `occupancy_id` aliases.
+- ✅ Generated message includes stay dates. *(`{{stay_start}}` / `{{stay_end}}` resolved in property timezone.)*
 - ✅ Generated message includes property name and address. *(`{{property_name}}` / `{{property_address}}` from property + profile.)*
 - ✅ Generated message includes Wi-Fi details. *(`{{wifi_name}}` / `{{wifi_password}}` from `property_profiles.wifi_ssid` / `wifi_password`.)*
 - ✅ Generated message includes parking details. *(`{{parking_info}}` from `property_profiles.parking_instructions`.)*
@@ -241,7 +254,8 @@ Use `✅` = demonstrably done, `⬜` = not done or not yet verifiable. Notes in 
 ## 8. Dashboard Checklist
 
 ### Widgets
-- ✅ Upcoming stays widget exists. *(`ListUpcomingOccupancies` feeds `dashboardUpcomingStayRow`; rendered with stay dates + status.)*
+- ✅ Upcoming stays widget exists; final cleanup must source it from named stays
+  and remove legacy occupancy DTO fields.
 - ✅ Active Nuki codes widget exists. *(`ListUpcomingStaysForNuki` filtered to `generated` status; shows label/masked/validity/error.)*
 - ✅ Latest sync status widget exists. *(per-module `sync_status` map — occupancy + Nuki — with `not_configured` / `no_sync_yet` / success/partial/error.)*
 - ✅ Monthly cleaning widget exists. *(`ComputeCleaningMonthlySummary` → counted days + salary draft in EUR.)*
@@ -269,7 +283,8 @@ Use `✅` = demonstrably done, `⬜` = not done or not yet verifiable. Notes in 
 - ✅ Secrets are not exposed in normal API responses. *(settings API uses flags / masking for integration secrets.)*
 - ✅ Secrets are not written to logs.
 - ✅ Property-scoped access is enforced server-side. *(for implemented endpoints.)*
-- ✅ Automation export endpoint uses token protection. *(occupancy JSON export via `occupancy_api_tokens`.)*
+- ✅ The legacy automation export used token protection. It is superseded and
+  scheduled for removal, not a final security requirement.
 
 ### Time Handling
 - ✅ Property timezone is stored.
@@ -277,7 +292,8 @@ Use `✅` = demonstrably done, `⬜` = not done or not yet verifiable. Notes in 
 
 ### Testing
 - ✅ Automated tests exist for authentication and authorization. *(basic API tests in `backend/internal/api/server_test.go`.)*
-- ✅ Automated tests exist for occupancy sync logic. *(ICS parse unit tests + HTTP sync behavior tests in `internal/occupancy`.)*
+- ✅ Automated tests exist for ICS sync logic. Final coverage must assert raw
+  block/source-link reconciliation and no legacy table access.
 - ✅ Automated tests exist for Nuki access lifecycle. *(`internal/nuki/service_test.go`: create/update dedupe, failure states, cleanup, and revocation reconciliation.)*
 - ✅ Automated tests exist for cleaning salary calculations. *(`internal/store/cleaning_test.go` + reconcile behavior tests in `internal/nuki/service_test.go`.)*
 - ✅ Automated tests exist for finance recurring rules and summaries. *(`internal/store/finance_test.go` covers recurring idempotency/timezone and cleaner margin summary; API tests cover booking payout import/mapping flows.)*
@@ -320,4 +336,40 @@ Use `✅` = demonstrably done, `⬜` = not done or not yet verifiable. Notes in 
 ### Non-blocking polish (post-v1 candidates)
 - ✅ **Backup / export hooks for SQLite + data dir.** *(resolved; `GET /api/admin/backup` streams a gzipped tar containing a consistent SQLite snapshot — produced via `VACUUM INTO` so it is WAL-safe — plus the `invoices/` and `attachments/` subtrees under the configured data dir. The endpoint is gated on `super_admin`, audited, and never stages the full archive on disk. Covered by `TestGetAdminBackup_SuperAdminGetsTarGzWithDB` and `TestGetAdminBackup_NonAdminForbidden` in `backend/internal/api/admin_backup_test.go`.)*
 - ✅ **Observability.** *(resolved; access logger now supports structured JSON output via `PMS_ACCESS_LOG_FORMAT=json` with sensitive query-string keys already redacted. A new zero-dependency `backend/internal/metrics` package exposes Prometheus-format counters for `pms_http_requests_total`, `pms_http_request_duration_seconds`, `pms_scheduler_runs_total`, `pms_scheduler_last_run_timestamp_seconds`, and `pms_attachment_relocations_total`, served at `GET /metrics` and optionally gated by `PMS_METRICS_TOKEN` (Bearer). Scheduler ticks emit `ran`/`skipped`/`error` outcomes; the access-log middleware hands request observations to the registry via `SetAccessObserver`.)*
-- ☑ Optional: direct Google Calendar sync — explicitly deferred in the architecture spec; not planned for v1.
+- ✅ Native Google Calendar cleaning sync superseded the original v1 deferral;
+  PMS 21 final ownership is exactly one named stay or raw booking block.
+
+## 12. PMS 21 Final Cleanup Checklist
+
+Authority: `PMS_21_Legacy_Occupancy_Removal_Spec.md`, ADR-007, and
+`docs/pms-21-operations-cutover-runbook.md`.
+
+- ⬜ Release A stops all legacy occupancy, migration-map, export-token, and
+  integration legacy-ID writes.
+- ⬜ Every known cleaning, external-sale, review-required, finance, invoice,
+  Nuki, and cross-property exception has row-level resolution evidence.
+- ⬜ Release A completes its approved minimum 48-hour production observation
+  window with the representative workload and no prohibited writes.
+- ⬜ Release B removes runtime routes, aliases, fallbacks, public export/token
+  management, repair surfaces, and frontend legacy identity use.
+- ⬜ Runtime SQL tracing and access-denial tests prove startup, schedulers,
+  manual jobs, support tools, APIs, and integrations do not access legacy
+  objects.
+- ⬜ Release B completes its approved minimum 48-hour production observation
+  window with no prohibited reads/writes or unexplained metric variance.
+- ⬜ The caller inventory proves removed routes and export have no consumers.
+- ⬜ A digest-pinned cleanup-readiness report passes every data, runtime, API,
+  caller, and operational gate.
+- ⬜ A SQLite-consistent cleanup backup has a recorded checksum, integrity
+  result, restore/migrate/application-start drill, and approved rollback pair.
+- ⬜ Release C/D preserves required IDs, integration values, child links,
+  files, constraints, indexes, and sequence behavior while dropping the
+  legacy tables and transitional tooling.
+- ⬜ Post-cleanup `foreign_key_check`, `integrity_check`, schema scans,
+  analytics parity, Google/Nuki verification, and full supported workflows
+  pass before traffic resumes.
+
+No checked item above may be inferred from Stage 2 apply/idempotency artifacts
+alone. As of this documentation update, the repository does not record the
+Release A/B windows, complete exception closure, restore drill, or destructive
+Release C/D execution.

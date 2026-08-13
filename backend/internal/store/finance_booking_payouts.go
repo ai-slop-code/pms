@@ -2,9 +2,7 @@ package store
 
 import (
 	"context"
-	"crypto/sha1"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -28,7 +26,6 @@ type FinanceBookingPayout struct {
 	NetCents                int
 	PayoutDate              time.Time
 	TransactionID           sql.NullInt64
-	OccupancyID             sql.NullInt64
 	NamedStayID             sql.NullInt64
 	OutcomeOverride         sql.NullString
 	OutcomeOverrideMarkedAt sql.NullTime
@@ -39,17 +36,13 @@ type FinanceBookingPayout struct {
 
 type FinanceBookingPayoutListRow struct {
 	FinanceBookingPayout
-	LinkedInvoiceID         sql.NullInt64
-	OccupancySourceEventUID sql.NullString
-	OccupancyStartAt        sql.NullTime
-	OccupancyEndAt          sql.NullTime
-	OccupancySummary        sql.NullString
-	NamedStayDisplayName    sql.NullString
-	NamedStayType           sql.NullString
-	NamedStayCheckInDate    sql.NullString
-	NamedStayCheckOutDate   sql.NullString
-	HasPayoutData           bool
-	HasStatementData        bool
+	LinkedInvoiceID       sql.NullInt64
+	NamedStayDisplayName  sql.NullString
+	NamedStayType         sql.NullString
+	NamedStayCheckInDate  sql.NullString
+	NamedStayCheckOutDate sql.NullString
+	HasPayoutData         bool
+	HasStatementData      bool
 }
 
 func (s *Store) GetBookingPayoutByID(ctx context.Context, propertyID, payoutID int64) (*FinanceBookingPayout, error) {
@@ -59,13 +52,13 @@ func (s *Store) GetBookingPayoutByID(ctx context.Context, propertyID, payoutID i
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT id, property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name,
 			reservation_status, currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents,
-			net_cents, payout_date, transaction_id, occupancy_id, named_stay_id, outcome_override, outcome_override_marked_at,
+			net_cents, payout_date, transaction_id, named_stay_id, outcome_override, outcome_override_marked_at,
 			raw_payout_row_json, created_at, updated_at
 		FROM finance_bookings
 		WHERE property_id = ? AND id = ?`, propertyID, payoutID).
 		Scan(&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate, &r.GuestName,
 			&r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents, &r.PaymentServiceFeeCents,
-			&r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.NamedStayID, &r.OutcomeOverride, &outcomeMarkedAt,
+			&r.NetCents, &payoutDate, &r.TransactionID, &r.NamedStayID, &r.OutcomeOverride, &outcomeMarkedAt,
 			&r.RawRowJSON, &created, &updated)
 	if err != nil {
 		return nil, err
@@ -87,13 +80,13 @@ func (s *Store) GetBookingPayoutByReference(ctx context.Context, propertyID int6
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT id, property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name,
 			reservation_status, currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents,
-			net_cents, payout_date, transaction_id, occupancy_id, named_stay_id, outcome_override, outcome_override_marked_at,
+			net_cents, payout_date, transaction_id, named_stay_id, outcome_override, outcome_override_marked_at,
 			raw_payout_row_json, created_at, updated_at
 		FROM finance_bookings
 		WHERE property_id = ? AND reference_number = ?`, propertyID, referenceNumber).
 		Scan(&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate, &r.GuestName,
 			&r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents, &r.PaymentServiceFeeCents,
-			&r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.NamedStayID, &r.OutcomeOverride, &outcomeMarkedAt,
+			&r.NetCents, &payoutDate, &r.TransactionID, &r.NamedStayID, &r.OutcomeOverride, &outcomeMarkedAt,
 			&r.RawRowJSON, &created, &updated)
 	if err != nil {
 		return nil, err
@@ -109,18 +102,24 @@ func (s *Store) GetBookingPayoutByReference(ctx context.Context, propertyID int6
 }
 
 func (s *Store) CreateBookingPayout(ctx context.Context, row *FinanceBookingPayout) error {
+	if row == nil {
+		return fmt.Errorf("finance booking is required")
+	}
+	if err := s.validateFinanceBookingStay(ctx, row.PropertyID, row.NamedStayID); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO finance_bookings (
 			property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name, reservation_status,
 			currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents, net_cents, payout_date,
-			transaction_id, occupancy_id, named_stay_id, raw_payout_row_json, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			transaction_id, named_stay_id, raw_payout_row_json, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.PropertyID, row.ReferenceNumber, nullStringValue(row.PayoutID), nullStringValue(row.RowType),
 		nullStringValue(row.CheckInDate), nullStringValue(row.CheckOutDate), nullStringValue(row.GuestName), nullStringValue(row.ReservationStatus),
 		nullStringValue(row.Currency), nullStringValue(row.PaymentStatus), nullInt64Value(row.AmountCents),
 		nullInt64Value(row.CommissionCents), nullInt64Value(row.PaymentServiceFeeCents), row.NetCents,
-		row.PayoutDate.UTC().Format(time.RFC3339), nullInt64Value(row.TransactionID), nullInt64Value(row.OccupancyID), nullInt64Value(row.NamedStayID),
+		row.PayoutDate.UTC().Format(time.RFC3339), nullInt64Value(row.TransactionID), row.NamedStayID.Int64,
 		nullStringValue(row.RawRowJSON), now, now)
 	return err
 }
@@ -132,6 +131,12 @@ func (s *Store) CreateBookingPayout(ctx context.Context, row *FinanceBookingPayo
 // resulting ID is written into the payout row. This ensures a failure can never
 // leave a finance row without its payout mapping (or vice versa).
 func (s *Store) ImportBookingPayoutRow(ctx context.Context, txInput *FinanceTransaction, payout *FinanceBookingPayout, existingTxID int64) (int64, error) {
+	if payout == nil {
+		return 0, fmt.Errorf("finance booking is required")
+	}
+	if err := s.validateFinanceBookingStay(ctx, payout.PropertyID, payout.NamedStayID); err != nil {
+		return 0, err
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -172,13 +177,13 @@ func (s *Store) ImportBookingPayoutRow(ctx context.Context, txInput *FinanceTran
 		INSERT INTO finance_bookings (
 			property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name, reservation_status,
 			currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents, net_cents, payout_date,
-			transaction_id, occupancy_id, named_stay_id, raw_payout_row_json, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			transaction_id, named_stay_id, raw_payout_row_json, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		payout.PropertyID, payout.ReferenceNumber, nullStringValue(payout.PayoutID), nullStringValue(payout.RowType),
 		nullStringValue(payout.CheckInDate), nullStringValue(payout.CheckOutDate), nullStringValue(payout.GuestName), nullStringValue(payout.ReservationStatus),
 		nullStringValue(payout.Currency), nullStringValue(payout.PaymentStatus), nullInt64Value(payout.AmountCents),
 		nullInt64Value(payout.CommissionCents), nullInt64Value(payout.PaymentServiceFeeCents), payout.NetCents,
-		payout.PayoutDate.UTC().Format(time.RFC3339), nullInt64Value(payout.TransactionID), nullInt64Value(payout.OccupancyID), nullInt64Value(payout.NamedStayID),
+		payout.PayoutDate.UTC().Format(time.RFC3339), nullInt64Value(payout.TransactionID), payout.NamedStayID.Int64,
 		nullStringValue(payout.RawRowJSON), now, now); err != nil {
 		return 0, err
 	}
@@ -255,40 +260,19 @@ func (s *Store) BackfillBookingPayoutTransaction(ctx context.Context, payoutID i
 	return txID, nil
 }
 
-func (s *Store) UpdateBookingPayoutMapping(ctx context.Context, propertyID int64, referenceNumber string, occupancyID *int64) error {
-	var occ interface{}
-	if occupancyID != nil && *occupancyID > 0 {
-		occ = *occupancyID
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.DB.ExecContext(ctx, `
-		UPDATE finance_bookings
-		SET occupancy_id = ?, updated_at = ?
-		WHERE property_id = ? AND reference_number = ?`, occ, now, propertyID, referenceNumber)
-	return err
-}
-
 func (s *Store) UpdateBookingPayoutNamedStayMapping(ctx context.Context, propertyID int64, referenceNumber string, namedStayID *int64) error {
-	var stay interface{}
-	var occ interface{}
-	if namedStayID != nil && *namedStayID > 0 {
-		stay = *namedStayID
-		var legacy sql.NullInt64
-		_ = s.DB.QueryRowContext(ctx, `
-			SELECT old_occupancy_id
-			FROM occupancy_stay_migration_map
-			WHERE property_id = ? AND named_stay_id = ? AND migration_kind = 'named_stay'
-			ORDER BY old_occupancy_id DESC LIMIT 1`, propertyID, *namedStayID).Scan(&legacy)
-		if legacy.Valid {
-			occ = legacy.Int64
-		}
+	if namedStayID == nil || *namedStayID <= 0 {
+		return fmt.Errorf("named_stay_id is required")
+	}
+	if err := s.validateFinanceBookingStay(ctx, propertyID, sql.NullInt64{Int64: *namedStayID, Valid: true}); err != nil {
+		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.DB.ExecContext(ctx, `
 		UPDATE finance_bookings
-		SET named_stay_id = ?, occupancy_id = ?, updated_at = ?
-		WHERE property_id = ? AND reference_number = ?`, stay, occ, now, propertyID, referenceNumber)
-	if err != nil || namedStayID == nil || *namedStayID <= 0 {
+		SET named_stay_id = ?, updated_at = ?
+		WHERE property_id = ? AND reference_number = ?`, *namedStayID, now, propertyID, referenceNumber)
+	if err != nil {
 		return err
 	}
 	_, err = s.ConfirmNamedStayWithFinanceEvidence(ctx, propertyID, *namedStayID)
@@ -297,24 +281,32 @@ func (s *Store) UpdateBookingPayoutNamedStayMapping(ctx context.Context, propert
 
 func (s *Store) LinkBookingToNamedStay(ctx context.Context, propertyID, bookingID, namedStayID int64) error {
 	if bookingID <= 0 || namedStayID <= 0 {
-		return nil
+		return fmt.Errorf("named_stay_id is required")
 	}
-	var legacy sql.NullInt64
-	_ = s.DB.QueryRowContext(ctx, `
-		SELECT old_occupancy_id
-		FROM occupancy_stay_migration_map
-		WHERE property_id = ? AND named_stay_id = ? AND migration_kind = 'named_stay'
-		ORDER BY old_occupancy_id DESC LIMIT 1`, propertyID, namedStayID).Scan(&legacy)
+	if err := s.validateFinanceBookingStay(ctx, propertyID, sql.NullInt64{Int64: namedStayID, Valid: true}); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.DB.ExecContext(ctx, `
 		UPDATE finance_bookings
-		SET named_stay_id = ?, occupancy_id = COALESCE(?, occupancy_id), updated_at = ?
-		WHERE property_id = ? AND id = ?`, namedStayID, nullInt64Value(legacy), now, propertyID, bookingID)
+		SET named_stay_id = ?, updated_at = ?
+		WHERE property_id = ? AND id = ?`, namedStayID, now, propertyID, bookingID)
 	if err != nil {
 		return err
 	}
 	_, err = s.ConfirmNamedStayWithFinanceEvidence(ctx, propertyID, namedStayID)
 	return err
+}
+
+func (s *Store) validateFinanceBookingStay(ctx context.Context, propertyID int64, namedStayID sql.NullInt64) error {
+	if !namedStayID.Valid || namedStayID.Int64 <= 0 {
+		return fmt.Errorf("named_stay_id is required")
+	}
+	var exists int
+	if err := s.DB.QueryRowContext(ctx, `SELECT 1 FROM named_stays WHERE property_id = ? AND id = ?`, propertyID, namedStayID.Int64).Scan(&exists); err != nil {
+		return fmt.Errorf("invalid named_stay_id: %w", err)
+	}
+	return nil
 }
 
 // ConfirmNamedStayWithFinanceEvidence upgrades only migration-created review
@@ -323,10 +315,14 @@ func (s *Store) ConfirmNamedStayWithFinanceEvidence(ctx context.Context, propert
 	if propertyID <= 0 || namedStayID <= 0 {
 		return false, nil
 	}
+	if err := s.lowerNamedStayFirstKnownFromFinanceEvidence(ctx, propertyID, namedStayID); err != nil {
+		return false, err
+	}
 	now := time.Now().UTC()
 	res, err := s.DB.ExecContext(ctx, `
 		UPDATE named_stays
 		SET review_status = 'confirmed',
+		    review_resolution = 'confirmed',
 		    review_reason = NULL,
 		    nuki_generation_status = CASE
 		        WHEN status = 'active'
@@ -341,6 +337,7 @@ func (s *Store) ConfirmNamedStayWithFinanceEvidence(ctx context.Context, propert
 		WHERE property_id = ?
 		  AND id = ?
 		  AND review_status = 'needs_review'
+		  AND review_resolution IS NULL
 		  AND review_reason = 'legacy_non_reservation_stay'
 		  AND EXISTS (
 		      SELECT 1
@@ -357,6 +354,26 @@ func (s *Store) ConfirmNamedStayWithFinanceEvidence(ctx context.Context, propert
 	}
 	rows, err := res.RowsAffected()
 	return rows > 0, err
+}
+
+func (s *Store) lowerNamedStayFirstKnownFromFinanceEvidence(ctx context.Context, propertyID, namedStayID int64) error {
+	_, err := s.DB.ExecContext(ctx, `
+		WITH earliest AS (
+			SELECT booked_on
+			FROM finance_bookings
+			WHERE property_id = ? AND named_stay_id = ?
+			  AND booked_on IS NOT NULL AND trim(booked_on) <> ''
+			ORDER BY julianday(booked_on) IS NULL, julianday(booked_on), booked_on
+			LIMIT 1
+		)
+		UPDATE named_stays
+		SET first_known_at = (SELECT booked_on FROM earliest)
+		WHERE property_id = ? AND id = ?
+		  AND EXISTS (SELECT 1 FROM earliest)
+		  AND (first_known_at IS NULL OR trim(first_known_at) = ''
+		       OR julianday((SELECT booked_on FROM earliest)) < julianday(first_known_at))`,
+		propertyID, namedStayID, propertyID, namedStayID)
+	return err
 }
 
 func (s *Store) FindNamedStayForFinanceStayDates(ctx context.Context, propertyID int64, referenceNumber, checkInDate, checkOutDate, guestName string) (*NamedStay, error) {
@@ -414,248 +431,12 @@ func (s *Store) MarkNamedStayFinanceReviewForBooking(ctx context.Context, proper
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.DB.ExecContext(ctx, `
 		UPDATE named_stays
-		SET review_status = 'needs_review', review_reason = ?, updated_at = ?
+		SET review_status = 'needs_review', review_resolution = NULL, review_reason = ?,
+		    review_actor_user_id = NULL, reviewed_at = NULL, updated_at = ?
 		WHERE property_id = ?
 		  AND id = (SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND id = ? AND named_stay_id IS NOT NULL)
 		  AND status = 'active'`, strings.TrimSpace(reason), now, propertyID, propertyID, bookingID)
 	return err
-}
-
-func (s *Store) OccupancyIDsWithPayoutData(ctx context.Context, propertyID int64, occupancyIDs []int64) (map[int64]bool, error) {
-	out := map[int64]bool{}
-	if len(occupancyIDs) == 0 {
-		return out, nil
-	}
-	ph := make([]string, len(occupancyIDs))
-	args := make([]interface{}, 0, len(occupancyIDs)+1)
-	args = append(args, propertyID)
-	for i, id := range occupancyIDs {
-		ph[i] = "?"
-		args = append(args, id)
-	}
-	q := fmt.Sprintf(`
-		SELECT DISTINCT occupancy_id
-		FROM finance_bookings
-		WHERE property_id = ? AND occupancy_id IS NOT NULL AND occupancy_id IN (%s)`, strings.Join(ph, ","))
-	rows, err := s.DB.QueryContext(ctx, q, args...)
-	if err != nil {
-		return out, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return out, err
-		}
-		out[id] = true
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) FindOccupancyForStayDates(ctx context.Context, propertyID int64, checkInDate, checkOutDate string, loc *time.Location) (*Occupancy, error) {
-	if checkInDate == "" || checkOutDate == "" {
-		return nil, nil
-	}
-	inDate, err := time.ParseInLocation("2006-01-02", checkInDate, loc)
-	if err != nil {
-		return nil, nil
-	}
-	outDate, err := time.ParseInLocation("2006-01-02", checkOutDate, loc)
-	if err != nil {
-		return nil, nil
-	}
-	windowStart := inDate.AddDate(0, 0, -3).UTC()
-	windowEnd := outDate.AddDate(0, 0, 3).UTC()
-	candidates, err := s.ListOccupanciesBetween(ctx, propertyID, windowStart, windowEnd)
-	if err != nil {
-		return nil, err
-	}
-	for i := range candidates {
-		o := &candidates[i]
-		startLocal := o.StartAt.In(loc).Format("2006-01-02")
-		endLocal := o.EndAt.In(loc).Format("2006-01-02")
-		if startLocal == checkInDate && endLocal == checkOutDate {
-			return o, nil
-		}
-	}
-	return nil, nil
-}
-
-// legacyFindOrCreateOccupancyForPayoutStayDates exists only for rollback tests
-// of the pre-PMS 21 compatibility path. Production import/rematch code must use
-// FindNamedStayForFinanceStayDates and must never call this synthetic writer.
-func (s *Store) legacyFindOrCreateOccupancyForPayoutStayDates(
-	ctx context.Context,
-	propertyID int64,
-	referenceNumber, checkInDate, checkOutDate, guestName string,
-	loc *time.Location,
-) (*Occupancy, error) {
-	return s.findOrCreateOccupancyForFinanceStayDates(ctx, propertyID, "booking_payout", referenceNumber, checkInDate, checkOutDate, guestName, loc)
-}
-
-// legacyFindOrCreateOccupancyForStatementStayDates is the statement equivalent
-// of the rollback-only payout helper above.
-func (s *Store) legacyFindOrCreateOccupancyForStatementStayDates(
-	ctx context.Context,
-	propertyID int64,
-	referenceNumber, checkInDate, checkOutDate, guestName string,
-	loc *time.Location,
-) (*Occupancy, error) {
-	return s.findOrCreateOccupancyForFinanceStayDates(ctx, propertyID, "booking_statement", referenceNumber, checkInDate, checkOutDate, guestName, loc)
-}
-
-func (s *Store) SupersedeGenericICSBlocksForFinanceStayDates(ctx context.Context, propertyID int64, checkInDate, checkOutDate string, loc *time.Location, keepOccupancyID int64) error {
-	if s.OccupancyLegacyWriteDisabled {
-		return nil
-	}
-	if loc == nil {
-		loc = time.UTC
-	}
-	checkInDate = strings.TrimSpace(checkInDate)
-	checkOutDate = strings.TrimSpace(checkOutDate)
-	if checkInDate == "" || checkOutDate == "" {
-		return nil
-	}
-	inDate, err := time.ParseInLocation("2006-01-02", checkInDate, loc)
-	if err != nil {
-		return nil
-	}
-	outDate, err := time.ParseInLocation("2006-01-02", checkOutDate, loc)
-	if err != nil || !outDate.After(inDate) {
-		return nil
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.DB.ExecContext(ctx, `
-		UPDATE occupancies
-		SET status = 'deleted_from_source', last_synced_at = ?
-		WHERE property_id = ?
-		  AND id != ?
-		  AND source_type = 'booking_ics'
-		  AND status IN ('active', 'updated')
-		  AND (guest_display_name IS NULL OR TRIM(guest_display_name) = '')
-		  AND LOWER(COALESCE(raw_summary, '')) LIKE '%closed%'
-		  AND LOWER(COALESCE(raw_summary, '')) LIKE '%not available%'
-		  AND start_at >= ?
-		  AND end_at <= ?
-		  AND NOT EXISTS (
-		      SELECT 1
-		      FROM nuki_access_codes nac
-		      WHERE nac.property_id = occupancies.property_id
-		        AND nac.occupancy_id = occupancies.id
-		        AND nac.status = 'generated'
-		  )`,
-		now,
-		propertyID,
-		keepOccupancyID,
-		inDate.UTC().Format(time.RFC3339),
-		outDate.UTC().Format(time.RFC3339),
-	)
-	return err
-}
-
-func (s *Store) findOrCreateOccupancyForFinanceStayDates(
-	ctx context.Context,
-	propertyID int64,
-	sourceType, referenceNumber, checkInDate, checkOutDate, guestName string,
-	loc *time.Location,
-) (*Occupancy, error) {
-	if loc == nil {
-		loc = time.UTC
-	}
-	checkInDate = strings.TrimSpace(checkInDate)
-	checkOutDate = strings.TrimSpace(checkOutDate)
-	if checkInDate == "" || checkOutDate == "" {
-		return nil, nil
-	}
-	if occ, err := s.FindOccupancyForStayDates(ctx, propertyID, checkInDate, checkOutDate, loc); err != nil || occ != nil {
-		return occ, err
-	}
-	if s.OccupancyLegacyWriteDisabled {
-		return nil, nil
-	}
-
-	inDate, err := time.ParseInLocation("2006-01-02", checkInDate, loc)
-	if err != nil {
-		return nil, nil
-	}
-	outDate, err := time.ParseInLocation("2006-01-02", checkOutDate, loc)
-	if err != nil {
-		return nil, nil
-	}
-	if !outDate.After(inDate) {
-		return nil, nil
-	}
-
-	ref := strings.TrimSpace(referenceNumber)
-	sourceUID := financeOccupancyUID(sourceType, ref, checkInDate, checkOutDate)
-	guest := strings.TrimSpace(guestName)
-	summary := guest
-	if summary == "" {
-		if ref != "" {
-			summary = financeOccupancySummary(sourceType, ref)
-		} else {
-			summary = financeOccupancySummary(sourceType, "") + " stay " + checkInDate + " - " + checkOutDate
-		}
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	contentHash := payoutOccupancyHash(sourceType+":"+ref, checkInDate, checkOutDate, guest)
-	_, err = s.DB.ExecContext(ctx, `
-		INSERT INTO occupancies (property_id, source_type, source_event_uid, start_at, end_at, status, raw_summary, guest_display_name, content_hash, imported_at, last_synced_at, last_sync_run_id)
-		VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, NULL)
-		ON CONFLICT(property_id, source_event_uid) DO UPDATE SET
-			start_at = excluded.start_at,
-			end_at = excluded.end_at,
-			status = excluded.status,
-			raw_summary = excluded.raw_summary,
-			guest_display_name = COALESCE(excluded.guest_display_name, occupancies.guest_display_name),
-			content_hash = excluded.content_hash,
-			last_synced_at = excluded.last_synced_at`,
-		propertyID,
-		sourceType,
-		sourceUID,
-		inDate.UTC().Format(time.RFC3339),
-		outDate.UTC().Format(time.RFC3339),
-		summary,
-		nullStringValue(sql.NullString{String: guest, Valid: guest != ""}),
-		contentHash,
-		now,
-		now,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return s.GetOccupancyBySourceEventUID(ctx, propertyID, sourceUID)
-}
-
-func payoutOccupancyUID(referenceNumber, checkInDate, checkOutDate string) string {
-	return financeOccupancyUID("booking_payout", referenceNumber, checkInDate, checkOutDate)
-}
-
-func financeOccupancyUID(sourceType, referenceNumber, checkInDate, checkOutDate string) string {
-	prefix := "booking_payout"
-	if sourceType == "booking_statement" {
-		prefix = "booking_statement"
-	}
-	if referenceNumber != "" {
-		return prefix + ":" + referenceNumber
-	}
-	return prefix + ":" + checkInDate + ":" + checkOutDate
-}
-
-func financeOccupancySummary(sourceType, referenceNumber string) string {
-	label := "Booking.com payout"
-	if sourceType == "booking_statement" {
-		label = "Booking.com statement"
-	}
-	if strings.TrimSpace(referenceNumber) == "" {
-		return label
-	}
-	return label + " " + strings.TrimSpace(referenceNumber)
-}
-
-func payoutOccupancyHash(referenceNumber, checkInDate, checkOutDate, guestName string) string {
-	sum := sha1.Sum([]byte(referenceNumber + "|" + checkInDate + "|" + checkOutDate + "|" + guestName))
-	return hex.EncodeToString(sum[:])
 }
 
 func (s *Store) FinanceCategoryIDByCode(ctx context.Context, propertyID int64, code string) (int64, error) {
@@ -679,7 +460,7 @@ func (s *Store) FinanceTransactionBySourceReference(ctx context.Context, propert
 		SELECT ft.id, ft.property_id, ft.transaction_date, ft.direction, ft.amount_cents, ft.category_id,
 			ft.note, ft.source_type, ft.source_reference_id, ft.is_auto_generated, ft.attachment_path, ft.created_at, ft.updated_at,
 			fc.code, fc.title, COALESCE(fc.counts_toward_property_income, 0),
-			COALESCE(CASE WHEN COALESCE(fbp.named_stay_id, fbp.occupancy_id) IS NOT NULL THEN 1 ELSE 0 END, 0)
+			CASE WHEN fbp.named_stay_id IS NOT NULL THEN 1 ELSE 0 END
 		FROM finance_transactions ft
 		LEFT JOIN finance_categories fc ON fc.id = ft.category_id
 		LEFT JOIN finance_bookings fbp
@@ -707,20 +488,16 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 		SELECT
 			fbp.id, fbp.property_id, fbp.reference_number, fbp.payout_id, fbp.row_type, fbp.check_in_date, fbp.check_out_date,
 			fbp.guest_name, fbp.reservation_status, fbp.currency, fbp.payment_status, fbp.amount_cents, fbp.commission_cents,
-			fbp.payment_service_fee_cents, fbp.net_cents, fbp.payout_date, fbp.transaction_id, fbp.occupancy_id, fbp.named_stay_id, fbp.raw_payout_row_json,
+			fbp.payment_service_fee_cents, fbp.net_cents, fbp.payout_date, fbp.transaction_id, fbp.named_stay_id, fbp.raw_payout_row_json,
 			fbp.outcome_override, fbp.outcome_override_marked_at, fbp.created_at, fbp.updated_at,
 			(
 				SELECT i.id FROM invoices i
 				WHERE i.property_id = fbp.property_id AND i.finance_booking_payout_id = fbp.id
 				LIMIT 1
 			) AS linked_invoice_id,
-			occ.source_event_uid, occ.start_at, occ.end_at, COALESCE(ns.display_name, occ.guest_display_name, occ.raw_summary),
 			ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date,
 			fbp.has_payout_data, fbp.has_statement_data
 		FROM finance_bookings fbp
-		LEFT JOIN occupancies occ
-		  ON occ.id = fbp.occupancy_id
-		 AND occ.property_id = fbp.property_id
 		LEFT JOIN named_stays ns
 		  ON ns.id = fbp.named_stay_id
 		 AND ns.property_id = fbp.property_id
@@ -732,9 +509,9 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 	}
 	if mappedOnly != nil {
 		if *mappedOnly {
-			query += ` AND COALESCE(fbp.named_stay_id, fbp.occupancy_id) IS NOT NULL`
+			query += ` AND fbp.named_stay_id IS NOT NULL`
 		} else {
-			query += ` AND fbp.named_stay_id IS NULL AND fbp.occupancy_id IS NULL`
+			query += ` AND fbp.named_stay_id IS NULL`
 		}
 	}
 	query += ` ORDER BY fbp.payout_date DESC, fbp.id DESC`
@@ -748,13 +525,12 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 		var r FinanceBookingPayoutListRow
 		var payoutDate, created, updated string
 		var outcomeMarkedAt sql.NullString
-		var occStart, occEnd sql.NullString
 		var hasPayout, hasStatement int
 		if err := rows.Scan(
 			&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate,
 			&r.GuestName, &r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents,
-			&r.PaymentServiceFeeCents, &r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.NamedStayID, &r.RawRowJSON,
-			&r.OutcomeOverride, &outcomeMarkedAt, &created, &updated, &r.LinkedInvoiceID, &r.OccupancySourceEventUID, &occStart, &occEnd, &r.OccupancySummary,
+			&r.PaymentServiceFeeCents, &r.NetCents, &payoutDate, &r.TransactionID, &r.NamedStayID, &r.RawRowJSON,
+			&r.OutcomeOverride, &outcomeMarkedAt, &created, &updated, &r.LinkedInvoiceID,
 			&r.NamedStayDisplayName, &r.NamedStayType, &r.NamedStayCheckInDate, &r.NamedStayCheckOutDate,
 			&hasPayout, &hasStatement,
 		); err != nil {
@@ -769,14 +545,6 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 		}
 		r.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		r.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
-		if occStart.Valid && occStart.String != "" {
-			t, _ := time.Parse(time.RFC3339, occStart.String)
-			r.OccupancyStartAt = sql.NullTime{Time: t, Valid: true}
-		}
-		if occEnd.Valid && occEnd.String != "" {
-			t, _ := time.Parse(time.RFC3339, occEnd.String)
-			r.OccupancyEndAt = sql.NullTime{Time: t, Valid: true}
-		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -790,7 +558,7 @@ func (s *Store) ListOrphanBookingPayouts(ctx context.Context) ([]FinanceBookingP
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name,
 			reservation_status, currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents,
-			net_cents, payout_date, transaction_id, occupancy_id, named_stay_id, raw_payout_row_json, created_at, updated_at
+			net_cents, payout_date, transaction_id, named_stay_id, raw_payout_row_json, created_at, updated_at
 		FROM finance_bookings
 		WHERE transaction_id IS NULL
 		ORDER BY property_id, payout_date, id`)
@@ -804,7 +572,7 @@ func (s *Store) ListOrphanBookingPayouts(ctx context.Context) ([]FinanceBookingP
 		var payoutDate, created, updated string
 		if err := rows.Scan(&r.ID, &r.PropertyID, &r.ReferenceNumber, &r.PayoutID, &r.RowType, &r.CheckInDate, &r.CheckOutDate, &r.GuestName,
 			&r.ReservationStatus, &r.Currency, &r.PaymentStatus, &r.AmountCents, &r.CommissionCents, &r.PaymentServiceFeeCents,
-			&r.NetCents, &payoutDate, &r.TransactionID, &r.OccupancyID, &r.NamedStayID, &r.RawRowJSON, &created, &updated); err != nil {
+			&r.NetCents, &payoutDate, &r.TransactionID, &r.NamedStayID, &r.RawRowJSON, &created, &updated); err != nil {
 			return nil, err
 		}
 		r.PayoutDate, _ = time.Parse(time.RFC3339, payoutDate)

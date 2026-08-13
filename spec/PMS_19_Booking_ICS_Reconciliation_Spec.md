@@ -2,9 +2,38 @@
 
 > Audience: product / property manager + implementing engineer.
 > Scope: Booking.com iCal/ICS occupancy import, row identity, split-night handling, cancellation/deletion reconciliation, and duplicate prevention.
-> Status: future feature specification only; no implementation in this change.
+> Status: historical predecessor, superseded by PMS 21. Retained for the July
+> 2026 incident examples, reconciliation risks, and acceptance-test evidence.
+> Its overloaded `occupancies` representation, `occupancy_nights`,
+> representation kinds, split-row APIs, and provisional ownership model are
+> not the final architecture. Current authority is
+> `PMS_21_Legacy_Occupancy_Removal_Spec.md` and ADR-007: ICS owns raw booking
+> blocks, users/business workflows own named stays, and non-stay closures use
+> property availability blocks.
 
-## 1. Problem Framing
+## Final PMS 21 Behavior (Current Authority)
+
+- Booking.com ICS events are stored as `raw_booking_blocks` and
+  `raw_booking_block_nights` first. They are availability evidence, not guest
+  stays.
+- Operators create named stays directly or promote a raw block/range. ICS sync
+  updates raw evidence and source-link health only; it does not resize, rename,
+  cancel, archive, or delete a named stay.
+- Active uncovered raw nights may create coalesced provisional cleaning
+  placeholders. Active named stays with cleaning enabled create final checkout
+  events and replace provisional placeholders for their covered nights.
+- Named-stay lifecycle analytics use canonical `named_stays.first_known_at` and
+  `named_stays.cancellation_effective_at` timestamps.
+- The final schema/API has no occupancy IDs or occupancy-as-stay aliases. The
+  occupancy export/token routes and the repair endpoints proposed below do not
+  exist in the final API.
+
+All numbered sections below are retained as historical design and incident
+evidence. Their `occupancies`, `occupancy_nights`, representation-row,
+split-row, source-deletion-of-stays, and legacy repair/API proposals are
+superseded; they must not be implemented as current PMS 21 behavior.
+
+## 1. Historical Problem Framing (Superseded)
 
 Booking.com's public iCal feed is an availability feed, not a reservation API. PMS must treat every Booking.com ICS event as an **unavailable block** first. The event tells PMS that Booking.com is not selling those nights, but it does not reliably identify whether the block is one real guest stay, multiple back-to-back one-night guest stays, a manual Booking.com closure, or an externally sold block.
 
@@ -19,7 +48,7 @@ This breaks trust in the occupancy calendar:
 
 This is a bug in reconciliation, not only a UI wording issue. The UI is showing rows that the sync layer allowed to coexist.
 
-## 2. Incident From July 2026
+## 2. Historical Incident From July 2026
 
 The raw feed contains this upstream Booking.com event:
 
@@ -49,7 +78,7 @@ That is not a valid final state. The named one-night row is valuable operator-en
 
 The feed still contains the `2026-07-30 -> 2026-07-31` night, so PMS may keep July 30 blocked. The canceled stay was the following `2026-07-31 -> 2026-08-01` night, which is not present in the feed and must not remain active after a successful full sync. If any duplicate July 30 rows exist, PMS must still collapse them into one active representation for that upstream/night.
 
-## 3. Current Implementation Risks To Fix
+## 3. Historical Implementation Risks (Superseded)
 
 The current implementation has these known risk points:
 
@@ -60,7 +89,7 @@ The current implementation has these known risk points:
 - Raw events are saved after expansion, which can blur the audit trail between the upstream ICS component and PMS-generated representation rows.
 - A partial parse can skip events. If absence reconciliation runs after a partial parse, PMS can incorrectly mark valid source rows as deleted.
 
-## 4. Definitions
+## 4. Historical Definitions (Superseded)
 
 - **Unavailable block**: one date range from Booking.com ICS where Booking.com says the property is unavailable. This is not automatically a guest stay.
 - **Upstream event**: one `VEVENT` from the Booking.com ICS feed, identified primarily by the ICS `UID`.
@@ -77,7 +106,7 @@ The current implementation has these known risk points:
 - **Property-local night**: a `YYYY-MM-DD` date in `properties.timezone`. For all-day Booking.com `VALUE=DATE` events, the date labels from the feed become property-local night labels; storage may use UTC midnights, but comparison and uniqueness must use property-local dates.
 - **Active occupancy night**: one property-local night covered by exactly one active, non-superseded representation row. For the current PMS property, capacity is one, so this count must never exceed one.
 
-## 5. Core Product Decisions
+## 5. Historical Product Decisions (Superseded)
 
 - Booking.com ICS is the source of availability truth for Booking-imported rows, but a Booking.com ICS event is an unavailable block, not automatically a guest stay.
 - The operator creates or names actual guest stays inside unavailable blocks. When opening a blocked night, PMS must offer a stay-name/date-range flow.
@@ -216,7 +245,7 @@ Rules behind the matrix:
 - If a source event disappears or a named stay moves out of the latest source range before checkout, PMS removes the future cleaning event and revokes future Nuki access where applicable.
 - Invoice and finance behavior is intentionally conservative in this spec. Unnamed blocks do not become invoice candidates by default. Named stays and external sales can become candidates in a later finance-focused phase.
 
-## 6. Data Model Requirements
+## 6. Historical Data Model Proposal (Superseded)
 
 ### 6.1 Minimal Columns
 
@@ -290,7 +319,7 @@ SQLite partial indexes can enforce much of this after the new columns exist. If 
 
 `legacy_generated_night` exists only to repair rows already created by old code paths such as `UID#night-YYYYMMDD`. New product behavior should not create hidden generated guest stays. It should create either unnamed block nights or explicit named stays selected by the operator.
 
-## 7. Sync Algorithm Requirements
+## 7. Historical Sync Algorithm Proposal (Superseded)
 
 ### 7.1 Successful Full Sync Pipeline
 
@@ -374,7 +403,7 @@ If two rows have the same priority for the same night:
 
 All losing today/future rows must be marked superseded or `deleted_from_source` according to why they lost. The repair/sync report must list each resolved duplicate so the operator can understand what changed.
 
-## 8. Occupancy Calendar Requirements
+## 8. Historical Occupancy Calendar Proposal (Superseded)
 
 - The calendar must render normal occupancy from active non-superseded rows only.
 - `deleted_from_source`, `cancelled`, and superseded rows must not contribute to normal day-cell counts.
@@ -383,7 +412,7 @@ All losing today/future rows must be marked superseded or `deleted_from_source` 
 - The day detail must show enough metadata for debugging: source type, upstream UID, representation kind, status, last sync run, and whether the row was manually split.
 - The stay list should make `deleted_from_source` rows available behind a filter but not mix them into the default active stay list.
 
-## 9. Guest Name Preservation
+## 9. Historical Guest Name Preservation Proposal (Superseded)
 
 Operator-entered names are local PMS annotations, not source truth. Sync must preserve them for audit/history, but preservation must never keep stale rows active.
 
@@ -395,7 +424,7 @@ Rules:
 - Do not copy one aggregate name across multiple nights unless the operator explicitly selected a multi-night stay range.
 - If the upstream UID disappears, keep names for audit but mark the rows `deleted_from_source`.
 
-## 10. Downstream Module Requirements
+## 10. Historical Downstream Module Proposal (Superseded)
 
 ### 10.1 Nuki
 
@@ -437,7 +466,7 @@ Rules:
 - If row identity changes because of a split, finance mappings should be moved only when the mapping is unambiguous by date/reference.
 - If a source row disappears, keep finance history but stop offering the deleted row as an active invoice candidate by default.
 
-## 11. Repair Requirements For Existing Data
+## 11. Historical Repair Proposal (Superseded)
 
 Implementation must include a one-time repair path for databases that already contain duplicate active rows.
 
@@ -455,7 +484,7 @@ The repair should:
 - The dry-run report must list each affected local night, winning row, losing row, reason, and whether guest names/Nuki codes/cleaning events will be relinked or revoked.
 - Never hard-delete occupancy rows.
 
-## 11A. API Contract
+## 11A. Historical API Proposal (Removed)
 
 All endpoints are property-scoped and gated on `permissions.Occupancy` with `permissions.LevelWrite`, matching existing occupancy override actions (PMS_17/PMS_18). Shapes are indicative; align field names with existing conventions during implementation.
 
@@ -486,7 +515,7 @@ Response conventions:
 - Follow the existing PMS_17/PMS_18 pattern: return `200` with `{ ok: false, error }` for best-effort downstream failures (e.g. Google deletion failed) rather than `500`, so the flag/state is still saved.
 - Ineligible actions (e.g. naming a range outside the block) return a `409`-style conflict/ineligible error, not `500`.
 
-## 11B. Audit Contract
+## 11B. Historical Audit Proposal (Superseded)
 
 Every state-changing action in this spec must write an audit entry using the existing audit-log mechanism. Minimum event types:
 
@@ -504,7 +533,7 @@ Every state-changing action in this spec must write an audit entry using the exi
 
 Each entry must capture actor (user id or `system` for sync), property id, occupancy id / upstream UID, affected local night(s), before/after state summary, and the machine reason (for example `source_deleted`, `replaced_by_named_stay`, `range_shrunk`). Sync- and repair-driven changes must be attributable to the sync run id so the operator can trace exactly which run changed their calendar.
 
-## 12. Observability Requirements
+## 12. Historical Observability Proposal (Superseded)
 
 Sync runs must expose these counts:
 
@@ -524,7 +553,7 @@ Sync runs must expose these counts:
 
 The sync history UI should show whether deletion reconciliation was enabled for the run. For partial runs, it must clearly say that no occupancy mutations were applied.
 
-## 13. Acceptance Tests
+## 13. Historical Acceptance Tests
 
 ### 13.1 July 9-12 Multi-Night Event
 
@@ -620,7 +649,7 @@ Given an attempt to activate two representation rows covering the same property-
 
 Given the same feed synced twice with an unnamed block `2026-07-09 -> 2026-07-12`, PMS must not create duplicate Google Calendar cleaning events. Each `(property_id, upstream_event_uid, checkout_date, cleaning_kind)` key must map to exactly one cleaning event.
 
-## 14. Implementation Order
+## 14. Historical Implementation Order (Superseded)
 
 1. Add upstream ownership fields and raw upstream snapshot storage.
 2. Add the `occupancy_nights` per-night coverage table with the partial unique index.
@@ -638,14 +667,14 @@ Given the same feed synced twice with an unnamed block `2026-07-09 -> 2026-07-12
 14. Add the dry-run and apply repair command for existing duplicate rows.
 15. Add acceptance tests before enabling the repair in production.
 
-## 15. Non-Goals
+## 15. Historical Non-Goals
 
 - This spec does not add Booking.com Connectivity API support.
 - This spec does not try to infer the actual guest name from Booking.com ICS; the feed does not provide it.
 - This spec does not solve multi-unit inventory. It assumes the current property behaves as one sellable apartment unless a future capacity model says otherwise.
 - This spec does not hard-delete historical occupancy rows.
 
-## 16. Definition Of Done
+## 16. Historical Definition Of Done (Superseded)
 
 - A successful full sync cannot leave active duplicate rows for the same upstream UID/night.
 - Disappeared future/current Booking.com events become `deleted_from_source` after a full successful sync.

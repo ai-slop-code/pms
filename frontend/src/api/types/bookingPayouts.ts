@@ -17,11 +17,7 @@ export interface BookingPayoutRow {
   net_cents: number
   payout_date: string
   transaction_id?: number
-  occupancy_id?: number
-  named_stay_id?: number
-  occupancy_start_at?: string
-  occupancy_end_at?: string
-  occupancy_summary?: string
+  named_stay_id: number
   named_stay_display_name?: string
   named_stay_type?: 'booking_com' | 'external' | 'maintenance' | 'personal_use'
   named_stay_check_in_date?: string
@@ -33,10 +29,6 @@ export interface BookingPayoutRow {
   has_statement_data: boolean
 }
 
-/**
- * Occupancy candidate shown in the BookingPayoutsView "link stay" picker.
- * Different shape from {@link ./invoice.InvoiceOccupancyOption}.
- */
 export interface BookingPayoutStayOption {
   id: number
   display_name: string
@@ -48,5 +40,3 @@ export interface BookingPayoutStayOption {
   manual_revenue_cents?: number
   has_finance_data: boolean
 }
-
-export type BookingPayoutOccupancyOption = BookingPayoutStayOption

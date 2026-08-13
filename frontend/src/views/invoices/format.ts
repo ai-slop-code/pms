@@ -1,6 +1,6 @@
 import { formatEuros } from '@/utils/format'
 import type {
-  InvoiceOccupancyOption as OccupancyOption,
+  InvoiceNamedStayOption as StayOption,
   InvoiceBookingPayoutOption as BookingPayoutOption,
 } from '@/api/types/invoice'
 
@@ -20,7 +20,7 @@ export function fmtDay(ts?: string): string {
   return new Date(ts).toLocaleDateString()
 }
 
-export function occupancyOptionLabel(o: OccupancyOption): string {
+export function stayOptionLabel(o: StayOption): string {
   const payout = o.has_finance_data ? ' · finance' : ''
   return `#${o.id} ${o.display_name}${payout} (${o.check_in_date}–${o.check_out_date})`
 }
@@ -32,7 +32,7 @@ export function payoutBillableCents(p: BookingPayoutOption): number {
 }
 
 export function payoutOptionLabel(p: BookingPayoutOption): string {
-  const summary = (p.payout_summary || p.host_name || p.guest_name || p.occupancy_summary || '').trim()
+  const summary = (p.payout_summary || p.host_name || p.guest_name || '').trim()
   const summaryBit = summary ? `${summary} · ` : ''
   const inv = p.linked_invoice_id ? ` · invoiced #${p.linked_invoice_id}` : ''
   return `${summaryBit}${p.reference_number} · ${eur(payoutBillableCents(p))}${inv}`

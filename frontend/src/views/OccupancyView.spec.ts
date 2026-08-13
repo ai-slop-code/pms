@@ -66,7 +66,6 @@ function apiRouter(handlers: Record<string, () => unknown>) {
         },
       })
     }
-    if (url.includes('/occupancies')) return Promise.resolve({ occupancies: [] })
     if (url.includes('/occupancy-sync/runs')) return Promise.resolve({ runs: [] })
     if (url.includes('/occupancy-source')) {
       return Promise.resolve({ source: { active: false, source_type: '' } })
@@ -114,12 +113,15 @@ describe('OccupancyView', () => {
     const w = mount(OccupancyView)
     await flushPromises()
 
-    await w.findAll('[role="tab"]')[2]?.trigger('click')
+    await w.findAll('[role="tab"]')[1]?.trigger('click')
     await flushPromises()
 
-    expect(apiMock.mock.calls.some(([u]) => typeof u === 'string' && u.includes('/occupancy-api-tokens'))).toBe(false)
+    expect(
+      apiMock.mock.calls.some(([u]) => typeof u === 'string' && u.includes('/occupancy-api-tokens')),
+    ).toBe(false)
     expect(w.text()).not.toContain('JSON export')
     expect(w.text()).not.toContain('n8n')
+    expect(w.text()).not.toContain('ICS reconciliation repair')
   })
 
   it('hides raw promotion and create actions when the selected night already has a named stay', async () => {
@@ -167,7 +169,7 @@ describe('OccupancyView', () => {
       cleaning_events: [],
     }
     const vm = w.vm as unknown as Record<string, unknown>
-    ;(vm.onCalendarV2CellClick as (payload: Record<string, unknown>) => void)({
+    ;(vm.onCalendarCellClick as (payload: Record<string, unknown>) => void)({
       dateKey: '2026-07-20',
       rawBlocks: [rawBlock],
       namedStays: [namedStay],
@@ -194,7 +196,7 @@ describe('OccupancyView', () => {
     await flushPromises()
 
     const vm = w.vm as unknown as Record<string, unknown>
-    ;(vm.onCalendarV2CellClick as (payload: Record<string, unknown>) => void)({
+    ;(vm.onCalendarCellClick as (payload: Record<string, unknown>) => void)({
       dateKey: '2026-07-19',
       rawBlocks: [
         {
@@ -237,7 +239,13 @@ describe('OccupancyView', () => {
       }
       if (url.includes('/occupancy-calendar')) {
         return Promise.resolve({
-          calendar: { property_id: 6, month: '2026-07', raw_blocks: [], named_stays: [], availability_blocks: [] },
+          calendar: {
+            property_id: 6,
+            month: '2026-07',
+            raw_blocks: [],
+            named_stays: [],
+            availability_blocks: [],
+          },
         })
       }
       return Promise.resolve({})
@@ -267,7 +275,13 @@ describe('OccupancyView', () => {
       }
       if (url.includes('/occupancy-calendar')) {
         return Promise.resolve({
-          calendar: { property_id: 6, month: '2026-07', raw_blocks: [], named_stays: [], availability_blocks: [] },
+          calendar: {
+            property_id: 6,
+            month: '2026-07',
+            raw_blocks: [],
+            named_stays: [],
+            availability_blocks: [],
+          },
         })
       }
       return Promise.resolve({})
@@ -295,19 +309,27 @@ describe('OccupancyView', () => {
     seedProperty()
     let patchURL = ''
     let payload: Record<string, unknown> | undefined
-    apiMock.mockImplementation((url: string, options?: { method?: string; json?: Record<string, unknown> }) => {
-      if (url.includes('/stays/42') && options?.method === 'PATCH') {
-        patchURL = url
-        payload = options.json
-        return Promise.resolve({ ok: true })
-      }
-      if (url.includes('/occupancy-calendar')) {
-        return Promise.resolve({
-          calendar: { property_id: 6, month: '2026-07', raw_blocks: [], named_stays: [], availability_blocks: [] },
-        })
-      }
-      return Promise.resolve({})
-    })
+    apiMock.mockImplementation(
+      (url: string, options?: { method?: string; json?: Record<string, unknown> }) => {
+        if (url.includes('/stays/42') && options?.method === 'PATCH') {
+          patchURL = url
+          payload = options.json
+          return Promise.resolve({ ok: true })
+        }
+        if (url.includes('/occupancy-calendar')) {
+          return Promise.resolve({
+            calendar: {
+              property_id: 6,
+              month: '2026-07',
+              raw_blocks: [],
+              named_stays: [],
+              availability_blocks: [],
+            },
+          })
+        }
+        return Promise.resolve({})
+      },
+    )
     const w = mount(OccupancyView)
     await flushPromises()
 
@@ -351,28 +373,173 @@ describe('OccupancyView', () => {
       seedProperty()
       let patchURL = ''
       let payload: Record<string, unknown> | undefined
-      apiMock.mockImplementation((url: string, options?: { method?: string; json?: Record<string, unknown> }) => {
-        if (url.includes('/stays/42/status') && options?.method === 'PATCH') {
-          patchURL = url
-          payload = options.json
-          return Promise.resolve({ ok: true })
-        }
-        if (url.includes('/occupancy-calendar')) {
-          return Promise.resolve({
-            calendar: { property_id: 6, month: '2026-07', raw_blocks: [], named_stays: [], availability_blocks: [] },
-          })
-        }
-        return Promise.resolve({})
-      })
+      apiMock.mockImplementation(
+        (url: string, options?: { method?: string; json?: Record<string, unknown> }) => {
+          if (url.includes('/stays/42/status') && options?.method === 'PATCH') {
+            patchURL = url
+            payload = options.json
+            return Promise.resolve({ ok: true })
+          }
+          if (url.includes('/occupancy-calendar')) {
+            return Promise.resolve({
+              calendar: {
+                property_id: 6,
+                month: '2026-07',
+                raw_blocks: [],
+                named_stays: [],
+                availability_blocks: [],
+              },
+            })
+          }
+          return Promise.resolve({})
+        },
+      )
       const w = mount(OccupancyView)
       await flushPromises()
 
       const vm = w.vm as unknown as Record<string, unknown>
-      await (vm.updateNamedStayStatus as (stay: Record<string, unknown>, status: string) => Promise<void>)({ id: 42 }, status)
+      await (vm.updateNamedStayStatus as (stay: Record<string, unknown>, status: string) => Promise<void>)(
+        { id: 42 },
+        status,
+      )
       await flushPromises()
 
       expect(patchURL).toContain('/api/properties/6/stays/42/status')
       expect(payload).toEqual({ status })
     },
   )
+
+  it.each([
+    ['active', 'Archive', 'archived'],
+    ['archived', 'Reactivate', 'active'],
+  ] as const)(
+    'updates an %s availability block through the %s action',
+    async (initialStatus, action, status) => {
+      seedProperty()
+      let patchURL = ''
+      let payload: Record<string, unknown> | undefined
+      const block = {
+        id: 51,
+        property_id: 6,
+        block_type: 'closed',
+        start_date: '2026-07-10',
+        end_date: '2026-07-12',
+        reason: 'Repair',
+        status: initialStatus,
+        covered_nights: ['2026-07-10', '2026-07-11'],
+      }
+      apiMock.mockImplementation(
+        (url: string, options?: { method?: string; json?: Record<string, unknown> }) => {
+          if (url.includes('/availability-blocks/51') && options?.method === 'PATCH') {
+            patchURL = url
+            payload = options.json
+            return Promise.resolve({ ok: true })
+          }
+          if (url.includes('/occupancy-calendar')) {
+            return Promise.resolve({
+              calendar: {
+                property_id: 6,
+                month: '2026-07',
+                raw_blocks: [],
+                named_stays: [],
+                availability_blocks: [block],
+              },
+            })
+          }
+          return Promise.resolve({})
+        },
+      )
+      const w = mount(OccupancyView)
+      await flushPromises()
+
+      const actionButton = w.findAll('button').find((button) => button.text() === action)
+      expect(actionButton).toBeTruthy()
+      await actionButton?.trigger('click')
+      await flushPromises()
+
+      expect(patchURL).toBe('/api/properties/6/availability-blocks/51')
+      expect(payload).toEqual({
+        block_type: 'closed',
+        start_date: '2026-07-10',
+        end_date: '2026-07-12',
+        reason: 'Repair',
+        status,
+      })
+    },
+  )
+
+  it('patches named-stay outcomes through the PMS 21 endpoint', async () => {
+    seedProperty()
+    let patchURL = ''
+    let payload: Record<string, unknown> | undefined
+    apiMock.mockImplementation(
+      (url: string, options?: { method?: string; json?: Record<string, unknown> }) => {
+        if (url.includes('/stays/42/outcome') && options?.method === 'PATCH') {
+          patchURL = url
+          payload = options.json
+          return Promise.resolve({ ok: true })
+        }
+        if (url.includes('/occupancy-calendar')) {
+          return Promise.resolve({
+            calendar: {
+              property_id: 6,
+              month: '2026-07',
+              raw_blocks: [],
+              named_stays: [],
+              availability_blocks: [],
+            },
+          })
+        }
+        return Promise.resolve({})
+      },
+    )
+    const w = mount(OccupancyView)
+    await flushPromises()
+
+    const vm = w.vm as unknown as Record<string, unknown>
+    await (
+      vm.patchOutcome as (stay: Record<string, unknown>, outcome: string, reason: string) => Promise<void>
+    )({ id: 42 }, 'no_show', 'Guest did not arrive')
+
+    expect(patchURL).toBe('/api/properties/6/stays/42/outcome')
+    expect(payload).toEqual({ outcome: 'no_show', reason: 'Guest did not arrive' })
+  })
+
+  it('patches named-stay reviews through the PMS 21 endpoint', async () => {
+    seedProperty()
+    let patchURL = ''
+    let payload: Record<string, unknown> | undefined
+    apiMock.mockImplementation(
+      (url: string, options?: { method?: string; json?: Record<string, unknown> }) => {
+        if (url.includes('/stays/42/review') && options?.method === 'PATCH') {
+          patchURL = url
+          payload = options.json
+          return Promise.resolve({ ok: true })
+        }
+        if (url.includes('/occupancy-calendar')) {
+          return Promise.resolve({
+            calendar: {
+              property_id: 6,
+              month: '2026-07',
+              raw_blocks: [],
+              named_stays: [],
+              availability_blocks: [],
+            },
+          })
+        }
+        return Promise.resolve({})
+      },
+    )
+    const w = mount(OccupancyView)
+    await flushPromises()
+
+    const vm = w.vm as unknown as Record<string, unknown>
+    vm.reviewTarget = { id: 42 }
+    vm.reviewStatus = 'rejected'
+    vm.reviewReason = 'Dates conflict with source'
+    await (vm.submitReview as () => Promise<void>)()
+
+    expect(patchURL).toBe('/api/properties/6/stays/42/review')
+    expect(payload).toEqual({ review_status: 'rejected', reason: 'Dates conflict with source' })
+  })
 })

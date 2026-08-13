@@ -36,15 +36,13 @@ type nukiCodesResponse struct {
 
 type nukiUpcomingStayRow struct {
 	StayID              int64   `json:"stay_id"`
-	LegacyOccupancyID   *int64  `json:"legacy_occupancy_id,omitempty"`
-	OccupancyID         *int64  `json:"occupancy_id,omitempty"`
 	SourceEventUID      string  `json:"source_event_uid"`
 	Summary             *string `json:"summary"`
 	SavedPinName        *string `json:"saved_pin_name"`
 	StayType            string  `json:"stay_type"`
 	StartAt             string  `json:"start_at"`
 	EndAt               string  `json:"end_at"`
-	OccupancyStatus     string  `json:"occupancy_status"`
+	StayStatus          string  `json:"stay_status"`
 	GeneratedCodeID     *int64  `json:"generated_code_id"`
 	GeneratedLabel      *string `json:"generated_label"`
 	GeneratedStatus     *string `json:"generated_status"`
@@ -205,9 +203,8 @@ func (s *Server) generateNukiCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type body struct {
-		OccupancyID *int64  `json:"occupancy_id"`
-		StayID      *int64  `json:"stay_id"`
-		PinName     *string `json:"pin_name"`
+		StayID  *int64  `json:"stay_id"`
+		PinName *string `json:"pin_name"`
 	}
 	var b body
 	if err := ReadJSON(r, &b); err != nil && !errors.Is(err, io.EOF) {
@@ -221,12 +218,6 @@ func (s *Server) generateNukiCodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		genErr = s.Nuki.GenerateCodeForNamedStay(r.Context(), pid, *b.StayID, "generate_one", strings.TrimSpace(*b.PinName))
-	} else if b.OccupancyID != nil {
-		if b.PinName == nil || strings.TrimSpace(*b.PinName) == "" {
-			WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: "pin_name required"})
-			return
-		}
-		genErr = s.Nuki.GenerateCodeForOccupancy(r.Context(), pid, *b.OccupancyID, "generate_one", strings.TrimSpace(*b.PinName))
 	} else {
 		genErr = s.Nuki.GenerateCodes(r.Context(), pid, "generate_all")
 	}
@@ -277,15 +268,13 @@ func (s *Server) listNukiUpcomingStays(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, nukiUpcomingStayRow{
 			StayID:              row.StayID,
-			LegacyOccupancyID:   nullInt64Ptr(row.LegacyOccupancyID),
-			OccupancyID:         nullInt64Ptr(row.OccupancyID),
 			SourceEventUID:      row.SourceEventUID,
 			Summary:             summary,
 			SavedPinName:        nullStringPtr(row.GuestDisplayName),
 			StayType:            row.StayType,
 			StartAt:             row.StartAt.UTC().Format(time.RFC3339),
 			EndAt:               row.EndAt.UTC().Format(time.RFC3339),
-			OccupancyStatus:     row.OccupancyStatus,
+			StayStatus:          row.StayStatus,
 			GeneratedCodeID:     nullInt64Ptr(row.GeneratedCodeID),
 			GeneratedLabel:      nullStringPtr(row.GeneratedLabel),
 			GeneratedStatus:     nullStringPtr(row.GeneratedStatus),

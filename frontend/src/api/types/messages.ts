@@ -28,7 +28,6 @@ export interface RenderedMessage {
 
 export interface GenerateMessagesResponse {
   stay_id: number
-  occupancy_id?: number
   messages: RenderedMessage[]
   nuki_available: boolean
 }

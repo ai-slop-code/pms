@@ -34,6 +34,7 @@ type availabilityBlockBody struct {
 	StartDate string `json:"start_date"`
 	EndDate   string `json:"end_date"`
 	Reason    string `json:"reason"`
+	Status    string `json:"status"`
 }
 
 type availabilityBlockMutationResponse struct {
@@ -158,6 +159,7 @@ func (s *Server) patchAvailabilityBlock(w http.ResponseWriter, r *http.Request) 
 		StartDate:    body.StartDate,
 		EndDate:      body.EndDate,
 		Reason:       body.Reason,
+		Status:       body.Status,
 		ActingUserID: actor.ID,
 	})
 	if err != nil {

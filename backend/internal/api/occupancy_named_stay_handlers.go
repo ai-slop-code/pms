@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -14,24 +15,10 @@ import (
 	"pms/backend/internal/store"
 )
 
-// PMS_19 §11A named-stay + repair endpoints. All are property-scoped and gated
-// on Occupancy/LevelWrite, matching the existing occupancy override actions.
-
-type namedStayCreateBody struct {
-	CheckIn          string `json:"check_in"`
-	CheckOut         string `json:"check_out"`
-	GuestDisplayName string `json:"guest_display_name"`
-}
-
-type namedStayPatchBody struct {
-	CheckIn          *string `json:"check_in"`
-	CheckOut         *string `json:"check_out"`
-	GuestDisplayName *string `json:"guest_display_name"`
-}
+const stayReasonMaxLen = 500
 
 type stayCreateBody struct {
 	DisplayName      string `json:"display_name"`
-	GuestDisplayName string `json:"guest_display_name"`
 	StayType         string `json:"stay_type"`
 	CheckIn          string `json:"check_in"`
 	CheckOut         string `json:"check_out"`
@@ -40,7 +27,6 @@ type stayCreateBody struct {
 
 type stayPatchBody struct {
 	DisplayName           *string `json:"display_name"`
-	GuestDisplayName      *string `json:"guest_display_name"`
 	StayType              *string `json:"stay_type"`
 	CheckIn               *string `json:"check_in"`
 	CheckOut              *string `json:"check_out"`
@@ -54,86 +40,21 @@ type stayStatusBody struct {
 	Status string `json:"status"`
 }
 
+type stayOutcomePatchBody struct {
+	Outcome json.RawMessage `json:"outcome"`
+	Reason  string          `json:"reason"`
+}
+
+type stayReviewPatchBody struct {
+	ReviewStatus string `json:"review_status"`
+	Reason       string `json:"reason"`
+}
+
 type namedStayV2Response struct {
 	OK                   bool    `json:"ok"`
 	NamedStayID          int64   `json:"named_stay_id"`
-	LegacyOccupancyID    *int64  `json:"legacy_occupancy_id,omitempty"`
 	NukiGenerationStatus string  `json:"nuki_generation_status"`
 	NukiGenerationError  *string `json:"nuki_generation_error,omitempty"`
-}
-
-func (s *Server) postNamedStay(w http.ResponseWriter, r *http.Request) {
-	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
-	if !ok {
-		return
-	}
-	upstreamUID := strings.TrimSpace(chi.URLParam(r, "upstreamUid"))
-	if upstreamUID == "" {
-		WriteError(w, http.StatusBadRequest, "invalid upstream uid")
-		return
-	}
-	var body namedStayCreateBody
-	if err := ReadJSON(r, &body); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	s.audit(r, actor, "occupancy_named_stay_created", "occupancy_block", upstreamUID, "attempt")
-	occID, err := s.Store.CreateNamedStay(r.Context(), propID, upstreamUID, body.CheckIn, body.CheckOut, body.GuestDisplayName, actor.ID)
-	if err != nil {
-		writeNamedStayError(w, err)
-		return
-	}
-	s.reconcileCleaningBestEffort(r, propID, "named_stay")
-	s.audit(r, actor, "occupancy_named_stay_created", "occupancy", strconv.FormatInt(occID, 10), "success")
-	WriteJSON(w, http.StatusOK, struct {
-		OK          bool  `json:"ok"`
-		OccupancyID int64 `json:"occupancy_id"`
-	}{OK: true, OccupancyID: occID})
-}
-
-func (s *Server) patchNamedStay(w http.ResponseWriter, r *http.Request) {
-	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
-	if !ok {
-		return
-	}
-	_, occID, err := parsePropertyAndOccupancyIDs(r)
-	if err != nil {
-		WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	var body namedStayPatchBody
-	if err := ReadJSON(r, &body); err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	s.audit(r, actor, "occupancy_named_stay_range_changed", "occupancy", strconv.FormatInt(occID, 10), "attempt")
-	if err := s.Store.UpdateNamedStay(r.Context(), propID, occID, body.CheckIn, body.CheckOut, body.GuestDisplayName); err != nil {
-		writeNamedStayError(w, err)
-		return
-	}
-	s.reconcileCleaningBestEffort(r, propID, "named_stay_edit")
-	s.audit(r, actor, "occupancy_named_stay_range_changed", "occupancy", strconv.FormatInt(occID, 10), "success")
-	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
-}
-
-func (s *Server) deleteNamedStay(w http.ResponseWriter, r *http.Request) {
-	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
-	if !ok {
-		return
-	}
-	_, occID, err := parsePropertyAndOccupancyIDs(r)
-	if err != nil {
-		WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	s.audit(r, actor, "occupancy_named_stay_deleted", "occupancy", strconv.FormatInt(occID, 10), "attempt")
-	if err := s.Store.DeleteNamedStay(r.Context(), propID, occID); err != nil {
-		writeNamedStayError(w, err)
-		return
-	}
-	s.reconcileCleaningBestEffort(r, propID, "named_stay_delete")
-	s.audit(r, actor, "occupancy_named_stay_deleted", "occupancy", strconv.FormatInt(occID, 10), "success")
-	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
 }
 
 func (s *Server) postBookingBlockPromote(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +78,7 @@ func (s *Server) postBookingBlockPromote(w http.ResponseWriter, r *http.Request)
 	}
 	s.audit(r, actor, "named_stay_promoted", "raw_booking_block", strconv.FormatInt(blockID, 10), "attempt")
 	stay, err := s.Store.PromoteRawBookingBlockToNamedStay(r.Context(), propID, blockID, store.NamedStayCreateInput{
-		DisplayName:      firstNonEmpty(body.DisplayName, body.GuestDisplayName),
+		DisplayName:      strings.TrimSpace(body.DisplayName),
 		StayType:         stayType,
 		CheckInDate:      body.CheckIn,
 		CheckOutDate:     body.CheckOut,
@@ -187,7 +108,7 @@ func (s *Server) postStay(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, actor, "named_stay_created", "property", strconv.FormatInt(propID, 10), "attempt")
 	stay, err := s.Store.CreateNamedStayRecord(r.Context(), store.NamedStayCreateInput{
 		PropertyID:       propID,
-		DisplayName:      firstNonEmpty(body.DisplayName, body.GuestDisplayName),
+		DisplayName:      strings.TrimSpace(body.DisplayName),
 		StayType:         body.StayType,
 		CheckInDate:      body.CheckIn,
 		CheckOutDate:     body.CheckOut,
@@ -221,13 +142,9 @@ func (s *Server) patchStay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before, _ := s.Store.GetNamedStay(r.Context(), propID, stayID)
-	displayName := body.DisplayName
-	if displayName == nil {
-		displayName = body.GuestDisplayName
-	}
 	s.audit(r, actor, "named_stay_updated", "named_stay", strconv.FormatInt(stayID, 10), "attempt")
 	stay, err := s.Store.UpdateNamedStayRecord(r.Context(), propID, stayID, store.NamedStayUpdateInput{
-		DisplayName:           displayName,
+		DisplayName:           body.DisplayName,
 		StayType:              body.StayType,
 		CheckInDate:           body.CheckIn,
 		CheckOutDate:          body.CheckOut,
@@ -277,47 +194,83 @@ func (s *Server) patchStayStatus(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
 }
 
-func (s *Server) postOccupancyRepairDryRun(w http.ResponseWriter, r *http.Request) {
+func (s *Server) patchStayOutcome(w http.ResponseWriter, r *http.Request) {
 	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
 	if !ok {
 		return
 	}
-	report, err := s.Store.OccupancyRepairPlan(r.Context(), propID)
+	stayID, err := parseStayID(r)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "repair plan failed")
+		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.audit(r, actor, "occupancy_repair_dry_run", "property", strconv.FormatInt(propID, 10), "success")
-	WriteJSON(w, http.StatusOK, report)
+	var body stayOutcomePatchBody
+	if err := ReadJSON(r, &body); err != nil || len(body.Outcome) == 0 {
+		WriteError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if len(reason) > stayReasonMaxLen {
+		WriteError(w, http.StatusBadRequest, "reason too long")
+		return
+	}
+	var outcome *string
+	if strings.TrimSpace(string(body.Outcome)) != "null" {
+		var value string
+		if err := json.Unmarshal(body.Outcome, &value); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid outcome")
+			return
+		}
+		value = strings.TrimSpace(value)
+		outcome = &value
+	}
+	before, _ := s.Store.GetNamedStay(r.Context(), propID, stayID)
+	id := strconv.FormatInt(stayID, 10)
+	s.audit(r, actor, "named_stay_outcome_changed", "named_stay", id, "attempt")
+	stay, err := s.Store.UpdateNamedStayOutcome(r.Context(), propID, stayID, actor.ID, outcome, reason)
+	if err != nil {
+		writeNamedStayError(w, err)
+		return
+	}
+	stay = s.reconcileNamedStayNuki(r, propID, stay, "named_stay_outcome")
+	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_outcome", stayRangeFromNamedStay(before), stayRangeFromNamedStay(stay))
+	s.audit(r, actor, "named_stay_outcome_changed", "named_stay", id, "success")
+	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
 }
 
-func (s *Server) postOccupancyRepairApply(w http.ResponseWriter, r *http.Request) {
+func (s *Server) patchStayReview(w http.ResponseWriter, r *http.Request) {
 	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
 	if !ok {
 		return
 	}
-	if actor.Role != "super_admin" && actor.Role != "owner" {
-		WriteError(w, http.StatusForbidden, "repair requires super_admin or owner")
-		return
-	}
-	s.audit(r, actor, "occupancy_repair_applied", "property", strconv.FormatInt(propID, 10), "attempt")
-	report, err := s.Store.OccupancyRepairApply(r.Context(), propID)
+	stayID, err := parseStayID(r)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "repair apply failed")
+		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	for _, res := range report.Resolutions {
-		s.audit(r, actor, "occupancy_duplicate_resolved", "occupancy", strconv.FormatInt(res.WinnerOccID, 10), "success")
+	var body stayReviewPatchBody
+	if err := ReadJSON(r, &body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid json")
+		return
 	}
-	s.reconcileCleaningBestEffort(r, propID, "occupancy_repair")
-	s.audit(r, actor, "occupancy_repair_applied", "property", strconv.FormatInt(propID, 10), "success")
-	WriteJSON(w, http.StatusOK, report)
-}
-
-func (s *Server) reconcileCleaningBestEffort(r *http.Request, propID int64, trigger string) {
-	if s.CleaningCalendar != nil {
-		_, _ = s.CleaningCalendar.ReconcileProperty(r.Context(), propID, trigger)
+	body.ReviewStatus = strings.TrimSpace(body.ReviewStatus)
+	body.Reason = strings.TrimSpace(body.Reason)
+	if (body.ReviewStatus != "confirmed" && body.ReviewStatus != "rejected") || len(body.Reason) > stayReasonMaxLen {
+		WriteError(w, http.StatusBadRequest, "invalid review")
+		return
 	}
+	before, _ := s.Store.GetNamedStay(r.Context(), propID, stayID)
+	id := strconv.FormatInt(stayID, 10)
+	s.audit(r, actor, "named_stay_review_changed", "named_stay", id, "attempt")
+	stay, err := s.Store.UpdateNamedStayReview(r.Context(), propID, stayID, actor.ID, body.ReviewStatus, body.Reason)
+	if err != nil {
+		writeNamedStayError(w, err)
+		return
+	}
+	stay = s.reconcileNamedStayNuki(r, propID, stay, "named_stay_review")
+	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_review", stayRangeFromNamedStay(before), stayRangeFromNamedStay(stay))
+	s.audit(r, actor, "named_stay_review_changed", "named_stay", id, "success")
+	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
 }
 
 type stayRange struct {
@@ -441,10 +394,6 @@ func namedStayResponse(stay *store.NamedStay) namedStayV2Response {
 		return resp
 	}
 	resp.NamedStayID = stay.ID
-	if stay.LegacyOccupancyID.Valid {
-		id := stay.LegacyOccupancyID.Int64
-		resp.LegacyOccupancyID = &id
-	}
 	if stay.NukiGenerationStatus.Valid {
 		resp.NukiGenerationStatus = stay.NukiGenerationStatus.String
 	}
@@ -464,15 +413,6 @@ func parseStayID(r *http.Request) (int64, error) {
 		return 0, errors.New("invalid stay id")
 	}
 	return stayID, nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }
 
 func writeNamedStayError(w http.ResponseWriter, err error) {

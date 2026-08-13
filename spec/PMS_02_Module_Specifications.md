@@ -12,6 +12,12 @@ This document describes each PMS module in implementation-ready form for a singl
 
 Use `PMS_01_Architecture_and_Global_Spec.md` for global rules and shared assumptions.
 
+**PMS 21 authority:** the final availability/stay architecture is defined by
+`PMS_21_Legacy_Occupancy_Removal_Spec.md` and ADR-007. This document uses that
+model for active contracts. Detailed milestone text retained later in this
+file is historical implementation evidence where it names `occupancies`,
+public export, or transitional identity fallbacks.
+
 ## 1. Global Platform Module
 
 ### Purpose
@@ -84,73 +90,82 @@ Provide the shared platform capabilities required by all business modules: authe
 - module-level authorization
 - audit log creation for write endpoints
 
-## 2. Occupancy and ICS Sync Module
+## 2. Availability, Named Stays, and ICS Sync Module
 
 ### Purpose
-Import property occupancy from configurable ICS sources, store raw and normalized data, display occupancy in UI, and expose it through an authenticated JSON endpoint for automation.
+Import Booking.com unavailable blocks from configurable ICS sources, retain
+raw source evidence, manage operator-owned named stays separately, and display
+source blocks, stays, cleaning state, Nuki state, and availability blocks in a
+combined calendar.
 
 ### Functional Requirements
 - Each property has a configurable ICS URL.
 - The system fetches ICS hourly.
 - A manual sync trigger must be available.
 - Raw ICS events must be stored for traceability.
-- Normalized occupancies must be generated from raw events.
-- Occupancies must be shown in:
-  - month calendar view
-  - list/table view
-- An authenticated API endpoint must expose occupancies as JSON for n8n and similar automation.
-- The design must support future source types such as Airbnb and direct bookings.
+- ICS reconciliation writes raw booking blocks and raw-block nights only.
+- Named stays are created or changed through named-stay business workflows,
+  not by treating each ICS event as a guest stay.
+- Source links capture Booking.com provenance and source health without giving
+  ICS ownership of stay status, dates, name, type, or outcome.
+- Property availability blocks represent maintenance, personal use, and other
+  non-stay closures.
+- The combined calendar shows raw blocks, named stays, availability blocks,
+  and integration warnings by real new-model identity.
+- Public occupancy export and occupancy API tokens are retired without an
+  export-v2 replacement.
 
 ### Business Rules
-- Sync must update existing occupancies when upstream ICS data changes.
-- Source identity should rely on stable UID or best available event fingerprint.
-- Occupancy is the primary shared record used by Nuki, messages, and optionally invoices.
-- JSON endpoint access must use a token separate from the normal browser session if intended for automation use.
-- Occupancies may be manually labelled by an operator (PMS_14):
-  - `closed` — drops out of sales analytics (numerator and denominator) and suppresses Nuki code generation.
-  - `external_sale` — counts as a sold night, contributes its operator-entered net amount to gross revenue, and suppresses Nuki code generation.
-  - Labels survive ICS resync: `UpsertOccupancy` does not clear `closure_state` or related fields when re-importing the same UID.
+- Sync updates raw blocks and source-link health when upstream ICS data changes;
+  it must not resize, rename, classify, cancel, archive, or delete named stays.
+- Raw source identity uses the exact upstream UID and retained source snapshot.
+- Named stays are the primary shared records for Nuki, messages, finance,
+  invoices, dashboard stay widgets, and stay analytics.
+- At most one active named stay owns a property-local night.
+- Maintenance and personal-use stays and explicit availability blocks reduce
+  bookable inventory but do not count as sold/revenue nights.
+- External stays count as sold only under PMS 21 stay-type, review, and funding
+  rules.
+- `cancelled_non_refundable` and `no_show` follow PMS 17: count as sold,
+  retain actual imported revenue, and stay outside the normal cancellation-rate
+  numerator and denominator.
 
 ### Normalization Rules
 - Store raw source data unchanged where possible.
-- Map source event dates into property timezone.
-- Normalize start and end into occupancy date/time values.
-- Track sync status such as `active`, `updated`, `cancelled`, or `deleted_from_source` if source changes imply removal.
+- Map all-day source dates into property-local half-open ranges.
+- Materialize raw-block and named-stay night coverage in their separate night
+  tables.
+- Track raw-block disappearance and source-link health independently of named
+  stay lifecycle.
+- Failed or partially parsed feeds do not mutate availability state.
 
 ### Suggested API Endpoints
-- `GET /api/properties/{id}/occupancies`
-- `GET /api/properties/{id}/occupancies/calendar?month=YYYY-MM`
+- `GET /api/properties/{id}/stays`
+- `POST /api/properties/{id}/stays`
+- `PATCH /api/properties/{id}/stays/{stayId}`
+- `PATCH /api/properties/{id}/stays/{stayId}/status`
+- `GET /api/properties/{id}/occupancy-calendar?month=YYYY-MM`
+- `POST /api/properties/{id}/booking-blocks/{blockId}/promote`
+- `POST /api/properties/{id}/availability-blocks`
+- `PATCH /api/properties/{id}/availability-blocks/{blockId}`
 - `POST /api/properties/{id}/occupancy-sync/run`
 - `GET /api/properties/{id}/occupancy-sync/runs`
 - `PATCH /api/properties/{id}/occupancy-source`
-- `GET /api/properties/{id}/occupancy-export?token=...`
-- `POST /api/properties/{id}/occupancies/{occupancyId}/close` — admin-only; body `{ reason, category }`.
-- `POST /api/properties/{id}/occupancies/{occupancyId}/external-sale` — admin-only; body `{ net_amount_cents, currency, channel, reason }`.
-- `POST /api/properties/{id}/occupancies/{occupancyId}/reopen` — admin-only; clears the closure label.
-
-### Suggested JSON Export Fields
-- occupancy id
-- property id
-- property name
-- source type
-- external event uid
-- stay start
-- stay end
-- status
-- raw summary
-- last synced at
-- categories (array; emits `PMS-CLOSURE` or `PMS-EXTERNAL-SALE` per PMS_14 §3.5; absent for normal stays)
 
 ### Suggested Database Entities
 - `occupancy_sources`
 - `occupancy_raw_events`
-- `occupancies` — extended in migration 000019 with closure columns: `closure_state` (`closed` | `external_sale` | NULL), `closure_reason`, `closure_category`, `closed_by_user_id`, `closed_at`, `external_net_amount_cents`, `external_currency`, `external_channel`.
 - `occupancy_sync_runs`
-- `occupancy_api_tokens`
+- `raw_booking_blocks`
+- `raw_booking_block_nights`
+- `named_stays`
+- `named_stay_nights`
+- `stay_source_links`
+- `property_availability_blocks`
 
 ### Frontend Screens
-- occupancy calendar page
-- occupancy list page with filtering by month and status
+- combined availability and named-stay calendar
+- named-stay list/lifecycle controls
 - occupancy source settings panel
 - sync status/history panel
 
@@ -159,20 +174,22 @@ Import property occupancy from configurable ICS sources, store raw and normalize
 - duplicate prevention
 - change detection
 - manual and scheduled sync behavior
-- JSON token authorization
-- timezone correctness for displayed stays
+- partial-parse no-mutation behavior
+- named-stay/raw-block ownership separation
+- per-night capacity and property-timezone correctness
+- absence of public export/token routes after cleanup
 
 ## 3. Nuki Access Module
 
 ### Purpose
-Create and manage Nuki access codes for stays based on occupancies and configured check-in/check-out times.
+Create and manage Nuki access codes for eligible named stays using configured check-in/check-out times.
 
 ### Functional Requirements
 - Each property stores Nuki integration credentials and one `authID`.
-- Access codes can be generated from occupancies.
+- Access codes can be generated from named stays only.
 - Check-in and check-out times are configurable per property.
-- The system should support automatic code creation after occupancy sync.
-- The system must avoid duplicates if an occupancy is re-imported.
+- The system should support reconciliation after named-stay changes and source sync.
+- The system must avoid duplicates when a named stay is reconciled repeatedly.
 - Old codes must be cleaned up daily.
 - Status lifecycle for PMS-managed Nuki access codes in v1 is:
   - `not_generated`
@@ -182,17 +199,17 @@ Create and manage Nuki access codes for stays based on occupancies and configure
 - UI must show:
   - generated codes
   - historical codes
-  - occupancy linkage
+  - named-stay linkage
   - valid time window
   - status and sync errors
 
 ### Business Rules
-- Code validity start = occupancy arrival date at configured check-in time.
-- Code validity end = occupancy departure date at configured check-out time.
-- If occupancy dates change after code creation, the existing code must be updated or revoked/recreated safely.
+- Code validity start = named-stay arrival date at configured check-in time.
+- Code validity end = named-stay departure date at configured check-out time.
+- If named-stay dates/status change after code creation, update or revoke safely.
 - Access code history must remain visible even after revocation or expiration.
 - API failures must produce retryable error states.
-- `not_generated` means no currently usable Nuki code is linked for that occupancy.
+- `not_generated` means no currently usable Nuki code is linked for that named stay.
 - `generated` means a usable Nuki code is linked and managed.
 - `revoked` means a previously linked/generated code was revoked or deleted and remains visible as history.
 
@@ -224,7 +241,7 @@ Create and manage Nuki access codes for stays based on occupancies and configure
 ### Test Focus
 - code validity window calculation
 - duplicate protection
-- occupancy update reconciliation
+- named-stay update/status reconciliation
 - cleanup job
 - failed integration retries
 
@@ -325,6 +342,10 @@ Provide a financial overview for each property, including income, expenses, recu
 - Changes affect only future months.
 - Cleaner salary must appear as a linked monthly expense draft or entry.
 - Display cleaner salary margin against total monthly property income.
+- Every committed canonical `finance_bookings` row requires a same-property
+  `named_stay_id`; unmatched input remains preview/staging/rejection evidence.
+- Finance import, rematch, cancellation review, and reset must not create or
+  mutate a synthetic legacy occupancy.
 
 ### Business Rules
 - Transaction categories determine reporting semantics, including whether an incoming transaction counts as property income.
@@ -366,6 +387,9 @@ Include a flag like `counts_toward_property_income`.
 - `finance_transactions`
 - `finance_recurring_rules`
 - `finance_month_states`
+- `finance_bookings`
+- `finance_imports`
+- `finance_booking_merges`
 
 ### Frontend Screens
 - ledger table view
@@ -393,6 +417,7 @@ Allow manual creation of PDF invoices for stays, in Slovak or English, with stor
 ### Functional Requirements
 - Invoice creation is manual.
 - One stay corresponds to one invoice.
+- Every invoice requires a same-property named stay in the final model.
 - Invoice numbering is compliant with Slovak numbering expectations.
 - Numbering is per property and per year.
 - Invoice form supports:
@@ -441,7 +466,8 @@ Allow manual creation of PDF invoices for stays, in Slovak or English, with stor
 - Invoice snapshots must not change automatically when owner profile later changes.
 - PDF regeneration should create a new file version while preserving prior metadata.
 - The system must prevent duplicate invoice numbers within the same property-year.
-- Because invoices are manual, occupancy linkage is optional but recommended.
+- Every final-model invoice has a same-property `named_stay_id`. A finance
+  booking link is optional, but when present it must identify the same stay.
 
 ### Suggested Invoice Number Strategy
 Format suggestion:
@@ -482,7 +508,7 @@ The precise Slovak formatting can be adjusted, but uniqueness per property/year 
 ## 7. Customer Message Templates Module
 
 ### Purpose
-Generate property-specific multilingual check-in instruction messages with placeholders filled from property settings, occupancies, and Nuki access data, then copy them to clipboard.
+Generate property-specific multilingual check-in instructions from property settings, named stays, and Nuki access data, then copy them to clipboard.
 
 ### Functional Requirements
 - Messages are generic, not guest-personalized.
@@ -495,7 +521,7 @@ Generate property-specific multilingual check-in instruction messages with place
 - Templates are editable in the UI.
 - Templates are property-specific.
 - Only check-in messages are required in v1.
-- Generated message rows are tied to occupancies.
+- Generated message rows are tied to named stays.
 - Message generation must inject:
   - stay dates
   - property name
@@ -530,14 +556,14 @@ Generate property-specific multilingual check-in instruction messages with place
 - `GET /api/properties/{id}/message-templates`
 - `POST /api/properties/{id}/message-templates`
 - `PATCH /api/properties/{id}/message-templates/{templateId}`
-- `GET /api/properties/{id}/messages/generate?occupancy_id=...`
+- `GET /api/properties/{id}/messages/generate?stay_id=...`
 
 ### Suggested Database Entities
 - `message_templates`
 - `message_template_versions` optional
 
 ### Frontend Screens
-- message generation table keyed by occupancy
+- message generation table keyed by named stay
 - copy buttons for each supported language
 - template editor form
 - preview dialog
@@ -592,11 +618,16 @@ Provide the property owner with a **strategic business-intelligence layer** sitt
 
 ### Business Rules
 - **Scope is single-property** (locked). The property is resolved from auth context; the `property_id` query parameter is accepted for future-proofing but must be validated against the caller's permissions.
-- **Cancelled stays** (`occupancies.status IN ('cancelled','deleted_from_source')`) are excluded from occupancy, ADR, RevPAR, and revenue totals; they count only in cancellation metrics.
-- **Revenue metrics cohort by arrival date** (`check_in_date` on payout, or `start_at` on occupancy), not by payout date. A March payout for a February stay belongs to February.
+- **Cancelled and archived named stays** have no active stay nights and are
+  excluded from occupancy, ADR, RevPAR, and revenue totals, subject to PMS 17
+  outcome semantics.
+- **Revenue metrics cohort by named-stay arrival date**, not payout date. A
+  March payout for a February stay belongs to February.
 - **Stays without a matched payout** contribute to occupancy but not to actual-revenue metrics. Forward-revenue estimation is the only exception.
 - **YoY** anchors on calendar period: July 2026 vs July 2025.
-- **Pace vs LY** uses the "as-of offset" technique: reconstruct the set of bookings whose `imported_at ≤ D` for each historical day `D`.
+- **Pace vs LY** uses the "as-of offset" technique: reconstruct the set of
+  named stays whose canonical `first_known_at <= D`, accounting for canonical
+  `cancellation_effective_at`, for each historical day `D`.
 - **Returning-guest detection** uses `normalize(guest_name) = lowercase + NFD unicode strip + trim + collapse spaces`, rejects names <6 normalized characters, and is a descriptive statistic only — it must never influence revenue or occupancy numbers.
 - **All endpoints** require `analytics` module read permission on the property (see §7 of `PMS_01`). Permission string: `analytics`, level `read`.
 - **Endpoints are read-only**; no DB writes, no new side effects. Safe to cache HTTP response body with `Cache-Control: private, max-age=60` *only if* the global `Cache-Control: no-store` default from `WriteJSON` is explicitly overridden per-handler.
@@ -608,7 +639,7 @@ All routes are registered under the authenticated router group in `backend/inter
 - `GET /api/properties/{id}/analytics/demand?from=YYYY-MM-DD&to=YYYY-MM-DD` — lead-time distribution, length-of-stay distribution, ADR-by-month/DOW/lead-bucket, gap-nights list, orphan-midweek list, returning-guests summary.
 - `GET /api/properties/{id}/analytics/pace?window=YYYY-MM` — cumulative booking-pace curve for the arrival window, plus the same-named window a year earlier.
 - `GET /api/properties/{id}/analytics/returning-guests?limit=50&offset=0` — paginated drill-down `{ name, stay_count, first_stay, last_stay }`.
-- `GET /api/properties/{id}/analytics/guest-checkin-heatmap?from=YYYY-MM-DD&to=YYYY-MM-DD` — 24-bucket hour-of-day histogram of first guest unlock per stay per day. Cleaner unlocks are excluded by matching the property's `cleaner_nuki_auth_id` (and aliases derived from `nuki_keypad_codes.raw_json`); guest unlocks are resolved to their owning occupancy through `nuki_access_codes.external_nuki_id`. Closed stays (PMS_14 §3) are excluded; externally-sold stays are kept. Default range is the current month in property TZ.
+- `GET /api/properties/{id}/analytics/guest-checkin-heatmap?from=YYYY-MM-DD&to=YYYY-MM-DD` — 24-bucket hour-of-day histogram of first guest unlock per named stay per day. Cleaner unlocks are excluded by matching the property's `cleaner_nuki_auth_id`; guest unlocks resolve through named-stay-owned Nuki rows. Default range is the current month in property TZ.
 - `GET /api/properties/{id}/analytics/freshness` — `{ last_ics_sync_at, last_payout_date, unmatched_payouts_count, staleness_level: 'ok'|'warn'|'stale' }`.
 
 Every list response echoes back the input filters and a `generated_at` RFC3339 timestamp.
@@ -624,9 +655,15 @@ Every list response echoes back the input filters and a `generated_at` RFC3339 t
 - Date pickers on Performance and Demand reuse the Finance module's `.toolbar` + `.month-control` pattern (native `<input type="date">`); tab buttons retain an always-visible `#f1f5f9` background so inactive tabs remain discoverable.
 
 ### Suggested Database Entities
-**No new tables in v1.** All metrics are live-computed from existing schema:
-- `occupancies`, `occupancy_sync_runs` — nights, occupancy, lead time, cancellations, pace, gap nights.
-- `finance_booking_payouts` — ADR, RevPAR, gross/net/commission/fees, returning-guest name source. *(Renamed to `finance_bookings` in FEAT-04 and extended with statement-derived columns and `has_payout_data` / `has_statement_data` flags; the analytics query above is unchanged.)*
+**Final-model sources:** metrics are live-computed from retained schema:
+- `named_stays`, `named_stay_nights`, `property_availability_blocks` — sold
+  nights, capacity, stay lifecycle, canonical `first_known_at` and
+  `cancellation_effective_at`, availability, and gaps.
+- `raw_booking_blocks`, `raw_booking_block_nights`, `stay_source_links`, and
+  `occupancy_sync_runs` — source coverage and freshness. Raw blocks do not
+  count as sold/revenue nights.
+- `finance_bookings` with required same-property named-stay linkage — ADR,
+  RevPAR, gross/net/commission/fees, and returning-guest name source.
 - `finance_transactions`, `cleaning_monthly_summaries` — net-per-stay cleaning allocation, cost-per-night roll-up.
 
 **Optional v2 addition (flagged, do not build in v1):** `analytics_snapshots(property_id, metric_code, period_key, value_cents_or_ratio, computed_at)` — add only if p95 latency on any endpoint exceeds 500 ms on realistic data.
@@ -650,7 +687,12 @@ Every list response echoes back the input filters and a `generated_at` RFC3339 t
 - YoY gracefully disables when <13 months of data exist.
 - Permission enforcement: user without `analytics` permission receives 403 on every route.
 
-### Implementation Plan for the AI Developer Agent
+### Historical Analytics Implementation Plan
+
+The milestone plan below records the original occupancy-table implementation.
+It is not authority for PMS 21 final cleanup. Any reference to `occupancies`,
+`occupancy_id`, or legacy fallback must be implemented against the final-model
+sources above or removed as required by the PMS 21 cleanup specification.
 
 The plan is phased so each milestone ships a compilable, testable slice. Follow strictly in order — later phases depend on earlier ones. Each milestone has a definition-of-done; do not proceed until tests pass and `go vet ./... && go build ./...` is clean.
 
@@ -733,16 +775,18 @@ The plan is phased so each milestone ships a compilable, testable slice. Follow 
 - [ ] All revenue widgets show the "revenue data through: <date>" disclaimer; banner colour logic matches the 45/75-day rule.
 - [ ] The Deferred-for-v2 `analytics_snapshots` table is **not** created.
 
-## 10. Deferred Future Module: Direct Google Calendar Sync
+## 10. Historical Deferral: Direct Google Calendar Sync
 
 ### Status
-This is explicitly out of scope for v1. Implement the occupancy JSON endpoint first and let n8n handle Google Calendar synchronization.
+This section records the original v1 deferral and is superseded. Native Google
+Calendar cleaning sync is governed by PMS 15 and PMS 21. Public occupancy JSON
+export and n8n export guidance are retired in the final model.
 
 ### Why
 - lower complexity
 - no OAuth product work in v1
 - easier debugging
-- keeps occupancy as the system of record
+- historical rationale only; named stays are now business stay truth
 
 ### If Implemented Later
 Need:
@@ -753,7 +797,8 @@ Need:
 - sync logs and retries
 
 ## Delivery Guidance for the AI Coding Agent
-- Start from the global platform and occupancy module first.
-- Treat occupancy as the central relation for automations.
+- Start from the global platform and availability/stay module first.
+- Treat named stays as business truth, raw blocks as source truth, and
+  availability blocks as non-stay inventory truth.
 - Build all integrations with explicit sync logs and statuses.
 - Prefer deterministic, traceable workflows over hidden automation.

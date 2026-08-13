@@ -62,7 +62,6 @@ function apiRouter(handlers: Record<string, () => unknown>) {
         supported_placeholders: [],
       })
     }
-    if (url.includes('/occupancies')) return Promise.resolve({ occupancies: [] })
     return Promise.resolve({})
   })
 }

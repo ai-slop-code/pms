@@ -84,12 +84,12 @@ describe('NukiView', () => {
       '/nuki/upcoming-stays': () => ({
         stays: [
           {
-            occupancy_id: 77,
+            stay_id: 77,
             source_event_uid: 'uid-77',
             summary: 'Guest Smith',
             start_at: '2026-05-01T14:00:00Z',
             end_at: '2026-05-04T10:00:00Z',
-            occupancy_status: 'active',
+            stay_status: 'active',
           },
         ],
       }),

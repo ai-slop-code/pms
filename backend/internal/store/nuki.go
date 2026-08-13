@@ -28,7 +28,6 @@ type NukiSyncRun struct {
 type NukiAccessCode struct {
 	ID                int64
 	PropertyID        int64
-	OccupancyID       sql.NullInt64
 	NamedStayID       sql.NullInt64
 	CodeLabel         string
 	AccessCodeMasked  sql.NullString
@@ -44,26 +43,25 @@ type NukiAccessCode struct {
 	RevokedAt         sql.NullTime
 }
 
-type NukiAccessCodeWithOccupancy struct {
-	Code             NukiAccessCode
-	OccupancyUID     string
-	OccupancySummary sql.NullString
-	OccupancyStatus  string
-	OccupancyStart   time.Time
-	OccupancyEnd     time.Time
+type NukiAccessCodeWithStay struct {
+	Code          NukiAccessCode
+	StayReference string
+	StaySummary   sql.NullString
+	StayStatus    string
+	StayStart     time.Time
+	StayEnd       time.Time
 }
 
 type NukiStay struct {
-	NamedStayID       int64
-	PropertyID        int64
-	LegacyOccupancyID sql.NullInt64
-	DisplayName       string
-	StayType          string
-	ReviewStatus      string
-	CheckInDate       string
-	CheckOutDate      string
-	Status            string
-	SourceReference   sql.NullString
+	NamedStayID     int64
+	PropertyID      int64
+	DisplayName     string
+	StayType        string
+	ReviewStatus    string
+	CheckInDate     string
+	CheckOutDate    string
+	Status          string
+	SourceReference sql.NullString
 }
 
 type NukiKeypadCode struct {
@@ -84,15 +82,13 @@ type NukiKeypadCode struct {
 
 type UpcomingStayWithCode struct {
 	StayID              int64
-	LegacyOccupancyID   sql.NullInt64
-	OccupancyID         sql.NullInt64
 	SourceEventUID      string
 	RawSummary          sql.NullString
 	GuestDisplayName    sql.NullString
 	StayType            string
 	StartAt             time.Time
 	EndAt               time.Time
-	OccupancyStatus     string
+	StayStatus          string
 	GeneratedCodeID     sql.NullInt64
 	GeneratedLabel      sql.NullString
 	GeneratedStatus     sql.NullString
@@ -183,22 +179,9 @@ func (s *Store) PruneNukiSyncRuns(ctx context.Context, propertyID int64, keep in
 	return err
 }
 
-func (s *Store) GetNukiCodeByOccupancyID(ctx context.Context, propertyID, occupancyID int64) (*NukiAccessCode, error) {
-	rows, err := s.scanNukiCodes(ctx, `
-		SELECT id, property_id, occupancy_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
-		FROM nuki_access_codes WHERE property_id = ? AND occupancy_id = ?`, propertyID, occupancyID)
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	return &rows[0], nil
-}
-
 func (s *Store) GetNukiCodeByNamedStayID(ctx context.Context, propertyID, stayID int64) (*NukiAccessCode, error) {
 	rows, err := s.scanNukiCodes(ctx, `
-		SELECT id, property_id, occupancy_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
+		SELECT id, property_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
 		FROM nuki_access_codes WHERE property_id = ? AND named_stay_id = ?`, propertyID, stayID)
 	if err != nil {
 		return nil, err
@@ -211,7 +194,7 @@ func (s *Store) GetNukiCodeByNamedStayID(ctx context.Context, propertyID, stayID
 
 func (s *Store) GetNukiCodeByID(ctx context.Context, propertyID, codeID int64) (*NukiAccessCode, error) {
 	rows, err := s.scanNukiCodes(ctx, `
-		SELECT id, property_id, occupancy_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
+		SELECT id, property_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
 		FROM nuki_access_codes WHERE property_id = ? AND id = ?`, propertyID, codeID)
 	if err != nil {
 		return nil, err
@@ -223,6 +206,9 @@ func (s *Store) GetNukiCodeByID(ctx context.Context, propertyID, codeID int64) (
 }
 
 func (s *Store) UpsertNukiCode(ctx context.Context, c *NukiAccessCode) error {
+	if !c.NamedStayID.Valid || c.NamedStayID.Int64 <= 0 {
+		return errors.New("nuki code requires named_stay_id")
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	var masked interface{}
 	if c.AccessCodeMasked.Valid {
@@ -248,59 +234,40 @@ func (s *Store) UpsertNukiCode(ctx context.Context, c *NukiAccessCode) error {
 	if c.LastSyncRunID.Valid {
 		runID = c.LastSyncRunID.Int64
 	}
-	var stayID interface{}
-	if c.NamedStayID.Valid {
-		stayID = c.NamedStayID.Int64
-	}
-	var occupancyID interface{}
-	if c.OccupancyID.Valid {
-		occupancyID = c.OccupancyID.Int64
-	}
+	stayID := c.NamedStayID.Int64
 	var revoked interface{}
 	if c.RevokedAt.Valid {
 		revoked = c.RevokedAt.Time.UTC().Format(time.RFC3339)
 	}
-	args := []interface{}{c.PropertyID, occupancyID, stayID, c.CodeLabel, masked, pinPlain, ext,
+	args := []interface{}{c.PropertyID, stayID, c.CodeLabel, masked, pinPlain, ext,
 		c.ValidFrom.UTC().Format(time.RFC3339), c.ValidUntil.UTC().Format(time.RFC3339), c.Status, errMsg, runID, now, now, revoked}
-	setSQL := `occupancy_id = COALESCE(excluded.occupancy_id, nuki_access_codes.occupancy_id),
-			named_stay_id = COALESCE(excluded.named_stay_id, nuki_access_codes.named_stay_id),
-			code_label = excluded.code_label, access_code_masked = excluded.access_code_masked,
+	setSQL := `code_label = excluded.code_label, access_code_masked = excluded.access_code_masked,
 			generated_pin_plain = excluded.generated_pin_plain, external_nuki_id = excluded.external_nuki_id,
 			valid_from = excluded.valid_from, valid_until = excluded.valid_until, status = excluded.status,
 			error_message = excluded.error_message, last_sync_run_id = excluded.last_sync_run_id,
 			updated_at = excluded.updated_at, revoked_at = excluded.revoked_at`
 	if c.ID > 0 {
 		_, err := s.DB.ExecContext(ctx, `
-			UPDATE nuki_access_codes SET occupancy_id = ?, named_stay_id = ?, code_label = ?, access_code_masked = ?,
+			UPDATE nuki_access_codes SET named_stay_id = ?, code_label = ?, access_code_masked = ?,
 				generated_pin_plain = ?, external_nuki_id = ?, valid_from = ?, valid_until = ?, status = ?,
 				error_message = ?, last_sync_run_id = ?, updated_at = ?, revoked_at = ?
-			WHERE property_id = ? AND id = ?`, occupancyID, stayID, c.CodeLabel, masked, pinPlain, ext,
+			WHERE property_id = ? AND id = ?`, stayID, c.CodeLabel, masked, pinPlain, ext,
 			c.ValidFrom.UTC().Format(time.RFC3339), c.ValidUntil.UTC().Format(time.RFC3339), c.Status, errMsg, runID, now, revoked, c.PropertyID, c.ID)
 		return err
 	}
-	base := `INSERT INTO nuki_access_codes (property_id, occupancy_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	var query string
-	if c.NamedStayID.Valid {
-		query = base + ` ON CONFLICT(property_id, named_stay_id) WHERE named_stay_id IS NOT NULL DO UPDATE SET ` + setSQL
-	} else {
-		if !c.OccupancyID.Valid {
-			return errors.New("nuki code requires named_stay_id or occupancy_id")
-		}
-		query = base + ` ON CONFLICT(property_id, occupancy_id) WHERE named_stay_id IS NULL AND occupancy_id IS NOT NULL DO UPDATE SET ` + setSQL
-	}
+	query := `INSERT INTO nuki_access_codes (property_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(property_id, named_stay_id) WHERE named_stay_id IS NOT NULL DO UPDATE SET ` + setSQL
 	_, err := s.DB.ExecContext(ctx, query, args...)
 	return err
 }
 
-func (s *Store) ListNukiCodes(ctx context.Context, propertyID int64, scope string) ([]NukiAccessCodeWithOccupancy, error) {
+func (s *Store) ListNukiCodes(ctx context.Context, propertyID int64, scope string) ([]NukiAccessCodeWithStay, error) {
 	q := `
-		SELECT nac.id, nac.property_id, nac.occupancy_id, nac.named_stay_id, nac.code_label, nac.access_code_masked, nac.generated_pin_plain, nac.external_nuki_id, nac.valid_from, nac.valid_until, nac.status, nac.error_message, nac.last_sync_run_id, nac.created_at, nac.updated_at, nac.revoked_at,
-		       COALESCE(ns.source_reference, o.source_event_uid, ''),
-		       COALESCE(ns.display_name, o.raw_summary), COALESCE(ns.status, o.status, ''),
-		       COALESCE(ns.check_in_date, o.start_at), COALESCE(ns.check_out_date, o.end_at)
+		SELECT nac.id, nac.property_id, nac.named_stay_id, nac.code_label, nac.access_code_masked, nac.generated_pin_plain, nac.external_nuki_id, nac.valid_from, nac.valid_until, nac.status, nac.error_message, nac.last_sync_run_id, nac.created_at, nac.updated_at, nac.revoked_at,
+		       COALESCE(ns.source_reference, ''), ns.display_name, ns.status,
+		       ns.check_in_date, ns.check_out_date
 		FROM nuki_access_codes nac
-		LEFT JOIN named_stays ns ON ns.id = nac.named_stay_id AND ns.property_id = nac.property_id
-		LEFT JOIN occupancies o ON o.id = nac.occupancy_id AND o.property_id = nac.property_id
+		JOIN named_stays ns ON ns.id = nac.named_stay_id AND ns.property_id = nac.property_id
 		WHERE nac.property_id = ?`
 	switch scope {
 	case "active":
@@ -314,16 +281,16 @@ func (s *Store) ListNukiCodes(ctx context.Context, propertyID int64, scope strin
 		return nil, err
 	}
 	defer rows.Close()
-	var out []NukiAccessCodeWithOccupancy
+	var out []NukiAccessCodeWithStay
 	for rows.Next() {
-		var r NukiAccessCodeWithOccupancy
+		var r NukiAccessCodeWithStay
 		var validFrom, validUntil, created, updated string
 		var revoked sql.NullString
 		var oStart, oEnd string
 		if err := rows.Scan(
-			&r.Code.ID, &r.Code.PropertyID, &r.Code.OccupancyID, &r.Code.NamedStayID, &r.Code.CodeLabel, &r.Code.AccessCodeMasked, &r.Code.GeneratedPINPlain, &r.Code.ExternalNukiID,
+			&r.Code.ID, &r.Code.PropertyID, &r.Code.NamedStayID, &r.Code.CodeLabel, &r.Code.AccessCodeMasked, &r.Code.GeneratedPINPlain, &r.Code.ExternalNukiID,
 			&validFrom, &validUntil, &r.Code.Status, &r.Code.ErrorMessage, &r.Code.LastSyncRunID, &created, &updated, &revoked,
-			&r.OccupancyUID, &r.OccupancySummary, &r.OccupancyStatus, &oStart, &oEnd,
+			&r.StayReference, &r.StaySummary, &r.StayStatus, &oStart, &oEnd,
 		); err != nil {
 			return nil, err
 		}
@@ -338,8 +305,8 @@ func (s *Store) ListNukiCodes(ctx context.Context, propertyID int64, scope strin
 			t, _ := time.Parse(time.RFC3339, revoked.String)
 			r.Code.RevokedAt = sql.NullTime{Time: t, Valid: true}
 		}
-		r.OccupancyStart, _ = time.Parse(time.RFC3339, oStart)
-		r.OccupancyEnd, _ = time.Parse(time.RFC3339, oEnd)
+		r.StayStart, _ = time.ParseInLocation("2006-01-02", oStart, time.UTC)
+		r.StayEnd, _ = time.ParseInLocation("2006-01-02", oEnd, time.UTC)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -356,7 +323,7 @@ func (s *Store) scanNukiCodes(ctx context.Context, q string, args ...interface{}
 		var c NukiAccessCode
 		var validFrom, validUntil, created, updated string
 		var revoked sql.NullString
-		if err := rows.Scan(&c.ID, &c.PropertyID, &c.OccupancyID, &c.NamedStayID, &c.CodeLabel, &c.AccessCodeMasked, &c.GeneratedPINPlain, &c.ExternalNukiID, &validFrom, &validUntil, &c.Status, &c.ErrorMessage, &c.LastSyncRunID, &created, &updated, &revoked); err != nil {
+		if err := rows.Scan(&c.ID, &c.PropertyID, &c.NamedStayID, &c.CodeLabel, &c.AccessCodeMasked, &c.GeneratedPINPlain, &c.ExternalNukiID, &validFrom, &validUntil, &c.Status, &c.ErrorMessage, &c.LastSyncRunID, &created, &updated, &revoked); err != nil {
 			return nil, err
 		}
 		if err := s.decryptNS(&c.GeneratedPINPlain); err != nil {
@@ -375,37 +342,12 @@ func (s *Store) scanNukiCodes(ctx context.Context, q string, args ...interface{}
 	return out, rows.Err()
 }
 
-func (s *Store) ListOccupanciesForNukiSync(ctx context.Context, propertyID int64) ([]Occupancy, error) {
-	// Closure-labelled rows are excluded from Nuki sync — closed nights have
-	// no guest, externally-sold nights have a guest who arrives outside the
-	// Booking.com flow (PMS_14 §3.4).
-	//
-	// PMS_19 §10.1 / §5.6: Nuki codes are only for active, non-superseded named
-	// stays. Unnamed Booking.com block nights (no guest name) must never receive
-	// a guest code, and superseded representations are ineligible.
-	q := occupancySelectColumns + ` FROM occupancies
-		WHERE property_id = ? AND status IN ('active', 'updated') AND closure_state IS NULL
-		AND superseded_at IS NULL
-		AND guest_display_name IS NOT NULL AND TRIM(guest_display_name) <> ''
-		AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show')) AND end_at >= ?
-		ORDER BY start_at ASC`
-	return s.scanOccupancies(ctx, q, propertyID, time.Now().UTC().Format(time.RFC3339))
-}
-
-func (s *Store) ListOccupanciesForNukiRevocation(ctx context.Context, propertyID int64) ([]Occupancy, error) {
-	q := occupancySelectColumns + ` FROM occupancies
-		WHERE property_id = ? AND (status IN ('cancelled', 'deleted_from_source') OR stay_outcome IN ('cancelled_non_refundable', 'no_show') OR superseded_at IS NOT NULL)
-		ORDER BY start_at ASC`
-	return s.scanOccupancies(ctx, q, propertyID)
-}
-
 func (s *Store) ListNamedStaysForNukiSync(ctx context.Context, propertyID int64) ([]NukiStay, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT ns.id, ns.property_id, osm.old_occupancy_id, ns.display_name, ns.stay_type,
+		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type,
 		       COALESCE(ns.review_status, 'confirmed'), ns.check_in_date, ns.check_out_date,
 		       ns.status, ns.source_reference
 		FROM named_stays ns
-		LEFT JOIN occupancy_stay_migration_map osm ON osm.named_stay_id = ns.id AND osm.migration_kind = 'named_stay'
 		WHERE ns.property_id = ?
 		  AND ns.status = 'active'
 		  AND COALESCE(ns.review_status, 'confirmed') = 'confirmed'
@@ -421,11 +363,10 @@ func (s *Store) ListNamedStaysForNukiSync(ctx context.Context, propertyID int64)
 
 func (s *Store) ListNamedStaysForNukiRevocation(ctx context.Context, propertyID int64) ([]NukiStay, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT ns.id, ns.property_id, osm.old_occupancy_id, ns.display_name, ns.stay_type,
+		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type,
 		       COALESCE(ns.review_status, 'confirmed'), ns.check_in_date, ns.check_out_date,
 		       ns.status, ns.source_reference
 		FROM named_stays ns
-		LEFT JOIN occupancy_stay_migration_map osm ON osm.named_stay_id = ns.id AND osm.migration_kind = 'named_stay'
 		WHERE ns.property_id = ?
 		  AND (
 		      ns.status IN ('cancelled', 'archived')
@@ -445,7 +386,7 @@ func scanNukiStays(rows *sql.Rows) ([]NukiStay, error) {
 	out := []NukiStay{}
 	for rows.Next() {
 		var r NukiStay
-		if err := rows.Scan(&r.NamedStayID, &r.PropertyID, &r.LegacyOccupancyID, &r.DisplayName, &r.StayType, &r.ReviewStatus, &r.CheckInDate, &r.CheckOutDate, &r.Status, &r.SourceReference); err != nil {
+		if err := rows.Scan(&r.NamedStayID, &r.PropertyID, &r.DisplayName, &r.StayType, &r.ReviewStatus, &r.CheckInDate, &r.CheckOutDate, &r.Status, &r.SourceReference); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -455,7 +396,7 @@ func scanNukiStays(rows *sql.Rows) ([]NukiStay, error) {
 
 func (s *Store) ListNukiCodesForCleanup(ctx context.Context, propertyID int64, nowUTC time.Time) ([]NukiAccessCode, error) {
 	q := `
-		SELECT id, property_id, occupancy_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
+		SELECT id, property_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
 		FROM nuki_access_codes
 		WHERE property_id = ? AND status = 'generated' AND valid_until < ?
 		ORDER BY valid_until ASC`
@@ -824,8 +765,7 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		limit = 120
 	}
 	query := `
-		SELECT ns.id, osm.old_occupancy_id, COALESCE(osm.old_occupancy_id, nac.occupancy_id),
-		       COALESCE(ns.source_reference, ''), ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
+		SELECT ns.id, COALESCE(ns.source_reference, ''), ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
 		       nac.id, nac.code_label,
 		       CASE
 		           WHEN nac.id IS NULL THEN 'not_generated'
@@ -855,11 +795,7 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		       nac.valid_from, nac.valid_until,
 		       nac.error_message, nac.updated_at
 		FROM named_stays ns
-		LEFT JOIN occupancy_stay_migration_map osm ON osm.named_stay_id = ns.id AND osm.migration_kind = 'named_stay'
-		LEFT JOIN nuki_access_codes nac ON nac.property_id = ns.property_id AND (
-		    nac.named_stay_id = ns.id
-		    OR (nac.named_stay_id IS NULL AND osm.old_occupancy_id IS NOT NULL AND nac.occupancy_id = osm.old_occupancy_id)
-		)
+		LEFT JOIN nuki_access_codes nac ON nac.property_id = ns.property_id AND nac.named_stay_id = ns.id
 		LEFT JOIN nuki_keypad_codes nk ON nk.property_id = nac.property_id AND (
 		    nk.external_nuki_id = nac.external_nuki_id
 		    OR (` + nukiLabelWindowLinkPredicate("nac", "nk") + `)
@@ -882,7 +818,7 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		var r UpcomingStayWithCode
 		var checkIn, checkOut string
 		var upd, vf, vu sql.NullString
-		if err := rows.Scan(&r.StayID, &r.LegacyOccupancyID, &r.OccupancyID, &r.SourceEventUID, &r.GuestDisplayName, &r.StayType, &checkIn, &checkOut, &r.OccupancyStatus, &r.GeneratedCodeID, &r.GeneratedLabel, &r.GeneratedStatus, &r.GeneratedMasked, &r.GeneratedPIN, &vf, &vu, &r.GeneratedError, &upd); err != nil {
+		if err := rows.Scan(&r.StayID, &r.SourceEventUID, &r.GuestDisplayName, &r.StayType, &checkIn, &checkOut, &r.StayStatus, &r.GeneratedCodeID, &r.GeneratedLabel, &r.GeneratedStatus, &r.GeneratedMasked, &r.GeneratedPIN, &vf, &vu, &r.GeneratedError, &upd); err != nil {
 			return nil, err
 		}
 		if err := s.decryptNS(&r.GeneratedPIN); err != nil {
@@ -917,116 +853,4 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		deduped = append(deduped, r)
 	}
 	return deduped, nil
-}
-
-func (s *Store) HasShorterGeneratedNukiCodeForSourceUID(ctx context.Context, propertyID int64, sourceUID string, targetStart, targetEnd time.Time) (bool, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT nac.valid_from, nac.valid_until
-		FROM nuki_access_codes nac
-		INNER JOIN occupancies o ON o.id = nac.occupancy_id
-		WHERE nac.property_id = ?
-		  AND o.property_id = nac.property_id
-		  AND o.source_event_uid = ?
-		  AND o.guest_display_name IS NOT NULL
-		  AND TRIM(o.guest_display_name) != ''
-		  AND nac.status = 'generated'`, propertyID, sourceUID)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	targetStart = targetStart.UTC()
-	targetEnd = targetEnd.UTC()
-	for rows.Next() {
-		var fromRaw, untilRaw string
-		if err := rows.Scan(&fromRaw, &untilRaw); err != nil {
-			return false, err
-		}
-		from, err := time.Parse(time.RFC3339, fromRaw)
-		if err != nil {
-			continue
-		}
-		until, err := time.Parse(time.RFC3339, untilRaw)
-		if err != nil {
-			continue
-		}
-		from = from.UTC()
-		until = until.UTC()
-		if !from.Before(targetStart) && !until.After(targetEnd) && until.Sub(from) < targetEnd.Sub(targetStart) {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
-}
-
-// RelinkSupersededNukiCodesTx implements PMS_19 §10.1: when a legacy generated
-// split row is superseded by a newly-created named stay covering the same
-// window, the existing Nuki code is relinked (same PIN) if its validity window
-// matches the named stay, avoiding a PIN change for the guest. Returns the
-// number of codes relinked. Codes that do not match are left in place and the
-// normal revocation flow revokes them.
-func (s *Store) RelinkSupersededNukiCodesTx(ctx context.Context, tx *sql.Tx, propertyID, namedStayOccID int64, upstreamUID, checkIn, checkOut string) (int, error) {
-	// If the named stay already owns a code, we cannot move another onto it
-	// (the table is unique on (property_id, occupancy_id)).
-	var existing int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM nuki_access_codes WHERE property_id = ? AND occupancy_id = ?`, propertyID, namedStayOccID).Scan(&existing); err != nil {
-		return 0, err
-	}
-	if existing > 0 {
-		return 0, nil
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT nac.id, nac.valid_from, nac.valid_until
-		FROM nuki_access_codes nac
-		JOIN occupancies o ON o.id = nac.occupancy_id
-		WHERE nac.property_id = ?
-		  AND o.upstream_event_uid = ?
-		  AND o.id <> ?
-		  AND (
-		      o.superseded_at IS NOT NULL
-		      OR NOT EXISTS (
-		          SELECT 1 FROM occupancy_nights n
-		          WHERE n.occupancy_id = o.id AND n.active = 1
-		      )
-		  )
-		  AND nac.status = 'generated'
-		  AND nac.revoked_at IS NULL
-		ORDER BY nac.id ASC`, propertyID, upstreamUID, namedStayOccID)
-	if err != nil {
-		return 0, err
-	}
-	type cand struct {
-		id                 int64
-		validFrom, validTo string
-	}
-	var cands []cand
-	for rows.Next() {
-		var c cand
-		if err := rows.Scan(&c.id, &c.validFrom, &c.validTo); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		cands = append(cands, c)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	relinked := 0
-	for _, c := range cands {
-		vf, _ := time.Parse(time.RFC3339, c.validFrom)
-		vt, _ := time.Parse(time.RFC3339, c.validTo)
-		// "Validity window exactly matches" is evaluated on the property-local
-		// night dates: check-in day == code start day, check-out day == code end.
-		if vf.UTC().Format("2006-01-02") != checkIn || vt.UTC().Format("2006-01-02") != checkOut {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE nuki_access_codes SET occupancy_id = ?, updated_at = ? WHERE id = ? AND property_id = ?`,
-			namedStayOccID, now, c.id, propertyID); err != nil {
-			return relinked, err
-		}
-		relinked++
-		break // only one code can occupy the named stay row
-	}
-	return relinked, nil
 }

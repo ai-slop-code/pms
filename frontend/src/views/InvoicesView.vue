@@ -14,14 +14,14 @@ import { today, payoutBillableCents } from '@/views/invoices/format'
 import type {
   Invoice,
   InvoicePreview,
-  InvoiceOccupancyOption as OccupancyOption,
+  InvoiceNamedStayOption as StayOption,
   InvoiceBookingPayoutOption as BookingPayoutOption,
 } from '@/api/types/invoice'
 
 const { pid, currentProperty } = useCurrentProperty()
 
 const invoices = ref<Invoice[]>([])
-const occupancyOptions = ref<OccupancyOption[]>([])
+const stayOptions = ref<StayOption[]>([])
 const payoutOptions = ref<BookingPayoutOption[]>([])
 const selectedId = ref<number | null>(null)
 const selectedInvoice = ref<Invoice | null>(null)
@@ -33,7 +33,7 @@ const error = ref('')
 const success = ref('')
 
 const form = ref({
-  occupancy_id: '',
+  named_stay_id: '',
   booking_payout_id: '',
   language: 'sk' as 'sk' | 'en',
   issue_date: today(),
@@ -59,7 +59,7 @@ const isEditing = computed(() => selectedId.value !== null)
 function resetForm() {
   const defaultLanguage = currentProperty.value?.default_language === 'en' ? 'en' : 'sk'
   form.value = {
-    occupancy_id: '',
+    named_stay_id: '',
     booking_payout_id: '',
     language: defaultLanguage,
     issue_date: today(),
@@ -70,15 +70,20 @@ function resetForm() {
     amount_eur: 0,
     payment_note: 'Already paid via Booking.com.',
     customer: {
-      name: '', company_name: '', address_line_1: '', city: '',
-      postal_code: '', country: '', vat_id: '',
+      name: '',
+      company_name: '',
+      address_line_1: '',
+      city: '',
+      postal_code: '',
+      country: '',
+      vat_id: '',
     },
   }
 }
 
 function applyInvoiceToForm(invoice: Invoice) {
   form.value = {
-    occupancy_id: invoice.named_stay_id ? String(invoice.named_stay_id) : '',
+    named_stay_id: String(invoice.named_stay_id),
     booking_payout_id: invoice.booking_payout_id ? String(invoice.booking_payout_id) : '',
     language: invoice.language,
     issue_date: invoice.issue_date.slice(0, 10),
@@ -112,21 +117,21 @@ async function loadList() {
   loading.value = true
   error.value = ''
   try {
-    const [list, nextPreview, occRes, payRes] = await Promise.all([
+    const [list, nextPreview, stayRes, payRes] = await Promise.all([
       api<{ invoices: Invoice[] }>(`/api/properties/${pid.value}/invoices`),
       api<InvoicePreview>(
         `/api/properties/${pid.value}/invoice-sequence/next-preview?year=${form.value.issue_date.slice(0, 4)}`,
       ),
-      api<{ stays: OccupancyOption[]; occupancies?: OccupancyOption[] }>(
-        `/api/properties/${pid.value}/invoices/occupancy-candidates?limit=120`,
-      ).catch(() => ({ stays: [] as OccupancyOption[], occupancies: [] as OccupancyOption[] })),
+      api<{ stays: StayOption[] }>(`/api/properties/${pid.value}/invoices/stay-candidates?limit=120`).catch(
+        () => ({ stays: [] as StayOption[] }),
+      ),
       api<{ payouts: BookingPayoutOption[] }>(
         `/api/properties/${pid.value}/invoices/payout-link-candidates`,
       ).catch(() => ({ payouts: [] as BookingPayoutOption[] })),
     ])
     invoices.value = list.invoices
     preview.value = nextPreview
-    occupancyOptions.value = occRes.stays ?? occRes.occupancies ?? []
+    stayOptions.value = stayRes.stays ?? []
     payoutOptions.value = payRes.payouts ?? []
     if (selectedId.value) {
       await loadInvoice(selectedId.value)
@@ -174,9 +179,9 @@ function selectInvoice(invoice: Invoice) {
 
 function onStaySelect(value: string) {
   if (!value) return
-  const o = occupancyOptions.value.find((x) => String(x.id) === value)
-  if (!o) return
-  form.value.occupancy_id = String(o.id)
+  const stay = stayOptions.value.find((candidate) => String(candidate.id) === value)
+  if (!stay) return
+  form.value.named_stay_id = String(stay.id)
 }
 
 function onPayoutSelect(value: string) {
@@ -192,7 +197,7 @@ function onPayoutSelect(value: string) {
   const cout = row.check_out_date?.slice(0, 10)
   if (cin) form.value.stay_start_date = cin
   if (cout) form.value.stay_end_date = cout
-  if (row.named_stay_id) form.value.occupancy_id = String(row.named_stay_id)
+  if (row.named_stay_id) form.value.named_stay_id = String(row.named_stay_id)
   const gn = row.guest_name?.trim()
   if (gn && !form.value.customer.name.trim()) form.value.customer.name = gn
 }
@@ -226,9 +231,7 @@ function invoicePayload() {
       vat_id: form.value.customer.vat_id.trim(),
     },
   }
-  const oid = form.value.occupancy_id.trim()
-  if (oid) p.named_stay_id = Number(oid)
-  else if (selectedId.value && selectedInvoice.value?.named_stay_id) p.named_stay_id = 0
+  p.named_stay_id = Number(form.value.named_stay_id)
   const bid = form.value.booking_payout_id.trim()
   if (bid) p.booking_payout_id = Number(bid)
   else if (selectedId.value && selectedInvoice.value?.booking_payout_id) p.booking_payout_id = 0
@@ -237,6 +240,10 @@ function invoicePayload() {
 
 async function saveInvoice() {
   if (!pid.value) return
+  if (!form.value.named_stay_id.trim()) {
+    error.value = 'Select a named stay.'
+    return
+  }
   saving.value = true
   error.value = ''
   success.value = ''
@@ -351,7 +358,7 @@ watch(
           :regenerating="regenerating"
           :selected-id="selectedId"
           :selected-invoice="selectedInvoice"
-          :occupancy-options="occupancyOptions"
+          :stay-options="stayOptions"
           :payout-options="payoutOptions"
           @submit="saveInvoice"
           @select-stay="onStaySelect"
@@ -360,10 +367,7 @@ watch(
         />
       </div>
 
-      <InvoiceFilesTable
-        v-if="selectedInvoice?.files?.length"
-        :files="selectedInvoice.files"
-      />
+      <InvoiceFilesTable v-if="selectedInvoice?.files?.length" :files="selectedInvoice.files" />
     </template>
   </div>
 </template>

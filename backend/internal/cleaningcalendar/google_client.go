@@ -178,7 +178,6 @@ func (c *ServiceAccountClient) writeEvent(ctx context.Context, method, endpoint 
 	}
 	private := map[string]string{
 		"pms_property_id":           fmt.Sprintf("%d", event.PropertyID),
-		"pms_occupancy_id":          fmt.Sprintf("%d", event.OccupancyID),
 		"pms_cleaning_event_id":     fmt.Sprintf("%d", event.LocalEventID),
 		"pms_managed_event_version": "1",
 	}
