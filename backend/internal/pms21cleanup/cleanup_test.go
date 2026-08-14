@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pms/backend/internal/dbconn"
 	"pms/backend/internal/migrate"
@@ -283,6 +284,192 @@ func TestAuditAcceptsResolvedRejectedReview(t *testing.T) {
 	if !checkByID(t, report.Checks, "stable.named_stays_review_resolved").Passed {
 		t.Fatal("resolved rejection was counted as unresolved")
 	}
+}
+
+func TestAuditAcceptsNamedStaySubrangesCoveredByOneRawBlock(t *testing.T) {
+	path := automaticDatabase(t)
+	db, err := dbconn.Open("sqlite://" + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := "2026-08-11T00:00:00Z"
+	mustExec(t, db, `INSERT INTO users (id, email, password_hash, role, created_at, updated_at) VALUES (1, 'coverage@test.invalid', 'hash', 'owner', ?, ?)`, now, now)
+	mustExec(t, db, `INSERT INTO properties (id, name, timezone, owner_user_id, created_at, updated_at) VALUES (1, 'Coverage', 'UTC', 1, ?, ?)`, now, now)
+	mustExec(t, db, `
+		INSERT INTO raw_booking_blocks (
+			id, property_id, source_type, source_event_uid, check_in_date, check_out_date,
+			status, content_hash, imported_at, last_synced_at, created_at, updated_at
+		) VALUES (10, 1, 'booking_ics', 'shared-block', '2026-08-10', '2026-08-14',
+			'active', 'hash', ?, ?, ?, ?)`, now, now, now, now)
+	for id, day := range []string{"2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"} {
+		mustExec(t, db, `INSERT INTO raw_booking_block_nights (id, property_id, raw_booking_block_id, local_night_date, active, created_at, updated_at) VALUES (?, 1, 10, ?, 1, ?, ?)`, id+1, day, now, now)
+	}
+	for _, stay := range []struct {
+		id       int
+		checkIn  string
+		checkOut string
+	}{
+		{id: 20, checkIn: "2026-08-10", checkOut: "2026-08-12"},
+		{id: 21, checkIn: "2026-08-12", checkOut: "2026-08-14"},
+	} {
+		mustExec(t, db, `
+			INSERT INTO named_stays (
+				id, property_id, display_name, stay_type, check_in_date, check_out_date,
+				status, cleaning_required, review_status, review_resolution, first_known_at,
+				nuki_generation_status, created_at, updated_at
+			) VALUES (?, 1, 'Synthetic stay', 'booking_com', ?, ?, 'active', 1,
+				'confirmed', 'confirmed', ?, 'pending', ?, ?)`, stay.id, stay.checkIn, stay.checkOut, now, now, now)
+		for night, day := range []string{stay.checkIn, timeDayAfter(stay.checkIn)} {
+			if day >= stay.checkOut {
+				continue
+			}
+			mustExec(t, db, `INSERT INTO named_stay_nights (id, property_id, named_stay_id, local_night_date, active, created_at) VALUES (?, 1, ?, ?, 1, ?)`, stay.id*10+night, stay.id, day, now)
+		}
+		mustExec(t, db, `
+			INSERT INTO stay_source_links (
+				property_id, named_stay_id, raw_booking_block_id, source_type, source_event_uid,
+				linked_check_in_date, linked_check_out_date, link_status, created_at, updated_at
+			) VALUES (1, ?, 10, 'booking_ics', 'shared-block', ?, ?, 'active', ?, ?)`, stay.id, stay.checkIn, stay.checkOut, now, now)
+	}
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	report := Audit(context.Background(), testOptions(path))
+	if !report.Passed {
+		t.Fatalf("valid union coverage failed audit: errors=%v checks=%+v", report.Errors, failedChecks(report.Checks))
+	}
+	if !checkByID(t, report.Checks, "stable.source_link_status_complete").Passed {
+		t.Fatal("valid named-stay subranges were rejected")
+	}
+}
+
+func TestRepairAppliesOnlyDeterministicReadinessFixes(t *testing.T) {
+	path := automaticDatabase(t)
+	db, err := dbconn.Open("sqlite://" + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := "2026-08-11T00:00:00Z"
+	mustExec(t, db, `INSERT INTO users (id, email, password_hash, role, created_at, updated_at) VALUES (1, 'repair@test.invalid', 'hash', 'owner', ?, ?)`, now, now)
+	mustExec(t, db, `INSERT INTO properties (id, name, timezone, owner_user_id, created_at, updated_at) VALUES (1, 'Repair', 'UTC', 1, ?, ?)`, now, now)
+	mustExec(t, db, `
+		INSERT INTO occupancies (
+			id, property_id, source_type, source_event_uid, start_at, end_at, status,
+			content_hash, imported_at, last_synced_at
+		) VALUES (10, 1, 'booking_ics', 'repair-source', '2026-08-11T00:00:00Z',
+			'2026-08-12T00:00:00Z', 'active', 'legacy-hash', ?, ?)`, now, now)
+	mustExec(t, db, `
+		INSERT INTO raw_booking_blocks (
+			id, property_id, source_type, source_event_uid, check_in_date, check_out_date,
+			status, content_hash, imported_at, last_synced_at, created_at, updated_at
+		) VALUES (20, 1, 'booking_ics', 'repair-source', '2026-08-11', '2026-08-12',
+			'active', 'raw-hash', ?, ?, ?, ?)`, now, now, now, now)
+	mustExec(t, db, `INSERT INTO raw_booking_block_nights (id, property_id, raw_booking_block_id, local_night_date, active, created_at, updated_at) VALUES (21, 1, 20, '2026-08-11', 1, ?, ?)`, now, now)
+	mustExec(t, db, `
+		INSERT INTO named_stays (
+			id, property_id, display_name, stay_type, check_in_date, check_out_date,
+			status, cleaning_required, review_status, review_resolution, first_known_at,
+			nuki_generation_status, created_at, updated_at
+		) VALUES (30, 1, 'Cancelled stay', 'booking_com', '2026-08-01', '2026-08-02',
+			'cancelled', 0, 'confirmed', 'confirmed', ?, 'not_applicable', ?, ?)`, now, now, now)
+	mustExec(t, db, `
+		INSERT INTO finance_bookings (
+			id, property_id, reference_number, check_in_date, check_out_date, net_cents,
+			payout_date, status, named_stay_id, created_at, updated_at
+		) VALUES (40, 1, 'REPAIR-40', '2026-08-01', '2026-08-02', 0,
+			'2026-08-03', 'CANCELLED', 30, ?, ?)`, now, now)
+	mustExec(t, db, `
+		INSERT INTO cleaning_calendar_events (
+			id, property_id, occupancy_id, next_occupancy_id, raw_booking_block_id,
+			checkout_date, cleaning_kind, google_calendar_id, cleaning_date, starts_at,
+			ends_at, same_day_arrival, title, status, created_at, updated_at
+		) VALUES (50, 1, 10, 10, 20, '2026-08-12', 'named_stay', 'calendar',
+			'2026-08-12', '2026-08-12T10:00:00Z', '2026-08-12T12:00:00Z', 0,
+			'Repair cleaning', 'removed', ?, ?)`, now, now)
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := testOptions(path)
+	withoutConfirmation := Repair(context.Background(), opts)
+	if withoutConfirmation.Passed {
+		t.Fatal("repair passed without confirmation")
+	}
+	opts.ConfirmRepair = true
+	report := Repair(context.Background(), opts)
+	if !report.Passed {
+		t.Fatalf("repair failed: errors=%v checks=%+v", report.Errors, failedChecks(report.Checks))
+	}
+	if report.RepairCounts != (RepairCounts{CancellationTimestamps: 1, ExactSourceMappings: 1, LegacyCleaningPointers: 1, CleaningKinds: 1}) {
+		t.Fatalf("repair counts=%+v", report.RepairCounts)
+	}
+	if !checksPassed(report.RemainingReadinessChecks) {
+		t.Fatalf("readiness remained blocked: %+v", failedChecks(report.RemainingReadinessChecks))
+	}
+
+	second := Repair(context.Background(), opts)
+	if !second.Passed || second.RepairCounts != (RepairCounts{}) {
+		t.Fatalf("repair was not idempotent: passed=%t counts=%+v errors=%v", second.Passed, second.RepairCounts, second.Errors)
+	}
+}
+
+func TestRepairDoesNotInferCancellationAfterStatusChange(t *testing.T) {
+	path := automaticDatabase(t)
+	db, err := dbconn.Open("sqlite://" + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := "2026-08-11T00:00:00Z"
+	mustExec(t, db, `INSERT INTO users (id, email, password_hash, role, created_at, updated_at) VALUES (1, 'status-change@test.invalid', 'hash', 'owner', ?, ?)`, now, now)
+	mustExec(t, db, `INSERT INTO properties (id, name, timezone, owner_user_id, created_at, updated_at) VALUES (1, 'Status change', 'UTC', 1, ?, ?)`, now, now)
+	mustExec(t, db, `
+		INSERT INTO named_stays (
+			id, property_id, display_name, stay_type, check_in_date, check_out_date,
+			status, cleaning_required, review_status, review_resolution, first_known_at,
+			nuki_generation_status, created_at, updated_at
+		) VALUES (1, 1, 'Changed cancellation', 'booking_com', '2026-08-01',
+			'2026-08-02', 'cancelled', 0, 'confirmed', 'confirmed', ?,
+			'not_applicable', ?, ?)`, now, now, now)
+	mustExec(t, db, `INSERT INTO finance_imports (id, property_id, source_type, source_channel, uploaded_at, file_sha256) VALUES (1, 1, 'statement', 'booking_com', ?, 'status-change')`, now)
+	mustExec(t, db, `
+		INSERT INTO finance_bookings (
+			id, property_id, reference_number, check_in_date, check_out_date, net_cents,
+			payout_date, status, named_stay_id, created_at, updated_at
+		) VALUES (1, 1, 'STATUS-CHANGE', '2026-08-01', '2026-08-02', 0,
+			'2026-08-03', 'CANCELLED', 1, ?, ?)`, now, now)
+	mustExec(t, db, `INSERT INTO finance_booking_merges (booking_id, import_id, source_type, changed_fields_json, occurred_at) VALUES (1, 1, 'statement', '["status"]', ?)`, now)
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := testOptions(path)
+	opts.ConfirmRepair = true
+	report := Repair(context.Background(), opts)
+	if !report.Passed || report.RepairCounts.CancellationTimestamps != 0 {
+		t.Fatalf("ambiguous cancellation was repaired: passed=%t counts=%+v errors=%v", report.Passed, report.RepairCounts, report.Errors)
+	}
+	check := checkByID(t, report.RemainingReadinessChecks, "stable.named_stays_lifecycle_complete")
+	if check.Passed || check.Count != 1 {
+		t.Fatalf("ambiguous cancellation did not remain blocked: %+v", check)
+	}
+}
+
+func timeDayAfter(day string) string {
+	parsed, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		panic(err)
+	}
+	return parsed.AddDate(0, 0, 1).Format("2006-01-02")
 }
 
 func TestApplyRefusesMissingBadAndStalePreReport(t *testing.T) {

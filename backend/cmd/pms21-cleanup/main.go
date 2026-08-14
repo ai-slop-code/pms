@@ -30,6 +30,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) (pms21cleanup.Rep
 	fs.SetOutput(stderr)
 	audit := fs.Bool("audit", false, "audit cleanup readiness using an immutable database and migrated copy")
 	apply := fs.Bool("apply", false, "apply all pending migrations, including destructive cleanup")
+	repair := fs.Bool("repair", false, "apply deterministic cleanup-readiness repairs without resolving ambiguous rows")
 	db := fs.String("db", "", "absolute path to the quiesced SQLite database")
 	dataRoot := fs.String("data-root", "", "absolute application data root used to verify invoice file contents")
 	imageDigest := fs.String("image-digest", "", "immutable backend image digest")
@@ -42,6 +43,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) (pms21cleanup.Rep
 	remoteVerification := fs.String("remote-verification-reference", "", "approved Google and Nuki remote verification artifact reference")
 	callerInventory := fs.String("caller-inventory-reference", "", "approved caller and runtime-independence artifact reference")
 	confirm := fs.Bool("confirm-destructive-cleanup", false, "required explicit confirmation for apply")
+	confirmRepair := fs.Bool("confirm-readiness-repair", false, "required explicit confirmation for repair")
 	preReport := fs.String("pre-report", "", "absolute path to the passing audit report")
 	if err := fs.Parse(args); err != nil {
 		r := pms21cleanup.Report{Mode: "invalid", Errors: []string{err.Error()}}
@@ -53,16 +55,24 @@ func run(ctx context.Context, args []string, stderr io.Writer) (pms21cleanup.Rep
 		FrontendBuild: *frontendBuild, Operator: *operator,
 		ExceptionRegisterReference: *exceptionRegister, ApprovedExceptionsReference: *approvedExceptions,
 		AnalyticsParityReference: *analyticsParity, RemoteVerificationReference: *remoteVerification,
-		CallerInventoryReference: *callerInventory, Confirm: *confirm, PreReport: *preReport,
+		CallerInventoryReference: *callerInventory, Confirm: *confirm, ConfirmRepair: *confirmRepair, PreReport: *preReport,
 	}
-	if *audit == *apply {
-		r := pms21cleanup.Report{Mode: "invalid", Errors: []string{"select exactly one mode: --audit or --apply"}}
+	modes := 0
+	for _, selected := range []bool{*audit, *repair, *apply} {
+		if selected {
+			modes++
+		}
+	}
+	if modes != 1 {
+		r := pms21cleanup.Report{Mode: "invalid", Errors: []string{"select exactly one mode: --audit, --repair, or --apply"}}
 		_ = pms21cleanup.SetChecksum(&r)
 		return r, false
 	}
 	var report pms21cleanup.Report
 	if *audit {
 		report = pms21cleanup.Audit(ctx, opts)
+	} else if *repair {
+		report = pms21cleanup.Repair(ctx, opts)
 	} else {
 		report = pms21cleanup.Apply(ctx, opts)
 	}

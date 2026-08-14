@@ -34,6 +34,9 @@ skip. In the packaged backend image, only an explicit
 `000039`; its required `--audit`, approvals, immutable identities, quiesced
 database, backup, and verification steps are documented in the active
 [`PMS 21 operations cutover runbook`](../pms-21-operations-cutover-runbook.md).
+The same binary provides an explicit, idempotent `--repair` mode for
+deterministic readiness residue; it does not make ambiguous ownership or review
+decisions.
 Do not infer from application startup or this guide that any production cleanup
 gate has completed.
 

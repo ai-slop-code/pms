@@ -110,20 +110,61 @@ SELECT NULL WHERE EXISTS (
 );
 INSERT INTO pms21_guard
 SELECT NULL WHERE EXISTS (
+    WITH health AS (
+        SELECT ns.id AS stay_id, ns.property_id,
+               CASE
+                   WHEN COUNT(DISTINCT rb.id) = 0
+                     OR COUNT(DISTINCT CASE
+                         WHEN rbn.active = 1
+                          AND rbn.local_night_date >= ns.check_in_date
+                          AND rbn.local_night_date < ns.check_out_date
+                         THEN rbn.local_night_date END) = 0
+                       THEN 'source_deleted'
+                   WHEN COUNT(DISTINCT CASE
+                         WHEN rbn.active = 1
+                          AND rbn.local_night_date >= ns.check_in_date
+                          AND rbn.local_night_date < ns.check_out_date
+                         THEN rbn.local_night_date END)
+                        <> CAST(julianday(ns.check_out_date) - julianday(ns.check_in_date) AS INTEGER)
+                       THEN 'conflict'
+                   ELSE 'active'
+               END AS expected_status
+        FROM named_stays ns
+        JOIN stay_source_links l
+          ON l.named_stay_id = ns.id
+         AND l.property_id = ns.property_id
+         AND l.link_status <> 'manual_unlinked'
+        LEFT JOIN raw_booking_blocks rb
+          ON rb.id = l.raw_booking_block_id
+         AND rb.property_id = l.property_id
+         AND rb.status = 'active'
+        LEFT JOIN raw_booking_block_nights rbn
+          ON rbn.raw_booking_block_id = rb.id
+         AND rbn.property_id = l.property_id
+        WHERE ns.status = 'active'
+        GROUP BY ns.id, ns.property_id
+    )
     SELECT 1
     FROM stay_source_links l
     LEFT JOIN named_stays s ON s.id = l.named_stay_id
     LEFT JOIN raw_booking_blocks b ON b.id = l.raw_booking_block_id
+    LEFT JOIN health h
+      ON h.stay_id = l.named_stay_id
+     AND h.property_id = l.property_id
     WHERE s.id IS NULL OR s.property_id <> l.property_id
-       OR (l.raw_booking_block_id IS NOT NULL AND (b.id IS NULL OR b.property_id <> l.property_id))
+       OR date(l.linked_check_in_date) <> l.linked_check_in_date
+       OR date(l.linked_check_out_date) <> l.linked_check_out_date
+       OR l.linked_check_out_date <= l.linked_check_in_date
+       OR l.linked_check_in_date <> s.check_in_date
+       OR l.linked_check_out_date <> s.check_out_date
        OR (l.raw_booking_block_id IS NOT NULL AND
-           (l.linked_check_in_date <> b.check_in_date OR l.linked_check_out_date <> b.check_out_date))
-       OR (l.link_status = 'active' AND
-           (l.raw_booking_block_id IS NULL OR b.status <> 'active'))
-       OR (l.link_status = 'source_deleted' AND
-           l.raw_booking_block_id IS NOT NULL AND b.status <> 'deleted_from_source')
-       OR (l.link_status = 'conflict' AND
-           l.raw_booking_block_id IS NOT NULL AND b.status <> 'conflict')
+           (b.id IS NULL OR b.property_id <> l.property_id
+            OR l.source_type IS NOT b.source_type
+            OR l.source_event_uid IS NOT b.source_event_uid))
+       OR (l.link_status = 'manual_unlinked' AND l.raw_booking_block_id IS NOT NULL)
+       OR (l.link_status IN ('active', 'conflict') AND l.raw_booking_block_id IS NULL)
+       OR l.link_status NOT IN ('active', 'source_deleted', 'conflict', 'manual_unlinked')
+       OR (h.expected_status IS NOT NULL AND l.link_status <> h.expected_status)
 );
 
 -- Active owners have exactly their half-open range of active derived nights;

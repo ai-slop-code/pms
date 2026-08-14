@@ -45,6 +45,7 @@ type Options struct {
 	CallerInventoryReference    string
 	PreReport                   string
 	Confirm                     bool
+	ConfirmRepair               bool
 
 	beforeWritableOpen func()
 }
@@ -93,6 +94,13 @@ type FileChecksums struct {
 	After  []FileChecksum `json:"after"`
 }
 
+type RepairCounts struct {
+	CancellationTimestamps int64 `json:"cancellation_timestamps"`
+	ExactSourceMappings    int64 `json:"exact_source_mappings"`
+	LegacyCleaningPointers int64 `json:"legacy_cleaning_pointers"`
+	CleaningKinds          int64 `json:"cleaning_kinds"`
+}
+
 type ExternalEvidence struct {
 	AnalyticsParity    string `json:"analytics_parity_reference"`
 	RemoteVerification string `json:"remote_verification_reference"`
@@ -125,6 +133,8 @@ type Report struct {
 	SQLiteSequenceBefore        map[string]int64 `json:"sqlite_sequence_before"`
 	SQLiteSequenceAfter         map[string]int64 `json:"sqlite_sequence_after"`
 	InvoiceFileChecksums        FileChecksums    `json:"invoice_file_content_checksums"`
+	RepairCounts                RepairCounts     `json:"repair_counts,omitempty"`
+	RemainingReadinessChecks    []Check          `json:"remaining_readiness_checks,omitempty"`
 	Checks                      []Check          `json:"checks"`
 	TableCounts                 Counts           `json:"table_counts"`
 	CriticalAggregates          Aggregates       `json:"critical_aggregate_sha256"`
@@ -136,6 +146,36 @@ type readinessCheck struct {
 	id    string
 	query string
 }
+
+const sourceLinkReadinessQuery = `WITH health AS (
+	SELECT ns.id AS stay_id, ns.property_id,
+		CASE
+			WHEN COUNT(DISTINCT rb.id) = 0 OR COUNT(DISTINCT CASE WHEN rbn.active = 1 AND rbn.local_night_date >= ns.check_in_date AND rbn.local_night_date < ns.check_out_date THEN rbn.local_night_date END) = 0 THEN 'source_deleted'
+			WHEN COUNT(DISTINCT CASE WHEN rbn.active = 1 AND rbn.local_night_date >= ns.check_in_date AND rbn.local_night_date < ns.check_out_date THEN rbn.local_night_date END) <> CAST(julianday(ns.check_out_date) - julianday(ns.check_in_date) AS INTEGER) THEN 'conflict'
+			ELSE 'active'
+		END AS expected_status
+	FROM named_stays ns
+	JOIN stay_source_links l ON l.named_stay_id = ns.id AND l.property_id = ns.property_id AND l.link_status <> 'manual_unlinked'
+	LEFT JOIN raw_booking_blocks rb ON rb.id = l.raw_booking_block_id AND rb.property_id = l.property_id AND rb.status = 'active'
+	LEFT JOIN raw_booking_block_nights rbn ON rbn.raw_booking_block_id = rb.id AND rbn.property_id = l.property_id
+	WHERE ns.status = 'active'
+	GROUP BY ns.id, ns.property_id
+)
+SELECT count(*)
+FROM stay_source_links l
+LEFT JOIN named_stays s ON s.id = l.named_stay_id
+LEFT JOIN raw_booking_blocks b ON b.id = l.raw_booking_block_id
+LEFT JOIN health h ON h.stay_id = l.named_stay_id AND h.property_id = l.property_id
+WHERE s.id IS NULL OR s.property_id <> l.property_id
+	OR date(l.linked_check_in_date) <> l.linked_check_in_date
+	OR date(l.linked_check_out_date) <> l.linked_check_out_date
+	OR l.linked_check_out_date <= l.linked_check_in_date
+	OR l.linked_check_in_date <> s.check_in_date OR l.linked_check_out_date <> s.check_out_date
+	OR (l.raw_booking_block_id IS NOT NULL AND (b.id IS NULL OR b.property_id <> l.property_id OR l.source_type IS NOT b.source_type OR l.source_event_uid IS NOT b.source_event_uid))
+	OR (l.link_status = 'manual_unlinked' AND l.raw_booking_block_id IS NOT NULL)
+	OR (l.link_status IN ('active', 'conflict') AND l.raw_booking_block_id IS NULL)
+	OR l.link_status NOT IN ('active', 'source_deleted', 'conflict', 'manual_unlinked')
+	OR (h.expected_status IS NOT NULL AND l.link_status <> h.expected_status)`
 
 var readinessChecks = []readinessCheck{
 	{"schema.000038_applied", `SELECT CASE WHEN EXISTS (SELECT 1 FROM schema_migrations WHERE version = '000038_named_stay_lifecycle_metadata') THEN 0 ELSE 1 END`},
@@ -159,7 +199,7 @@ var readinessChecks = []readinessCheck{
 	{"stable.named_stay_active_nights_exact", `WITH RECURSIVE expected(stay_id, property_id, night_date, end_date) AS (SELECT id, property_id, check_in_date, check_out_date FROM named_stays WHERE status = 'active' UNION ALL SELECT stay_id, property_id, date(night_date, '+1 day'), end_date FROM expected WHERE date(night_date, '+1 day') < end_date), missing AS (SELECT stay_id, property_id, night_date FROM expected EXCEPT SELECT named_stay_id, property_id, local_night_date FROM named_stay_nights WHERE active = 1), unexpected AS (SELECT named_stay_id, property_id, local_night_date FROM named_stay_nights WHERE active = 1 EXCEPT SELECT stay_id, property_id, night_date FROM expected) SELECT (SELECT count(*) FROM missing) + (SELECT count(*) FROM unexpected)`},
 	{"stable.raw_block_active_nights_exact", `WITH RECURSIVE expected(block_id, property_id, night_date, end_date) AS (SELECT id, property_id, check_in_date, check_out_date FROM raw_booking_blocks WHERE status = 'active' UNION ALL SELECT block_id, property_id, date(night_date, '+1 day'), end_date FROM expected WHERE date(night_date, '+1 day') < end_date), missing AS (SELECT block_id, property_id, night_date FROM expected EXCEPT SELECT raw_booking_block_id, property_id, local_night_date FROM raw_booking_block_nights WHERE active = 1), unexpected AS (SELECT raw_booking_block_id, property_id, local_night_date FROM raw_booking_block_nights WHERE active = 1 EXCEPT SELECT block_id, property_id, night_date FROM expected) SELECT (SELECT count(*) FROM missing) + (SELECT count(*) FROM unexpected)`},
 	{"stable.availability_named_stay_overlap", `SELECT count(*) FROM property_availability_blocks a JOIN named_stay_nights n ON n.property_id = a.property_id AND n.active = 1 AND n.local_night_date >= a.start_date AND n.local_night_date < a.end_date WHERE a.status = 'active'`},
-	{"stable.source_link_status_complete", `SELECT count(*) FROM stay_source_links l LEFT JOIN named_stays s ON s.id = l.named_stay_id LEFT JOIN raw_booking_blocks b ON b.id = l.raw_booking_block_id WHERE s.id IS NULL OR s.property_id <> l.property_id OR date(l.linked_check_in_date) <> l.linked_check_in_date OR date(l.linked_check_out_date) <> l.linked_check_out_date OR l.linked_check_out_date <= l.linked_check_in_date OR (l.raw_booking_block_id IS NOT NULL AND (b.id IS NULL OR b.property_id <> l.property_id OR l.source_type IS NOT b.source_type OR l.source_event_uid IS NOT b.source_event_uid OR l.linked_check_in_date <> b.check_in_date OR l.linked_check_out_date <> b.check_out_date)) OR (l.link_status = 'active' AND (l.raw_booking_block_id IS NULL OR b.status <> 'active')) OR (l.link_status = 'source_deleted' AND l.raw_booking_block_id IS NOT NULL AND b.status <> 'deleted_from_source') OR (l.link_status = 'conflict' AND l.raw_booking_block_id IS NOT NULL AND b.status <> 'conflict') OR (l.link_status = 'manual_unlinked' AND l.raw_booking_block_id IS NOT NULL) OR l.link_status NOT IN ('active', 'source_deleted', 'conflict', 'manual_unlinked')`},
+	{"stable.source_link_status_complete", sourceLinkReadinessQuery},
 	{"stable.child_reference_owners", `SELECT count(*) FROM (SELECT l.id FROM nuki_event_logs l JOIN nuki_access_codes c ON c.id = l.nuki_access_code_id WHERE c.property_id <> l.property_id UNION ALL SELECT l.id FROM cleaning_calendar_event_logs l JOIN cleaning_calendar_events e ON e.id = l.cleaning_calendar_event_id WHERE e.property_id <> l.property_id UNION ALL SELECT m.id FROM finance_booking_merges m JOIN finance_bookings b ON b.id = m.booking_id JOIN finance_imports i ON i.id = m.import_id WHERE b.property_id <> i.property_id UNION ALL SELECT f.id FROM invoice_files f LEFT JOIN invoices i ON i.id = f.invoice_id WHERE i.id IS NULL)`},
 	{"stable.critical_fields_complete", `SELECT count(*) FROM (SELECT id FROM named_stays WHERE trim(display_name) = '' OR date(check_in_date) <> check_in_date OR date(check_out_date) <> check_out_date OR check_out_date <= check_in_date OR first_known_at IS NULL OR trim(first_known_at) = '' OR julianday(first_known_at) IS NULL OR (status = 'cancelled' AND (cancellation_effective_at IS NULL OR trim(cancellation_effective_at) = '' OR julianday(cancellation_effective_at) IS NULL)) UNION ALL SELECT id FROM raw_booking_blocks WHERE trim(source_type) = '' OR trim(source_event_uid) = '' OR trim(content_hash) = '' OR date(check_in_date) <> check_in_date OR date(check_out_date) <> check_out_date OR check_out_date <= check_in_date OR trim(imported_at) = '' OR trim(last_synced_at) = '' UNION ALL SELECT id FROM property_availability_blocks WHERE date(start_date) <> start_date OR date(end_date) <> end_date OR end_date <= start_date UNION ALL SELECT id FROM finance_bookings WHERE trim(reference_number) = '' OR trim(payout_date) = '' OR trim(created_at) = '' OR trim(updated_at) = '' UNION ALL SELECT id FROM invoices WHERE trim(invoice_number) = '' OR trim(supplier_snapshot_json) = '' OR trim(customer_snapshot_json) = '' OR trim(currency) = '' OR sequence_value <= 0 OR version <= 0 UNION ALL SELECT id FROM invoice_files WHERE trim(file_path) = '' OR file_size_bytes < 0 OR version <= 0 UNION ALL SELECT id FROM named_stay_nights WHERE active NOT IN (0, 1) OR date(local_night_date) <> local_night_date UNION ALL SELECT id FROM raw_booking_block_nights WHERE active NOT IN (0, 1) OR date(local_night_date) <> local_night_date)`},
 	{"stable.nuki_access_code_uniqueness", `SELECT count(*) FROM (SELECT 1 FROM nuki_access_codes WHERE named_stay_id IS NOT NULL GROUP BY property_id, named_stay_id HAVING count(*) > 1)`},
@@ -275,6 +315,203 @@ func Audit(ctx context.Context, opts Options) Report {
 		r.Errors = append(r.Errors, "close temporary database: "+err.Error())
 	}
 	return finish(r, nil)
+}
+
+// Repair applies only deterministic, evidence-backed readiness repairs. It
+// deliberately leaves ambiguous ownership and review decisions untouched.
+func Repair(ctx context.Context, opts Options) Report {
+	r := newReport("repair", opts)
+	path, validationID, err := validateOptions(opts)
+	if err != nil {
+		return finishWithGate(r, validationID, err)
+	}
+	if !opts.ConfirmRepair {
+		return finishWithGate(r, "gate.confirm_readiness_repair", errors.New("--confirm-readiness-repair is required with --repair"))
+	}
+	sidecarChecks, err := sqliteSidecarChecks(path, "gate.sqlite")
+	r.Checks = append(r.Checks, sidecarChecks...)
+	if err != nil {
+		return finish(r, err)
+	}
+	r.DatabaseBefore, err = fingerprint(path)
+	if err != nil {
+		return finish(r, fmt.Errorf("fingerprint database: %w", err))
+	}
+
+	db, err := dbconn.OpenReadOnly("sqlite://" + path)
+	if err != nil {
+		return finish(r, fmt.Errorf("open immutable database: %w", err))
+	}
+	r.SchemaBefore = schemaVersions(ctx, db, &r)
+	r.SchemaObjectsBefore = schemaObjects(ctx, db, &r, "before")
+	r.SQLiteSequenceBefore = sqliteSequences(ctx, db, &r, "before")
+	r.TableCounts.Before = tableCounts(ctx, db, &r)
+	r.CriticalAggregates.Before = criticalAggregates(ctx, db, &r, "before")
+	var schema38, schema39 int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version = '000038_named_stay_lifecycle_metadata'`).Scan(&schema38); err != nil {
+		_ = db.Close()
+		return finishWithGate(r, "gate.repair_schema", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version = '000039_legacy_occupancy_removal'`).Scan(&schema39); err != nil {
+		_ = db.Close()
+		return finishWithGate(r, "gate.repair_schema", err)
+	}
+	if err := db.Close(); err != nil {
+		return finish(r, fmt.Errorf("close immutable database before repair: %w", err))
+	}
+	if schema38 != 1 || schema39 != 0 {
+		return finishWithGate(r, "gate.repair_schema", fmt.Errorf("repair requires migration 000038 applied and 000039 pending"))
+	}
+
+	if opts.beforeWritableOpen != nil {
+		opts.beforeWritableOpen()
+	}
+	recheck, err := sqliteSidecarChecks(path, "gate.pre_repair_sqlite")
+	r.Checks = append(r.Checks, recheck...)
+	if err != nil {
+		return finish(r, err)
+	}
+	currentFingerprint, err := fingerprint(path)
+	if err != nil {
+		return finishWithGate(r, "gate.pre_repair_database_fingerprint", err)
+	}
+	if currentFingerprint != r.DatabaseBefore {
+		return finishWithGate(r, "gate.pre_repair_database_fingerprint", errors.New("database changed immediately before writable repair"))
+	}
+	r.Checks = append(r.Checks, Check{ID: "gate.confirm_readiness_repair", Passed: true}, Check{ID: "gate.pre_repair_database_fingerprint", Passed: true})
+
+	db, err = dbconn.Open("sqlite://" + path)
+	if err != nil {
+		return finish(r, fmt.Errorf("open database for repair: %w", err))
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = db.Close()
+		}
+	}()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return finish(r, fmt.Errorf("begin readiness repair: %w", err))
+	}
+	rollback := true
+	defer func() {
+		if rollback {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if r.RepairCounts.CancellationTimestamps, err = execRepair(ctx, tx, `
+		UPDATE named_stays
+		SET cancellation_effective_at = (
+			SELECT MIN(fb.created_at)
+			FROM finance_bookings fb
+			WHERE fb.named_stay_id = named_stays.id
+			  AND fb.property_id = named_stays.property_id
+			  AND upper(trim(COALESCE(fb.status, ''))) = 'CANCELLED'
+			  AND julianday(fb.created_at) IS NOT NULL
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM finance_booking_merges m,
+				     json_each(CASE WHEN json_valid(m.changed_fields_json) THEN m.changed_fields_json ELSE '[]' END) changed
+				WHERE m.booking_id = fb.id AND lower(trim(CAST(changed.value AS TEXT))) = 'status'
+			  )
+		)
+		WHERE status = 'cancelled'
+		  AND cancellation_effective_at IS NULL
+		  AND EXISTS (
+			SELECT 1 FROM finance_bookings fb
+			WHERE fb.named_stay_id = named_stays.id
+			  AND fb.property_id = named_stays.property_id
+			  AND upper(trim(COALESCE(fb.status, ''))) = 'CANCELLED'
+			  AND julianday(fb.created_at) IS NOT NULL
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM finance_booking_merges m,
+				     json_each(CASE WHEN json_valid(m.changed_fields_json) THEN m.changed_fields_json ELSE '[]' END) changed
+				WHERE m.booking_id = fb.id AND lower(trim(CAST(changed.value AS TEXT))) = 'status'
+			  )
+		)`); err != nil {
+		return finish(r, fmt.Errorf("repair cancellation timestamps: %w", err))
+	}
+	if r.RepairCounts.ExactSourceMappings, err = execRepair(ctx, tx, `
+		INSERT INTO occupancy_stay_migration_map (
+			old_occupancy_id, property_id, raw_booking_block_id, migration_kind, notes, created_at
+		)
+		SELECT o.id, o.property_id, r.id, 'raw_block', 'pms21_exact_source_repair',
+			strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+		FROM occupancies o
+		JOIN raw_booking_blocks r
+		  ON r.property_id = o.property_id
+		 AND r.source_type = o.source_type
+		 AND r.source_event_uid = o.source_event_uid
+		LEFT JOIN occupancy_stay_migration_map m ON m.old_occupancy_id = o.id
+		WHERE m.old_occupancy_id IS NULL`); err != nil {
+		return finish(r, fmt.Errorf("repair exact source mappings: %w", err))
+	}
+	if r.RepairCounts.LegacyCleaningPointers, err = execRepair(ctx, tx, `
+		UPDATE cleaning_calendar_events
+		SET next_occupancy_id = NULL
+		WHERE next_occupancy_id IS NOT NULL
+		  AND (
+			(named_stay_id IS NOT NULL AND raw_booking_block_id IS NULL AND EXISTS (
+				SELECT 1 FROM named_stays s WHERE s.id = cleaning_calendar_events.named_stay_id AND s.property_id = cleaning_calendar_events.property_id
+			))
+			OR
+			(raw_booking_block_id IS NOT NULL AND named_stay_id IS NULL AND EXISTS (
+				SELECT 1 FROM raw_booking_blocks b WHERE b.id = cleaning_calendar_events.raw_booking_block_id AND b.property_id = cleaning_calendar_events.property_id
+			))
+		  )`); err != nil {
+		return finish(r, fmt.Errorf("repair legacy cleaning pointers: %w", err))
+	}
+	if r.RepairCounts.CleaningKinds, err = execRepair(ctx, tx, `
+		UPDATE cleaning_calendar_events
+		SET cleaning_kind = 'provisional_block'
+		WHERE raw_booking_block_id IS NOT NULL
+		  AND named_stay_id IS NULL
+		  AND cleaning_kind <> 'provisional_block'
+		  AND EXISTS (
+			SELECT 1 FROM raw_booking_blocks b WHERE b.id = cleaning_calendar_events.raw_booking_block_id AND b.property_id = cleaning_calendar_events.property_id
+		  )`); err != nil {
+		return finish(r, fmt.Errorf("repair cleaning kinds: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return finish(r, fmt.Errorf("commit readiness repair: %w", err))
+	}
+	rollback = false
+	r.Checks = append(r.Checks, Check{ID: "repair.deterministic", Passed: true})
+
+	r.SchemaAfter = schemaVersions(ctx, db, &r)
+	r.SchemaObjectsAfter = schemaObjects(ctx, db, &r, "after")
+	r.SQLiteSequenceAfter = sqliteSequences(ctx, db, &r, "after")
+	r.TableCounts.After = tableCounts(ctx, db, &r)
+	r.CriticalAggregates.After = criticalAggregates(ctx, db, &r, "after")
+	r.RemainingReadinessChecks = runReadinessChecks(ctx, db)
+	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return finish(r, fmt.Errorf("checkpoint repaired database: %w", err))
+	}
+	if err := db.Close(); err != nil {
+		return finish(r, fmt.Errorf("close repaired database: %w", err))
+	}
+	closed = true
+	postSidecars, sidecarErr := sqliteSidecarChecks(path, "post.sqlite")
+	r.Checks = append(r.Checks, postSidecars...)
+	if sidecarErr != nil {
+		return finish(r, sidecarErr)
+	}
+	r.DatabaseAfter, err = fingerprint(path)
+	if err != nil {
+		return finish(r, fmt.Errorf("fingerprint repaired database: %w", err))
+	}
+	return finish(r, nil)
+}
+
+func execRepair(ctx context.Context, tx *sql.Tx, query string) (int64, error) {
+	result, err := tx.ExecContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func Apply(ctx context.Context, opts Options) Report {
@@ -605,6 +842,8 @@ func commandArguments(mode string, opts Options) []string {
 		if opts.PreReport != "" {
 			args = append(args, "--pre-report", opts.PreReport)
 		}
+	} else if mode == "repair" && opts.ConfirmRepair {
+		args = append(args, "--confirm-readiness-repair")
 	}
 	return args
 }

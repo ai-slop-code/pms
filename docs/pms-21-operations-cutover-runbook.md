@@ -458,11 +458,16 @@ Do not continue until `<RESTORE_DRILL>` proves the chosen backup can be
 restored, migrated, and used to start the compatible application in an
 isolated environment. This runbook does not claim that drill has occurred.
 
-## Cleanup Readiness Audit
+## Deterministic Readiness Repair
 
-The Release C image supplies `/app/pms21-cleanup`. Set the release identities
-to the exact values in the Required Record, mount production data read-only,
-and redirect output outside the app volume:
+Release C provides an idempotent repair mode for evidence-backed cleanup
+residue. It derives cancellation timestamps only from persisted cancelled
+finance rows, maps legacy occupancies only to exact source-identity raw blocks,
+and removes legacy cleaning fields only when a valid canonical owner exists.
+It never resolves reviews or chooses ambiguous Nuki, finance, migration-map, or
+cleaning owners.
+
+Keep the API stopped and take the cleanup backup before running repair:
 
 ```bash
 C_DIGEST='sha256:<APPROVED_DIGEST>'
@@ -474,6 +479,38 @@ APPROVED_EXCEPTIONS_REFERENCE='<APPROVED_EXCEPTIONS>#sha256:<SHA256>'
 ANALYTICS_PARITY_REFERENCE='<ANALYTICS_PARITY>#sha256:<SHA256>'
 REMOTE_VERIFICATION_REFERENCE='<REMOTE_EVIDENCE>#sha256:<SHA256>'
 CALLER_INVENTORY_REFERENCE='<CALLER_INVENTORY>#sha256:<SHA256>'
+podman run --rm \
+  --name pms21-cleanup-repair \
+  -v /mnt/main_storage/containers/data/api.pms.airportlounge.sk:/data:Z \
+  --entrypoint /app/pms21-cleanup \
+  "$APP_IMAGE" \
+  --repair \
+  --confirm-readiness-repair \
+  --db /data/pms.db \
+  --data-root /data \
+  --image-digest "$C_DIGEST" \
+  --commit "$BACKEND_COMMIT" \
+  --frontend-build "$FRONTEND_BUILD" \
+  --operator "$OPERATOR" \
+  --exception-register-reference "$EXCEPTION_REGISTER_REFERENCE" \
+  --approved-exceptions-reference "$APPROVED_EXCEPTIONS_REFERENCE" \
+  --analytics-parity-reference "$ANALYTICS_PARITY_REFERENCE" \
+  --remote-verification-reference "$REMOTE_VERIFICATION_REFERENCE" \
+  --caller-inventory-reference "$CALLER_INVENTORY_REFERENCE" \
+  > /absolute/restricted/path/PMS_21_cleanup_repair_YYYY-MM-DD.json
+```
+
+Review `repair_counts` and `remaining_readiness_checks`. A successful repair
+command means its deterministic transaction committed; it does not approve or
+hide remaining readiness failures. Running it again must report zero repairs.
+
+## Cleanup Readiness Audit
+
+The Release C image supplies `/app/pms21-cleanup`. Set the release identities
+to the exact values in the Required Record, mount production data read-only,
+and redirect output outside the app volume:
+
+```bash
 podman run --rm \
   --name pms21-cleanup-readiness \
   -v /mnt/main_storage/containers/data/api.pms.airportlounge.sk:/data:ro,Z \

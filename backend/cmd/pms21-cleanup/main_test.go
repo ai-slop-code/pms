@@ -14,6 +14,7 @@ func TestRunRequiresExactlyOneMode(t *testing.T) {
 	for name, args := range map[string][]string{
 		"neither": nil,
 		"both":    {"--audit", "--apply"},
+		"all":     {"--audit", "--repair", "--apply"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			report, ok := run(context.Background(), args, &bytes.Buffer{})
