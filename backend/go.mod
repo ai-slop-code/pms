@@ -3,7 +3,7 @@ module pms/backend
 go 1.26.6
 
 require (
-	github.com/arran4/golang-ical v0.3.5
+	github.com/arran4/golang-ical v0.3.6
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-chi/cors v1.2.2
@@ -17,10 +17,10 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/trace v1.45.0
-	golang.org/x/crypto v0.54.0
-	golang.org/x/text v0.40.0
+	golang.org/x/crypto v0.55.0
+	golang.org/x/text v0.41.0
 	golang.org/x/time v0.15.0
-	modernc.org/sqlite v1.56.0
+	modernc.org/sqlite v1.57.0
 )
 
 require (
