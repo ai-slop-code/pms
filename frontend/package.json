@@ -26,28 +26,28 @@
     "lucide-vue-next": "^1.0.0",
     "pinia": "^4.0.3",
     "qrcode": "^1.5.4",
-    "vue": "^3.5.40",
+    "vue": "^3.5.41",
     "vue-router": "^5.2.0"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6",
     "@eslint/js": "^10.0.1",
-    "@typescript-eslint/eslint-plugin": "^8.65.0",
-    "@typescript-eslint/parser": "^8.65.0",
+    "@typescript-eslint/eslint-plugin": "^8.67.0",
+    "@typescript-eslint/parser": "^8.67.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/eslint-config-typescript": "^14.9.0",
     "@vue/test-utils": "^2.4.11",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.10.0",
-    "globals": "^17.7.0",
+    "globals": "^17.11.0",
     "jsdom": "^29.1.1",
     "openapi-typescript": "^7.13.0",
     "prettier": "^3.9.6",
     "typescript": "~5.6.3",
     "vite": "^8.2.1",
-    "vitest": "^4.1.10",
-    "vue-tsc": "^3.3.9"
+    "vitest": "^4.1.11",
+    "vue-tsc": "^3.3.10"
   },
   "overrides": {
     "js-yaml": "4.3.1"
