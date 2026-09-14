@@ -7,16 +7,14 @@ It is written for a normal operator, not a developer.
 ## What This Feature Does
 
 PMS imports Booking.com ICS entries as raw unavailable blocks first; an ICS
-block is not assumed to be a guest reservation. For raw block nights that are
-not covered by a named stay, PMS creates provisional cleaning placeholders.
-After an operator creates or promotes a named stay, that named stay becomes the
-final source for its guest-checkout cleaning event.
+block is not assumed to be a guest reservation. Raw blocks never create cleaning
+events. After an operator creates or promotes a named stay, that persisted stay
+becomes the source for its guest-checkout cleaning event.
 
 Default event titles:
 
 | Situation | Google Calendar event title |
 | --- | --- |
-| Raw ICS block night not covered by a named stay | `Upratovanie` (provisional) |
 | A guest checks out and another guest checks in the same day | `Upratovanie: Pride Host` |
 | A guest checks out and nobody checks in the same day | `Upratovanie: Bez Hosta` |
 
@@ -43,16 +41,13 @@ The cleaner should have read-only access to the cleaning calendar.
 ### Raw Blocks And Named Stays
 
 Booking.com ICS is an availability feed. PMS stores each event as a raw booking
-block and stores its covered nights separately. Active uncovered raw nights
-produce one provisional cleaning placeholder per checkout date so cleaning work
-is not missed while the real stay is still unknown.
+ block and stores its covered nights separately. Raw nights are availability
+ evidence only and never produce cleaning work.
 
 Named stays are separate, operator-owned business records. An active named stay
-with cleaning enabled produces one final event on its checkout date. Promoting
-all or part of a raw block to a named stay removes the provisional placeholders
-for the covered nights; raw nights left outside the named stay remain
-provisional. ICS sync can update or remove raw evidence, but it does not cancel,
-resize, rename, or otherwise change a named stay.
+ with cleaning enabled produces one event on its checkout date. ICS sync can
+ update or remove raw evidence, but it does not cancel, resize, rename, or
+ otherwise change a named stay.
 
 The final model does not expose occupancy IDs or legacy occupancy repair APIs.
 Use the Availability calendar's raw-block, named-stay, and availability-block
@@ -440,6 +435,27 @@ Normal workflow:
 6. If a raw block or named stay changes, PMS reconciles the managed event on the next sync.
 
 You usually only need to open the PMS Cleaning page if you want to check sync status or fix an error.
+
+## PMS-22 Transition
+
+PMS-22 removes raw-owned cleaning events. The application must be stopped before
+the one-time cleanup and migration. Build the backend, frontend, and
+`cleaning-calendar-cleanup` command as one release.
+
+Run the command against the configured database and current configured calendar:
+
+```text
+cleaning-calendar-cleanup prepare
+cleaning-calendar-cleanup status
+cleaning-calendar-cleanup run
+```
+
+Repeat `run` after correcting access or configuration errors. It uses the
+original property-local cutoff and only the current calendar. Do not start an
+old backend after remote cleanup. Once `run` reports all properties complete,
+apply the forward migration and start only the new release. The migration
+refuses incomplete cleanup and removes provisional local rows and logs without
+archiving them.
 
 ## Troubleshooting
 

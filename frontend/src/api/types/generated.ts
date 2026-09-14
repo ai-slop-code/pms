@@ -5023,8 +5023,6 @@ export interface components {
             events_seen: number;
             events_upserted: number;
             events_removed: number;
-            provisional_cleaning_events_created: number;
-            provisional_cleaning_events_removed: number;
         };
         CleaningCalendarReconcileResponse: {
             ok: boolean;
@@ -5651,7 +5649,7 @@ export interface components {
             /** Format: date */
             checkout_date: string;
             /** @enum {string} */
-            cleaning_kind: "provisional_block" | "named_stay";
+            cleaning_kind: "named_stay";
             title: string;
             /** @enum {string} */
             status: "pending" | "synced" | "error" | "removed";
@@ -5705,8 +5703,6 @@ export interface components {
             id: number;
             /** Format: int64 */
             named_stay_id?: number | null;
-            /** Format: int64 */
-            raw_booking_block_id?: number | null;
             cleaning_identity?: string | null;
             google_calendar_id: string;
             google_event_id: string | null;
@@ -5777,11 +5773,20 @@ export interface components {
         };
         NamedStayMutationResponse: {
             ok: boolean;
+            stay_saved: boolean;
             /** Format: int64 */
             named_stay_id: number;
             /** @enum {string} */
             nuki_generation_status: "not_applicable" | "pending" | "generated" | "error";
             nuki_generation_error?: string;
+            cleaning_calendar: {
+                /** @enum {string} */
+                status: "synced" | "skipped" | "error";
+                /** @enum {string} */
+                reason?: "disabled" | "calendar_not_set" | "no_work";
+                error?: string;
+            };
+            error?: string;
         };
     };
     responses: {

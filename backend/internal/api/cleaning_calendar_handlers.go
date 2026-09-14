@@ -29,22 +29,21 @@ type cleaningCalendarSettingsResponse struct {
 }
 
 type cleaningCalendarEventDTO struct {
-	ID                int64   `json:"id"`
-	NamedStayID       *int64  `json:"named_stay_id,omitempty"`
-	RawBookingBlockID *int64  `json:"raw_booking_block_id,omitempty"`
-	CleaningIdentity  *string `json:"cleaning_identity,omitempty"`
-	GoogleCalendarID  string  `json:"google_calendar_id"`
-	GoogleEventID     *string `json:"google_event_id"`
-	CleaningDate      string  `json:"cleaning_date"`
-	StartsAt          string  `json:"starts_at"`
-	EndsAt            string  `json:"ends_at"`
-	SameDayArrival    bool    `json:"same_day_arrival"`
-	Title             string  `json:"title"`
-	Status            string  `json:"status"`
-	WarningMessage    *string `json:"warning_message"`
-	ErrorMessage      *string `json:"error_message"`
-	LastSyncedAt      *string `json:"last_synced_at"`
-	UpdatedAt         string  `json:"updated_at"`
+	ID               int64   `json:"id"`
+	NamedStayID      *int64  `json:"named_stay_id,omitempty"`
+	CleaningIdentity *string `json:"cleaning_identity,omitempty"`
+	GoogleCalendarID string  `json:"google_calendar_id"`
+	GoogleEventID    *string `json:"google_event_id"`
+	CleaningDate     string  `json:"cleaning_date"`
+	StartsAt         string  `json:"starts_at"`
+	EndsAt           string  `json:"ends_at"`
+	SameDayArrival   bool    `json:"same_day_arrival"`
+	Title            string  `json:"title"`
+	Status           string  `json:"status"`
+	WarningMessage   *string `json:"warning_message"`
+	ErrorMessage     *string `json:"error_message"`
+	LastSyncedAt     *string `json:"last_synced_at"`
+	UpdatedAt        string  `json:"updated_at"`
 }
 
 type cleaningCalendarEventsResponse struct {
@@ -299,21 +298,20 @@ func (s *Server) cleaningCalendarSettingsDTO(settings *store.GoogleCleaningSetti
 
 func cleaningCalendarEventDTOFromStore(row store.CleaningCalendarEvent) cleaningCalendarEventDTO {
 	return cleaningCalendarEventDTO{
-		ID:                row.ID,
-		NamedStayID:       nullInt64Ptr(row.NamedStayID),
-		RawBookingBlockID: nullInt64Ptr(row.RawBookingBlockID),
-		CleaningIdentity:  nullStringPtr(row.CleaningIdentity),
-		GoogleCalendarID:  row.GoogleCalendarID,
-		GoogleEventID:     nullStringPtr(row.GoogleEventID),
-		CleaningDate:      row.CleaningDate,
-		StartsAt:          row.StartsAt.UTC().Format(time.RFC3339),
-		EndsAt:            row.EndsAt.UTC().Format(time.RFC3339),
-		SameDayArrival:    row.SameDayArrival,
-		Title:             row.Title,
-		Status:            row.Status,
-		WarningMessage:    nullStringPtr(row.WarningMessage),
-		ErrorMessage:      nullStringPtr(row.ErrorMessage),
-		LastSyncedAt:      nullTimePtr(row.LastSyncedAt),
-		UpdatedAt:         row.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:               row.ID,
+		NamedStayID:      nullInt64Ptr(row.NamedStayID),
+		CleaningIdentity: nullStringPtr(row.CleaningIdentity),
+		GoogleCalendarID: row.GoogleCalendarID,
+		GoogleEventID:    nullStringPtr(row.GoogleEventID),
+		CleaningDate:     row.CleaningDate,
+		StartsAt:         row.StartsAt.UTC().Format(time.RFC3339),
+		EndsAt:           row.EndsAt.UTC().Format(time.RFC3339),
+		SameDayArrival:   row.SameDayArrival,
+		Title:            row.Title,
+		Status:           row.Status,
+		WarningMessage:   nullStringPtr(row.WarningMessage),
+		ErrorMessage:     nullStringPtr(row.ErrorMessage),
+		LastSyncedAt:     nullTimePtr(row.LastSyncedAt),
+		UpdatedAt:        row.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }

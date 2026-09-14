@@ -21,7 +21,7 @@ const calendar: OccupancyCalendarView = {
         {
           id: 1,
           checkout_date: '2026-07-10',
-          cleaning_kind: 'provisional_block',
+          cleaning_kind: 'named_stay',
           title: 'Upratovanie',
           status: 'pending',
         },
@@ -58,7 +58,6 @@ const calendar: OccupancyCalendarView = {
       source_links: [
         {
           id: 30,
-          raw_booking_block_id: 10,
           source_type: 'booking_ics',
           source_event_uid: 'raw-1',
           linked_check_in_date: '2026-07-10',

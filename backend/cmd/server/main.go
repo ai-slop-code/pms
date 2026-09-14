@@ -188,9 +188,6 @@ func main() {
 				log.Printf("occupancy sync property %d: %v", id, err)
 				continue
 			}
-			if _, err := cleaningCalendarSvc.ReconcileProperty(bg, id, "occupancy_sync"); err != nil {
-				log.Printf("cleaning calendar reconcile property %d: %v", id, err)
-			}
 		}
 		metrics.RecordSchedulerRun("occupancy_sync", "ran")
 	})

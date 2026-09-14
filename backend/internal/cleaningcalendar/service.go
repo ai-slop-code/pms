@@ -8,13 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"pms/backend/internal/store"
 )
 
 const (
-	reconcilePastWindowDays   = 30
 	reconcileFutureWindowDays = 365
 	minimalConflictDuration   = 30 * time.Minute
 )
@@ -45,7 +45,6 @@ type CalendarEventPayload struct {
 	TimeZone     string
 	PropertyID   int64
 	NamedStayID  int64
-	RawBlockID   int64
 	Identity     string
 	LocalEventID int64
 }
@@ -54,15 +53,13 @@ type Service struct {
 	Store  *store.Store
 	Client CalendarClient
 	Now    func() time.Time
+	mu     sync.Mutex
 }
 
 type ReconcileStats struct {
 	EventsSeen     int `json:"events_seen"`
 	EventsUpserted int `json:"events_upserted"`
 	EventsRemoved  int `json:"events_removed"`
-	// PMS_19 §12 observability: provisional (unnamed-block) checkout counts.
-	ProvisionalCreated int `json:"provisional_cleaning_events_created"`
-	ProvisionalRemoved int `json:"provisional_cleaning_events_removed"`
 }
 
 func (s *Service) ReconcileProperty(ctx context.Context, propertyID int64, trigger string) (*ReconcileStats, error) {
@@ -81,17 +78,28 @@ func (s *Service) ReconcileProperty(ctx context.Context, propertyID int64, trigg
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
-	windowStart := now.AddDate(0, 0, -reconcilePastWindowDays)
-	windowEnd := now.AddDate(0, 0, reconcileFutureWindowDays)
-	fromDate := windowStart.In(loc).Format("2006-01-02")
+	localNow := now.In(loc)
+	windowEnd := localNow.AddDate(0, 0, reconcileFutureWindowDays)
+	fromDate := localNow.Format("2006-01-02")
 	toDate := windowEnd.In(loc).Format("2006-01-02")
 	return s.ReconcilePropertyDateRange(ctx, propertyID, fromDate, toDate, trigger)
 }
 
 func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int64, fromDate, toDate, trigger string) (*ReconcileStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.Store == nil {
 		return nil, errors.New("store not configured")
 	}
+	owner := fmt.Sprintf("cleaning-service-%p", s)
+	acquired, err := s.Store.TryAcquireJobLease(ctx, fmt.Sprintf("cleaning_calendar_property_%d", propertyID), owner, 30*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	if !acquired {
+		return nil, errors.New("cleaning calendar reconciliation already in progress")
+	}
+	defer s.Store.ReleaseJobLease(context.Background(), fmt.Sprintf("cleaning_calendar_property_%d", propertyID), owner)
 	if _, err := time.Parse("2006-01-02", fromDate); err != nil {
 		return nil, err
 	}
@@ -142,6 +150,19 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 	}
 	dayStart, _ := time.ParseInLocation("2006-01-02", fromDate, loc)
 	dayAfterEnd := time.Date(toParsed.Year(), toParsed.Month(), toParsed.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
+	today := time.Now().UTC()
+	if s.Now != nil {
+		today = s.Now().UTC()
+	}
+	horizonFrom := today.In(loc).Format("2006-01-02")
+	horizonTo := today.In(loc).AddDate(0, 0, reconcileFutureWindowDays).Format("2006-01-02")
+	desiredFrom, desiredTo := fromDate, toDate
+	if desiredFrom < horizonFrom {
+		desiredFrom = horizonFrom
+	}
+	if desiredTo > horizonTo {
+		desiredTo = horizonTo
+	}
 	googleIndex := googleEventIndex{}
 	if s.Client != nil && s.Client.Configured() {
 		googleEvents, err := s.Client.ListEvents(ctx, settings.CalendarID.String, dayStart, dayAfterEnd)
@@ -150,7 +171,10 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 		}
 		googleIndex = newGoogleEventIndex(googleEvents, propertyID, loc)
 	}
-	desiredEvents, err := s.buildDesiredEvents(ctx, propertyID, settings, profile, prop.Timezone, loc, fromDate, toDate)
+	desiredEvents := []*store.CleaningCalendarEvent{}
+	if desiredFrom <= desiredTo {
+		desiredEvents, err = s.buildDesiredEvents(ctx, propertyID, settings, profile, prop.Timezone, loc, desiredFrom, desiredTo)
+	}
 	if err != nil {
 		return finish(err)
 	}
@@ -163,7 +187,11 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 		desired[key] = struct{}{}
 		existing := s.lookupExistingDesiredEvent(ctx, event)
 		if existing != nil {
-			preserveExistingWindowForSameDayOnlyChange(existing, event)
+			if !existing.ScheduleHash.Valid || existing.ScheduleHash.String == event.ScheduleHash.String {
+				event.EndsAt = existing.EndsAt
+				event.WarningMessage = existing.WarningMessage
+			}
+			event.DesiredHash = sql.NullString{String: desiredHash(event, prop.Timezone), Valid: true}
 			if matchedID := googleIndex.match(event, existing); matchedID != "" && !event.GoogleEventID.Valid {
 				event.GoogleEventID = sql.NullString{String: matchedID, Valid: true}
 			}
@@ -181,20 +209,23 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 			return finish(err)
 		}
 		stats.EventsUpserted++
-		if event.CleaningKind == store.CleaningKindProvisionalBlock {
-			stats.ProvisionalCreated++
-		}
 		if err := s.syncUpsert(ctx, saved, prop.Timezone, runID); err != nil {
 			msg := err.Error()
 			runErr = &msg
 		}
 	}
-	active, err := s.Store.ListActiveCleaningCalendarEventsForDateRange(ctx, propertyID, fromDate, toDate)
+	active, err := s.Store.ListActiveCleaningCalendarEvents(ctx, propertyID)
 	if err != nil {
 		return finish(err)
 	}
 	for _, ev := range active {
 		if _, ok := desired[cleaningEventKey(&ev)]; ok {
+			continue
+		}
+		if ev.CleaningDate < horizonFrom && ev.PendingAction != store.CleaningPendingActionDelete {
+			if ev.PendingAction == store.CleaningPendingActionUpsert {
+				_ = s.Store.SetCleaningCalendarEventPendingAction(ctx, ev.PropertyID, ev.ID, store.CleaningPendingActionNone)
+			}
 			continue
 		}
 		if ev.GoogleEventID.Valid {
@@ -203,11 +234,6 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 					return finish(err)
 				}
 				action := "delete"
-				if ev.CleaningKind == store.CleaningKindProvisionalBlock {
-					action = "cleaning_provisional_removed"
-					stats.ProvisionalRemoved++
-					_ = s.Store.InsertAuditLog(ctx, nil, action, "cleaning_calendar_event", fmt.Sprintf("%d", ev.ID), "removed; Google event reused", "system", "cleaning_sync")
-				}
 				insertLog(s.Store, ctx, ev.PropertyID, ev.ID, runID, action, "removed; Google event reused")
 				stats.EventsRemoved++
 				continue
@@ -223,9 +249,6 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 			continue
 		}
 		stats.EventsRemoved++
-		if ev.CleaningKind == store.CleaningKindProvisionalBlock {
-			stats.ProvisionalRemoved++
-		}
 	}
 	return finish(nil)
 }
@@ -242,17 +265,6 @@ func cleaningEventKey(event *store.CleaningCalendarEvent) string {
 
 func (s *Service) buildDesiredEvents(ctx context.Context, propertyID int64, settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, fromDate, toDate string) ([]*store.CleaningCalendarEvent, error) {
 	out := []*store.CleaningCalendarEvent{}
-	rawTargets, err := s.Store.ListCleaningRawProvisionalTargets(ctx, propertyID, fromDate, toDate)
-	if err != nil {
-		return nil, err
-	}
-	for _, target := range rawTargets {
-		event, err := s.buildRawProvisionalEvent(settings, profile, timezone, loc, propertyID, target)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, event)
-	}
 	namedTargets, err := s.Store.ListCleaningNamedStayTargets(ctx, propertyID, fromDate, toDate)
 	if err != nil {
 		return nil, err
@@ -265,33 +277,6 @@ func (s *Service) buildDesiredEvents(ctx context.Context, propertyID int64, sett
 		out = append(out, event)
 	}
 	return out, nil
-}
-
-func (s *Service) buildRawProvisionalEvent(settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, propertyID int64, target store.CleaningRawProvisionalTarget) (*store.CleaningCalendarEvent, error) {
-	cd, err := time.ParseInLocation("2006-01-02", target.CheckoutDate, loc)
-	if err != nil {
-		return nil, err
-	}
-	outH, outM := parseHM(profile.DefaultCheckOutTime, 10, 0)
-	starts := time.Date(cd.Year(), cd.Month(), cd.Day(), outH, outM, 0, 0, loc)
-	ends := starts.Add(time.Duration(settings.DefaultDurationMinutes) * time.Minute)
-	event := &store.CleaningCalendarEvent{
-		PropertyID:        propertyID,
-		RawBookingBlockID: sql.NullInt64{Int64: target.RawBookingBlockID, Valid: true},
-		CheckoutDate:      sql.NullString{String: target.CheckoutDate, Valid: true},
-		CleaningKind:      store.CleaningKindProvisionalBlock,
-		CleaningIdentity:  sql.NullString{String: store.RawProvisionalCleaningIdentity(propertyID, target.CheckoutDate), Valid: true},
-		GoogleCalendarID:  strings.TrimSpace(settings.CalendarID.String),
-		CleaningDate:      target.CheckoutDate,
-		StartsAt:          starts.UTC(),
-		EndsAt:            ends.UTC(),
-		Title:             "Upratovanie",
-		Status:            store.CleaningCalendarStatusPending,
-		WarningMessage:    sql.NullString{},
-		ErrorMessage:      sql.NullString{},
-	}
-	event.DesiredHash = sql.NullString{String: desiredHash(event, timezone), Valid: true}
-	return event, nil
 }
 
 func (s *Service) buildNamedStayEvent(ctx context.Context, settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, target store.CleaningNamedStayTarget) (*store.CleaningCalendarEvent, error) {
@@ -331,7 +316,9 @@ func (s *Service) buildNamedStayEvent(ctx context.Context, settings *store.Googl
 		Status:           store.CleaningCalendarStatusPending,
 		WarningMessage:   warning,
 		ErrorMessage:     sql.NullString{},
+		PendingAction:    store.CleaningPendingActionUpsert,
 	}
+	event.ScheduleHash = sql.NullString{String: scheduleHash(timezone, target.CheckOutDate, profile.DefaultCheckOutTime, profile.DefaultCheckInTime, settings.DefaultDurationMinutes), Valid: true}
 	event.DesiredHash = sql.NullString{String: desiredHash(event, timezone), Valid: true}
 	return event, nil
 }
@@ -368,10 +355,14 @@ func desiredHash(event *store.CleaningCalendarEvent, timezone string) string {
 		event.CleaningKind,
 		nullStringValue(event.CleaningIdentity),
 		fmt.Sprintf("stay:%d", nullInt64Value(event.NamedStayID)),
-		fmt.Sprintf("raw:%d", nullInt64Value(event.RawBookingBlockID)),
 		fmt.Sprintf("same:%t", event.SameDayArrival),
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func scheduleHash(timezone, checkout, checkoutTime, checkinTime string, duration int) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{timezone, checkout, checkoutTime, checkinTime, fmt.Sprintf("%d", duration)}, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -395,7 +386,6 @@ type googleEventIndex struct {
 	byCleaningID   map[string]GoogleCalendarEvent
 	byIdentity     map[string]GoogleCalendarEvent
 	byNamedStayDay map[string]GoogleCalendarEvent
-	byRawBlockDay  map[string]GoogleCalendarEvent
 }
 
 func newGoogleEventIndex(events []GoogleCalendarEvent, propertyID int64, loc *time.Location) googleEventIndex {
@@ -405,7 +395,6 @@ func newGoogleEventIndex(events []GoogleCalendarEvent, propertyID int64, loc *ti
 		byCleaningID:   map[string]GoogleCalendarEvent{},
 		byIdentity:     map[string]GoogleCalendarEvent{},
 		byNamedStayDay: map[string]GoogleCalendarEvent{},
-		byRawBlockDay:  map[string]GoogleCalendarEvent{},
 	}
 	propID := fmt.Sprintf("%d", propertyID)
 	for _, ev := range events {
@@ -426,9 +415,6 @@ func newGoogleEventIndex(events []GoogleCalendarEvent, propertyID int64, loc *ti
 		}
 		if v := strings.TrimSpace(priv["pms_named_stay_id"]); v != "" {
 			indexGoogleEvent(idx.byNamedStayDay, v+"\x00"+day, ev)
-		}
-		if v := strings.TrimSpace(priv["pms_raw_booking_block_id"]); v != "" {
-			indexGoogleEvent(idx.byRawBlockDay, v+"\x00"+day, ev)
 		}
 	}
 	return idx
@@ -475,11 +461,6 @@ func (idx googleEventIndex) match(desired, existing *store.CleaningCalendarEvent
 			return ev.ID
 		}
 	}
-	if desired != nil && desired.RawBookingBlockID.Valid {
-		if ev, ok := idx.byRawBlockDay[fmt.Sprintf("%d\x00%s", desired.RawBookingBlockID.Int64, desired.CleaningDate)]; ok {
-			return ev.ID
-		}
-	}
 	return ""
 }
 
@@ -494,26 +475,26 @@ func (idx googleEventIndex) seen(event *store.CleaningCalendarEvent) bool {
 	return ok
 }
 
-func preserveExistingWindowForSameDayOnlyChange(existing *store.CleaningCalendarEvent, next *store.CleaningCalendarEvent) {
-	if existing == nil || next == nil {
-		return
-	}
-	if existing.CleaningDate != next.CleaningDate || !existing.StartsAt.Equal(next.StartsAt) {
-		return
-	}
-	if existing.SameDayArrival == next.SameDayArrival {
-		return
-	}
-	next.EndsAt = existing.EndsAt
-	next.WarningMessage = existing.WarningMessage
-}
-
 func (s *Service) RetryEvent(ctx context.Context, propertyID, eventID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Store == nil {
+		return errors.New("store not configured")
+	}
+	owner := fmt.Sprintf("cleaning-service-%p", s)
+	acquired, err := s.Store.TryAcquireJobLease(ctx, fmt.Sprintf("cleaning_calendar_property_%d", propertyID), owner, 30*time.Minute)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return errors.New("cleaning calendar reconciliation already in progress")
+	}
+	defer s.Store.ReleaseJobLease(context.Background(), fmt.Sprintf("cleaning_calendar_property_%d", propertyID), owner)
 	event, err := s.Store.GetCleaningCalendarEvent(ctx, propertyID, eventID)
 	if err != nil {
 		return err
 	}
-	if event.Status == store.CleaningCalendarStatusRemoved {
+	if event.PendingAction == store.CleaningPendingActionDelete || event.Status == store.CleaningCalendarStatusRemoved {
 		return s.syncDelete(ctx, event, 0)
 	}
 	prop, err := s.Store.GetProperty(ctx, propertyID)
@@ -524,6 +505,9 @@ func (s *Service) RetryEvent(ctx context.Context, propertyID, eventID int64) err
 }
 
 func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarEvent, timezone string, runID int64) error {
+	if err := s.Store.SetCleaningCalendarEventPendingAction(ctx, event.PropertyID, event.ID, store.CleaningPendingActionUpsert); err != nil {
+		return err
+	}
 	if s.Client == nil || !s.Client.Configured() {
 		msg := "google calendar client not configured"
 		_ = s.Store.UpdateCleaningCalendarEventGoogleResult(ctx, event.PropertyID, event.ID, "", store.CleaningCalendarStatusError, &msg)
@@ -539,7 +523,6 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 		TimeZone:     timezone,
 		PropertyID:   event.PropertyID,
 		NamedStayID:  nullInt64Value(event.NamedStayID),
-		RawBlockID:   nullInt64Value(event.RawBookingBlockID),
 		Identity:     nullStringValue(event.CleaningIdentity),
 		LocalEventID: event.ID,
 	}, strings.TrimSpace(event.GoogleEventID.String))
@@ -553,15 +536,14 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 		return err
 	}
 	action := "upsert"
-	if event.CleaningKind == store.CleaningKindProvisionalBlock {
-		action = "cleaning_provisional_created" // PMS_19 §11B
-		_ = s.Store.InsertAuditLog(ctx, nil, action, "cleaning_calendar_event", fmt.Sprintf("%d", event.ID), "synced", "system", "cleaning_sync")
-	}
 	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, action, "synced")
 	return nil
 }
 
 func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarEvent, runID int64) error {
+	if err := s.Store.SetCleaningCalendarEventPendingAction(ctx, event.PropertyID, event.ID, store.CleaningPendingActionDelete); err != nil {
+		return err
+	}
 	if event.GoogleEventID.Valid && strings.TrimSpace(event.GoogleEventID.String) != "" && (s.Client == nil || !s.Client.Configured()) {
 		msg := "google calendar client not configured"
 		_ = s.Store.UpdateCleaningCalendarEventGoogleResult(ctx, event.PropertyID, event.ID, "", store.CleaningCalendarStatusError, &msg)
@@ -581,10 +563,6 @@ func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarE
 	}
 	message := "removed"
 	action := "delete"
-	if event.CleaningKind == store.CleaningKindProvisionalBlock {
-		action = "cleaning_provisional_removed" // PMS_19 §11B
-		_ = s.Store.InsertAuditLog(ctx, nil, action, "cleaning_calendar_event", fmt.Sprintf("%d", event.ID), message, "system", "cleaning_sync")
-	}
 	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, action, message)
 	return nil
 }

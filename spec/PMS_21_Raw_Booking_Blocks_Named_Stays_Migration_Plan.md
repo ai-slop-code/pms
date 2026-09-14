@@ -1,5 +1,10 @@
 # PMS 21 - Raw Booking Blocks and Named Stays Migration Plan
 
+> PMS 22 supersedes the provisional cleaning behavior described in this
+> migration plan. Raw blocks, source links, and named-stay promotion remain
+> governed here, but raw blocks no longer own or create operational cleaning
+> events.
+
 Status: Stage 2 guarded apply and the PMS 21 remediation are locally implemented and tested, but no production audit or apply has run. Production backfill, version cutover, safety-gate changes, and destructive cleanup remain blocked pending owner-run production audit approval.
 Source request: `spec/PMS_20_Occupancy_code_analysis_and_business_logic.md`  
 Goal: provide a staged technical plan for replacing the current overloaded occupancy model with explicit Raw booking date blocks and Named stays.

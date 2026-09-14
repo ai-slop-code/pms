@@ -2219,14 +2219,11 @@ components:
 
     CleaningCalendarReconcileStats:
       type: object
-      required:
-        [events_seen, events_upserted, events_removed, provisional_cleaning_events_created, provisional_cleaning_events_removed]
+      required: [events_seen, events_upserted, events_removed]
       properties:
         events_seen: { type: integer }
         events_upserted: { type: integer }
         events_removed: { type: integer }
-        provisional_cleaning_events_created: { type: integer }
-        provisional_cleaning_events_removed: { type: integer }
 
     CleaningCalendarReconcileResponse:
       type: object
@@ -3078,7 +3075,7 @@ components:
       properties:
         id: { type: integer, format: int64 }
         checkout_date: { type: string, format: date }
-        cleaning_kind: { type: string, enum: [provisional_block, named_stay] }
+        cleaning_kind: { type: string, enum: [named_stay] }
         title: { type: string }
         status: { type: string, enum: [pending, synced, error, removed] }
         google_event_id: { type: string }
@@ -3154,7 +3151,6 @@ components:
       properties:
         id: { type: integer, format: int64 }
         named_stay_id: { type: integer, format: int64, nullable: true }
-        raw_booking_block_id: { type: integer, format: int64, nullable: true }
         cleaning_identity: { type: string, nullable: true }
         google_calendar_id: { type: string }
         google_event_id: { type: string, nullable: true }
@@ -3230,10 +3226,19 @@ components:
 
     NamedStayMutationResponse:
       type: object
-      required: [ok, named_stay_id, nuki_generation_status]
+      required: [ok, stay_saved, named_stay_id, nuki_generation_status, cleaning_calendar]
       properties:
         ok: { type: boolean }
+        stay_saved: { type: boolean }
         named_stay_id: { type: integer, format: int64 }
         nuki_generation_status:
           { type: string, enum: [not_applicable, pending, generated, error] }
         nuki_generation_error: { type: string }
+        cleaning_calendar:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [synced, skipped, error] }
+            reason: { type: string, enum: [disabled, calendar_not_set, no_work] }
+            error: { type: string }
+        error: { type: string }

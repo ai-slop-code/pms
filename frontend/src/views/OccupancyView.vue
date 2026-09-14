@@ -203,7 +203,13 @@ async function submitManualStay() {
   manualStayBusy.value = true
   manualStayError.value = ''
   try {
-    const result = await api<{ ok?: boolean; error?: string; nuki_generation_status?: string }>(
+    const result = await api<{
+      ok?: boolean
+      stay_saved?: boolean
+      error?: string
+      nuki_generation_status?: string
+      cleaning_calendar?: { status: string; error?: string }
+    }>(
       `/api/properties/${pid.value}/stays`,
       {
         method: 'POST',
@@ -216,6 +222,12 @@ async function submitManualStay() {
         },
       },
     )
+    if (result.stay_saved && result.cleaning_calendar?.status === 'error') {
+      manualStayDialogOpen.value = false
+      error.value = result.error || 'Stay saved, but cleaning calendar sync failed. Retry calendar synchronization.'
+      await loadCalendar()
+      return
+    }
     if (result.ok === false) throw new Error(result.error || 'Failed to create stay')
     manualStayDialogOpen.value = false
     success.value =
@@ -255,7 +267,13 @@ async function submitPromoteRawBlock() {
   promoteBusy.value = true
   promoteError.value = ''
   try {
-    const result = await api<{ ok?: boolean; error?: string; nuki_generation_status?: string }>(
+    const result = await api<{
+      ok?: boolean
+      stay_saved?: boolean
+      error?: string
+      nuki_generation_status?: string
+      cleaning_calendar?: { status: string; error?: string }
+    }>(
       `/api/properties/${pid.value}/booking-blocks/${promoteRawBlock.value.id}/promote`,
       {
         method: 'POST',
@@ -268,6 +286,12 @@ async function submitPromoteRawBlock() {
         },
       },
     )
+    if (result.stay_saved && result.cleaning_calendar?.status === 'error') {
+      promoteDialogOpen.value = false
+      error.value = result.error || 'Stay saved, but cleaning calendar sync failed. Retry calendar synchronization.'
+      await loadCalendar()
+      return
+    }
     if (result.ok === false) throw new Error(result.error || 'Failed to promote raw block')
     promoteDialogOpen.value = false
     success.value =

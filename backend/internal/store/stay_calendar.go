@@ -160,9 +160,6 @@ func (s *Store) ListCalendarRawBookingBlocks(ctx context.Context, propertyID int
 	if len(out) == 0 {
 		return out, nil
 	}
-	if err := s.attachRawCalendarCleaningEvents(ctx, propertyID, startDate, endDate, out, byID); err != nil {
-		return nil, err
-	}
 
 	nightRows, err := s.DB.QueryContext(ctx, `
 		SELECT rbn.raw_booking_block_id, rbn.local_night_date
@@ -443,29 +440,6 @@ func (s *Store) attachNamedCalendarCleaningEvents(ctx context.Context, propertyI
 		}
 		if idx, ok := byID[stayID]; ok {
 			stays[idx].CleaningEvents = append(stays[idx].CleaningEvents, event)
-		}
-	}
-	return rows.Err()
-}
-
-func (s *Store) attachRawCalendarCleaningEvents(ctx context.Context, propertyID int64, startDate, endDate string, blocks []CalendarRawBookingBlock, byID map[int64]int) error {
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT c.id, c.raw_booking_block_id, c.checkout_date, c.cleaning_kind, c.title, c.status, c.google_event_id, c.error_message, c.warning_message
-		FROM cleaning_calendar_events c
-		WHERE c.property_id = ? AND c.status <> 'removed' AND c.checkout_date >= ? AND c.checkout_date <= ?
-		  AND c.raw_booking_block_id IS NOT NULL`, propertyID, startDate, endDate)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var blockID int64
-		event, err := scanCalendarCleaningEvent(rows, &blockID)
-		if err != nil {
-			return err
-		}
-		if idx, ok := byID[blockID]; ok {
-			blocks[idx].CleaningEvents = append(blocks[idx].CleaningEvents, event)
 		}
 	}
 	return rows.Err()

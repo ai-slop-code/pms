@@ -17,6 +17,16 @@ This authority statement defines the target architecture only. It does not
 claim Release A/B production windows, exception resolution, a restore drill,
 or destructive cleanup have completed.
 
+`PMS_22_Named_Stay_Only_Cleaning_Calendar_Spec.md` is the final implementation contract for
+cleaning-calendar ownership. It records confirmed product decisions to remove
+raw provisional cleaning, eligibility rules, the today/+365-day creation horizon,
+preserved end times for later same-day changes, and the deployment-date cutoff.
+Remote cleanup is limited to the currently configured calendar, and local
+provisional-event history is discarded without an archive.
+It defines API outcomes, historical named-event handling, temporary cleanup
+schema, and the offline deployment procedure. Implementation may proceed when
+requested; final specification status does not claim completed deployment.
+
 ## Files
 
 ### `PMS_00_Implementation_Prompt.md`
@@ -89,6 +99,13 @@ routes, DTOs, UI, integration foreign keys, tables, flags, and transitional
 tooling while preserving source, business, integration, and audit history.
 This is the current PMS 21 authority.
 
+### `PMS_22_Named_Stay_Only_Cleaning_Calendar_Spec.md`
+Final named-stay-only cleaning contract: removal of raw provisional generation,
+future provisional-event cleanup with past Google events preserved, common
+creation horizon, safe retry, user-visible calendar errors after stay save,
+schema/API/UI changes, and the concrete offline cleanup/deployment procedure.
+No further draft-approval gate applies to implementation requested by the user.
+
 ### `docs/adr/ADR-007-final-occupancy-model-and-canonical-stay-ownership.md`
 Final architecture decision superseding ADR-005's compatibility window and
 ADR-006's permission for unmatched canonical finance bookings. The historical
@@ -109,8 +126,9 @@ ADRs remain unchanged.
 12. `PMS_19_Booking_ICS_Reconciliation_Spec.md`
 13. `PMS_21_Raw_Booking_Blocks_Named_Stays_Migration_Plan.md`
 14. `PMS_21_Legacy_Occupancy_Removal_Spec.md`
-15. `initial_prompt.md`
-16. `Prompt_answers.md`
+15. `PMS_22_Named_Stay_Only_Cleaning_Calendar_Spec.md` (final cleaning authority)
+16. `initial_prompt.md`
+17. `Prompt_answers.md`
 
 ## External API references
 - **Nuki Smart Lock API** (OpenAPI / Swagger UI): https://api.nuki.io/
@@ -127,9 +145,9 @@ Direct Google Calendar integration was not part of v1. The intended v1 approach 
 - expose occupancies through the authenticated JSON endpoint
 - use `n8n` externally if Google Calendar synchronization is needed
 
-Current Google Calendar cleaning behavior is specified by
-`PMS_15_Google_Calendar_Cleaning_Events_Spec.md` and the PMS 21 documents,
-using named-stay or raw-block ownership rather than an occupancy ID.
+The current target Google Calendar cleaning contract is PMS 22: named-stay-only
+ownership, superseding raw-block cleaning in PMS 15/PMS 21. Earlier specifications
+remain supporting context where they do not conflict with PMS 22.
 
 ## Suggested Usage
 - Use `PMS_00_Implementation_Prompt.md` when starting implementation with an AI coding agent.

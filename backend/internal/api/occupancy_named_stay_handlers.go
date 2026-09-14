@@ -51,11 +51,24 @@ type stayReviewPatchBody struct {
 }
 
 type namedStayV2Response struct {
-	OK                   bool    `json:"ok"`
-	NamedStayID          int64   `json:"named_stay_id"`
-	NukiGenerationStatus string  `json:"nuki_generation_status"`
-	NukiGenerationError  *string `json:"nuki_generation_error,omitempty"`
+	OK                   bool                             `json:"ok"`
+	StaySaved            bool                             `json:"stay_saved"`
+	NamedStayID          int64                            `json:"named_stay_id"`
+	NukiGenerationStatus string                           `json:"nuki_generation_status"`
+	NukiGenerationError  *string                          `json:"nuki_generation_error,omitempty"`
+	CleaningCalendar     cleaningCalendarMutationResponse `json:"cleaning_calendar"`
+	Error                string                           `json:"error,omitempty"`
 }
+
+type cleaningCalendarMutationResponse struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type cleaningCalendarSkip struct{ reason string }
+
+func (e cleaningCalendarSkip) Error() string { return e.reason }
 
 func (s *Server) postBookingBlockPromote(w http.ResponseWriter, r *http.Request) {
 	actor, propID, ok := s.requirePropertyModuleAccess(w, r, permissions.Occupancy, permissions.LevelWrite)
@@ -90,9 +103,9 @@ func (s *Server) postBookingBlockPromote(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	stay = s.triggerNamedStayNukiGeneration(r, propID, stay)
-	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_promote", stayRange{stay.CheckInDate, stay.CheckOutDate})
+	cleaningErr := s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_promote", stayRange{stay.CheckInDate, stay.CheckOutDate})
 	s.audit(r, actor, "named_stay_promoted", "named_stay", strconv.FormatInt(stay.ID, 10), "success")
-	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
+	WriteJSON(w, http.StatusOK, namedStayResponseWithCleaning(stay, cleaningErr))
 }
 
 func (s *Server) postStay(w http.ResponseWriter, r *http.Request) {
@@ -121,9 +134,9 @@ func (s *Server) postStay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stay = s.triggerNamedStayNukiGeneration(r, propID, stay)
-	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_create", stayRange{stay.CheckInDate, stay.CheckOutDate})
+	cleaningErr := s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_create", stayRange{stay.CheckInDate, stay.CheckOutDate})
 	s.audit(r, actor, "named_stay_created", "named_stay", strconv.FormatInt(stay.ID, 10), "success")
-	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
+	WriteJSON(w, http.StatusOK, namedStayResponseWithCleaning(stay, cleaningErr))
 }
 
 func (s *Server) patchStay(w http.ResponseWriter, r *http.Request) {
@@ -161,9 +174,9 @@ func (s *Server) patchStay(w http.ResponseWriter, r *http.Request) {
 	if namedStayNukiFieldsChanged(before, stay) {
 		stay = s.reconcileNamedStayNuki(r, propID, stay, "named_stay_update")
 	}
-	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_update", stayRangeFromNamedStay(before), stayRange{stay.CheckInDate, stay.CheckOutDate})
+	cleaningErr := s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_update", stayRangeFromNamedStay(before), stayRange{stay.CheckInDate, stay.CheckOutDate})
 	s.audit(r, actor, "named_stay_updated", "named_stay", strconv.FormatInt(stayID, 10), "success")
-	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
+	WriteJSON(w, http.StatusOK, namedStayResponseWithCleaning(stay, cleaningErr))
 }
 
 func (s *Server) patchStayStatus(w http.ResponseWriter, r *http.Request) {
@@ -189,9 +202,9 @@ func (s *Server) patchStayStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stay = s.reconcileNamedStayNuki(r, propID, stay, "named_stay_status")
-	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_status", stayRangeFromNamedStay(before), stayRange{stay.CheckInDate, stay.CheckOutDate})
+	cleaningErr := s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_status", stayRangeFromNamedStay(before), stayRange{stay.CheckInDate, stay.CheckOutDate})
 	s.audit(r, actor, "named_stay_status_changed", "named_stay", strconv.FormatInt(stayID, 10), "success")
-	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
+	WriteJSON(w, http.StatusOK, namedStayResponseWithCleaning(stay, cleaningErr))
 }
 
 func (s *Server) patchStayOutcome(w http.ResponseWriter, r *http.Request) {
@@ -233,9 +246,9 @@ func (s *Server) patchStayOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stay = s.reconcileNamedStayNuki(r, propID, stay, "named_stay_outcome")
-	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_outcome", stayRangeFromNamedStay(before), stayRangeFromNamedStay(stay))
+	cleaningErr := s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_outcome", stayRangeFromNamedStay(before), stayRangeFromNamedStay(stay))
 	s.audit(r, actor, "named_stay_outcome_changed", "named_stay", id, "success")
-	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
+	WriteJSON(w, http.StatusOK, namedStayResponseWithCleaning(stay, cleaningErr))
 }
 
 func (s *Server) patchStayReview(w http.ResponseWriter, r *http.Request) {
@@ -268,9 +281,9 @@ func (s *Server) patchStayReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stay = s.reconcileNamedStayNuki(r, propID, stay, "named_stay_review")
-	s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_review", stayRangeFromNamedStay(before), stayRangeFromNamedStay(stay))
+	cleaningErr := s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_review", stayRangeFromNamedStay(before), stayRangeFromNamedStay(stay))
 	s.audit(r, actor, "named_stay_review_changed", "named_stay", id, "success")
-	WriteJSON(w, http.StatusOK, namedStayResponse(stay))
+	WriteJSON(w, http.StatusOK, namedStayResponseWithCleaning(stay, cleaningErr))
 }
 
 type stayRange struct {
@@ -285,16 +298,27 @@ func stayRangeFromNamedStay(stay *store.NamedStay) stayRange {
 	return stayRange{checkIn: stay.CheckInDate, checkOut: stay.CheckOutDate}
 }
 
-func (s *Server) reconcileCleaningStayRangesBestEffort(r *http.Request, propID int64, trigger string, ranges ...stayRange) {
+func (s *Server) reconcileCleaningStayRangesBestEffort(r *http.Request, propID int64, trigger string, ranges ...stayRange) error {
 	if s.CleaningCalendar == nil {
-		return
+		return cleaningCalendarSkip{reason: "disabled"}
+	}
+	settings, err := s.Store.GetGoogleCleaningSettings(r.Context(), propID)
+	if err != nil {
+		return err
+	}
+	if !settings.Enabled {
+		return cleaningCalendarSkip{reason: "disabled"}
+	}
+	if !settings.CalendarID.Valid || strings.TrimSpace(settings.CalendarID.String) == "" {
+		return cleaningCalendarSkip{reason: "calendar_not_set"}
 	}
 	from, to := affectedCleaningDateRange(ranges...)
 	if from == "" || to == "" {
-		_, _ = s.CleaningCalendar.ReconcileProperty(r.Context(), propID, trigger)
-		return
+		_, err := s.CleaningCalendar.ReconcileProperty(r.Context(), propID, trigger)
+		return err
 	}
-	_, _ = s.CleaningCalendar.ReconcilePropertyDateRange(r.Context(), propID, from, to, trigger)
+	_, err = s.CleaningCalendar.ReconcilePropertyDateRange(r.Context(), propID, from, to, trigger)
+	return err
 }
 
 func affectedCleaningDateRange(ranges ...stayRange) (string, string) {
@@ -311,8 +335,7 @@ func affectedCleaningDateRange(ranges ...stayRange) (string, string) {
 		if _, err := time.Parse("2006-01-02", co); err != nil {
 			continue
 		}
-		// Include the whole stay window because raw provisional placeholders are
-		// checkout dates derived from every covered night.
+		// Include the whole affected stay window so arrival turnover is refreshed.
 		if from == "" || ci < from {
 			from = ci
 		}
@@ -389,7 +412,7 @@ func (s *Server) refreshedNamedStayOrOriginal(r *http.Request, propID int64, sta
 }
 
 func namedStayResponse(stay *store.NamedStay) namedStayV2Response {
-	resp := namedStayV2Response{OK: true}
+	resp := namedStayV2Response{OK: true, StaySaved: true, CleaningCalendar: cleaningCalendarMutationResponse{Status: "synced"}}
 	if stay == nil {
 		return resp
 	}
@@ -404,6 +427,22 @@ func namedStayResponse(stay *store.NamedStay) namedStayV2Response {
 		errText := stay.NukiGenerationError.String
 		resp.NukiGenerationError = &errText
 	}
+	return resp
+}
+
+func namedStayResponseWithCleaning(stay *store.NamedStay, err error) namedStayV2Response {
+	resp := namedStayResponse(stay)
+	if err == nil {
+		return resp
+	}
+	var skipped cleaningCalendarSkip
+	if errors.As(err, &skipped) {
+		resp.CleaningCalendar = cleaningCalendarMutationResponse{Status: "skipped", Reason: skipped.reason}
+		return resp
+	}
+	resp.OK = false
+	resp.CleaningCalendar = cleaningCalendarMutationResponse{Status: "error", Error: "Google Calendar cleaning synchronization failed"}
+	resp.Error = "Stay saved, but cleaning calendar sync failed. Retry calendar synchronization."
 	return resp
 }
 

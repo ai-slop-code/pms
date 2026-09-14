@@ -55,7 +55,7 @@ func TestReconcileUsesNamedStayNightsForSameDayArrival(t *testing.T) {
 	}
 
 	client := &fakeCalendarClient{configured: true}
-	svc := &Service{Store: st, Client: client}
+	svc := testService(st, client)
 	stats, err := svc.ReconcilePropertyDateRange(ctx, propertyID, "2026-07-10", "2026-07-12", "test")
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestReconcileUsesNamedStayNightsForSameDayArrival(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !event.NamedStayID.Valid || event.NamedStayID.Int64 != checkout.ID || event.RawBookingBlockID.Valid {
+	if !event.NamedStayID.Valid || event.NamedStayID.Int64 != checkout.ID {
 		t.Fatalf("bad cleaning ownership: %+v", event)
 	}
 	if !event.SameDayArrival || event.Title != "Upratovanie: Pride Host" {
@@ -85,11 +85,11 @@ func TestReconcileUsesNamedStayNightsForSameDayArrival(t *testing.T) {
 func TestReconcileRawOwnershipIsDeterministicAndCollapsesToNamedStay(t *testing.T) {
 	ctx := context.Background()
 	st, propertyID := setupCleaningCalendarProperty(t, ctx)
-	firstID := insertRawCleaningBlock(t, st, propertyID, "raw-first", "2026-07-09", "2026-07-12")
+	insertRawCleaningBlock(t, st, propertyID, "raw-first", "2026-07-09", "2026-07-12")
 	insertRawCleaningBlock(t, st, propertyID, "raw-overlap", "2026-07-09", "2026-07-12")
 
 	client := &fakeCalendarClient{configured: true}
-	svc := &Service{Store: st, Client: client}
+	svc := testService(st, client)
 	if _, err := svc.ReconcilePropertyDateRange(ctx, propertyID, "2026-07-10", "2026-07-12", "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -97,13 +97,8 @@ func TestReconcileRawOwnershipIsDeterministicAndCollapsesToNamedStay(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 3 {
-		t.Fatalf("raw events=%d want 3", len(events))
-	}
-	for _, event := range events {
-		if !event.RawBookingBlockID.Valid || event.RawBookingBlockID.Int64 != firstID || event.NamedStayID.Valid {
-			t.Fatalf("non-deterministic raw owner: %+v", event)
-		}
+	if len(events) != 0 {
+		t.Fatalf("raw events=%d want 0", len(events))
 	}
 
 	stay := createCleaningStay(t, st, propertyID, "Named Guest", "2026-07-09", "2026-07-12")
@@ -125,7 +120,7 @@ func TestReconcileRemovalIsDateScoped(t *testing.T) {
 	first := createCleaningStay(t, st, propertyID, "First", "2026-07-09", "2026-07-10")
 	second := createCleaningStay(t, st, propertyID, "Second", "2026-07-19", "2026-07-20")
 	client := &fakeCalendarClient{configured: true}
-	svc := &Service{Store: st, Client: client}
+	svc := testService(st, client)
 	if _, err := svc.ReconcilePropertyDateRange(ctx, propertyID, "2026-07-10", "2026-07-20", "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -143,11 +138,11 @@ func TestReconcileRemovalIsDateScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstEvent.Status != store.CleaningCalendarStatusRemoved || secondEvent.Status != store.CleaningCalendarStatusSynced {
+	if firstEvent.Status != store.CleaningCalendarStatusRemoved || secondEvent.Status != store.CleaningCalendarStatusRemoved {
 		t.Fatalf("date-scoped statuses=%q/%q", firstEvent.Status, secondEvent.Status)
 	}
-	if len(client.deletes) != 1 {
-		t.Fatalf("deletes=%v want one", client.deletes)
+	if len(client.deletes) != 2 {
+		t.Fatalf("deletes=%v want two", client.deletes)
 	}
 }
 
@@ -157,7 +152,7 @@ func TestReconcilePreservesStoredGoogleIDAndEventHistory(t *testing.T) {
 	stay := createCleaningStay(t, st, propertyID, "History Guest", "2026-07-09", "2026-07-10")
 	identity := store.NamedStayCleaningIdentity(propertyID, stay.ID, "2026-07-10")
 	client := &fakeCalendarClient{configured: true}
-	svc := &Service{Store: st, Client: client}
+	svc := testService(st, client)
 
 	if _, err := svc.ReconcilePropertyDateRange(ctx, propertyID, "2026-07-10", "2026-07-10", "test"); err != nil {
 		t.Fatal(err)
@@ -202,7 +197,7 @@ func TestReconcileSkipsUnchangedListedGoogleEvent(t *testing.T) {
 	st, propertyID := setupCleaningCalendarProperty(t, ctx)
 	stay := createCleaningStay(t, st, propertyID, "No-op Guest", "2026-07-09", "2026-07-10")
 	client := &fakeCalendarClient{configured: true}
-	svc := &Service{Store: st, Client: client}
+	svc := testService(st, client)
 	if _, err := svc.ReconcilePropertyDateRange(ctx, propertyID, "2026-07-10", "2026-07-10", "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -291,6 +286,10 @@ func setupCleaningCalendarProperty(t *testing.T, ctx context.Context) (*store.St
 		t.Fatal(err)
 	}
 	return st, property.ID
+}
+
+func testService(st *store.Store, client CalendarClient) *Service {
+	return &Service{Store: st, Client: client, Now: func() time.Time { return time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC) }}
 }
 
 func createCleaningStay(t *testing.T, st *store.Store, propertyID int64, name, checkIn, checkOut string) *store.NamedStay {

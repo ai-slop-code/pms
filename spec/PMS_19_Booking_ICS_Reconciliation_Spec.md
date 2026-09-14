@@ -10,6 +10,8 @@
 > `PMS_21_Legacy_Occupancy_Removal_Spec.md` and ADR-007: ICS owns raw booking
 > blocks, users/business workflows own named stays, and non-stay closures use
 > property availability blocks.
+> For cleaning-calendar ownership, PMS 22 supersedes the provisional behavior
+> described below and makes persisted named stays the only operational owners.
 
 ## Final PMS 21 Behavior (Current Authority)
 

@@ -18,7 +18,8 @@ var embeddedMigrations embed.FS
 // tests. Entries are exact versions so later ordinary migrations are not held
 // behind a manual migration.
 var manualMigrations = map[string]struct{}{
-	"000039_legacy_occupancy_removal": {},
+	"000039_legacy_occupancy_removal":          {},
+	"000040_named_stay_only_cleaning_calendar": {},
 }
 
 func Up(db *sql.DB) error {
@@ -80,6 +81,11 @@ func up(db *sql.DB, automatic bool) error {
 		if err != nil {
 			return err
 		}
+		if version == "000040_named_stay_only_cleaning_calendar" {
+			if err := ensurePMS22CleanupReady(db); err != nil {
+				return err
+			}
+		}
 		tx, err := db.Begin()
 		if err != nil {
 			return err
@@ -95,6 +101,26 @@ func up(db *sql.DB, automatic bool) error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func ensurePMS22CleanupReady(db *sql.DB) error {
+	var events int
+	if err := db.QueryRow(`SELECT count(*) FROM cleaning_calendar_events`).Scan(&events); err != nil {
+		return nil
+	}
+	if events == 0 {
+		return nil
+	}
+	var tables int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='cleaning_calendar_cleanup_state'`).Scan(&tables); err != nil || tables == 0 {
+		return fmt.Errorf("PMS-22 cleanup is incomplete; run cleaning-calendar-cleanup prepare and run")
+	}
+	var incomplete int
+	err := db.QueryRow(`SELECT count(*) FROM properties p WHERE EXISTS (SELECT 1 FROM cleaning_calendar_events e WHERE e.property_id=p.id) AND NOT EXISTS (SELECT 1 FROM cleaning_calendar_cleanup_state s WHERE s.property_id=p.id AND s.phase='complete' AND coalesce(trim(s.calendar_id),'')=coalesce((SELECT trim(g.calendar_id) FROM property_google_cleaning_settings g WHERE g.property_id=p.id),'') AND NOT EXISTS (SELECT 1 FROM cleaning_calendar_cleanup_items i WHERE i.property_id=p.id))`).Scan(&incomplete)
+	if err != nil || incomplete > 0 {
+		return fmt.Errorf("PMS-22 cleanup is incomplete; run cleaning-calendar-cleanup prepare and run")
 	}
 	return nil
 }

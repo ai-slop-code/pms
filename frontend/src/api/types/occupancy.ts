@@ -67,7 +67,7 @@ export interface CalendarNamedStay {
 export interface CalendarCleaningEvent {
   id: number
   checkout_date: string
-  cleaning_kind: 'provisional_block' | 'named_stay' | string
+  cleaning_kind: 'named_stay' | string
   title: string
   status: 'pending' | 'synced' | 'error' | 'removed' | string
   google_event_id?: string

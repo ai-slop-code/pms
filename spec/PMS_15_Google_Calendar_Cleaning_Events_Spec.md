@@ -3,10 +3,16 @@
 > Audience: product / property manager + implementing engineer.
 > Scope: native PMS integration that reconciles checkout-driven cleaning events
 > in a configured Google Calendar.
-> Status: active behavioral specification, aligned to the PMS 21 final model.
-> It supersedes the earlier v1-only n8n recommendation. Named stays and raw
-> booking blocks own cleaning candidates; legacy occupancy IDs are not part of
-> the final contract.
+> Status: supporting behavioral specification; PMS 22 takes precedence where it conflicts.
+> It supersedes the earlier v1-only n8n recommendation. Its PMS 21-era text below
+> includes raw-block candidates; PMS 22 replaces those with named-stay-only
+> cleaning. Legacy occupancy IDs are not part of the final contract.
+
+> Final successor: `PMS_22_Named_Stay_Only_Cleaning_Calendar_Spec.md` retires raw
+> provisional cleaning and defines eligibility, horizon, end-time preservation,
+> historical removal, API outcomes, and cleanup/deployment. Implement PMS 22 when
+> these rules conflict; its contract has no remaining draft-approval gate.
+> This pointer does not claim implementation or production cleanup has occurred.
 
 ## 1. Problem Framing
 

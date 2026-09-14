@@ -57,12 +57,6 @@ func (s *Server) postOccupancySyncRun(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: err.Error()})
 		return
 	}
-	if s.CleaningCalendar != nil {
-		if _, err := s.CleaningCalendar.ReconcileProperty(r.Context(), id, "occupancy_sync"); err != nil {
-			WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: "occupancy synced, cleaning calendar failed: " + err.Error()})
-			return
-		}
-	}
 	s.audit(r, actor, "occupancy_sync", "property", strconv.FormatInt(id, 10), "success")
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
 }

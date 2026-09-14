@@ -68,7 +68,6 @@ export interface CleaningCalendarSettings {
 export interface CleaningCalendarEventRow {
   id: number
   named_stay_id?: number
-  raw_booking_block_id?: number
   cleaning_identity?: string
   google_calendar_id: string
   google_event_id?: string
@@ -88,7 +87,4 @@ export interface CleaningCalendarReconcileStats {
   events_seen: number
   events_upserted: number
   events_removed: number
-  // PMS_19 §12: provisional (unnamed-block) checkout counts.
-  provisional_cleaning_events_created?: number
-  provisional_cleaning_events_removed?: number
 }
