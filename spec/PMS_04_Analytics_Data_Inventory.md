@@ -167,10 +167,11 @@ no occupancy IDs or legacy occupancy repair endpoints.
 
 ## 6. Booking.com bookings — payouts + statement (commission, fees, cancellations)
 
-**Table:** `finance_bookings` (renamed from `finance_booking_payouts` in
+**Tables:** `finance_bookings` (renamed from `finance_booking_payouts` in
 migration 000021; final canonical rows link to `finance_transactions` and a
-required same-property named stay; `finance_imports` +
-`finance_booking_merges` retain per-upload evidence).
+  required same-property named stay; `finance_imports` +
+  `finance_booking_merges` retain per-upload evidence. `finance_statement_evidence`
+  retains valid statement rows that have no canonical named stay.
 
 The table is **lifecycle-aware**: each row may carry payout-derived data, statement-derived data, or both, distinguished by the `has_payout_data` and `has_statement_data` flags. The `(property_id, source_channel, reference_number)` unique index is the canonical merge key.
 
@@ -184,8 +185,11 @@ The table is **lifecycle-aware**: each row may carry payout-derived data, statem
 - Inventory: `persons`, `rooms`, `room_nights`
 - Source flags: `has_payout_data`, `has_statement_data`, raw payloads `raw_payout_row_json`, `raw_statement_row_json`. Both flags are surfaced verbatim in the `GET /api/properties/{id}/finance/booking-payouts` JSON and rendered as the **Sources** column on the Booking Payouts UI (FEAT-06) so operators can tell payout-only, statement-only, and merged rows apart at a glance.
 - Linkage: `transaction_id` (auto-created ledger entry, uses net only) and
-  required `named_stay_id`. Unmatched input remains preview/staging/rejection
-  evidence rather than an ownerless canonical finance booking.
+  required `named_stay_id` for canonical rows. Statement-only unmatched
+  cancellations are retained in `finance_statement_evidence`; they are the
+  explicit exception to named-stay-only membership for the two statement
+  cancellation cohort charts and do not affect overall cancellation, lead-time,
+  revenue, occupancy, or stay metrics.
 
 ### Metrics derivable
 

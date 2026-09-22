@@ -31,21 +31,21 @@ func mkPayoutRow(ref, status string, net int) Row {
 
 func mkStatementRow(ref, status string) Row {
 	return Row{
-		Source:            SourceStatement,
-		ReferenceNumber:   ref,
-		AmountCents:       10000,
-		CommissionCents:   1500,
-		PaymentFeeCents:   100,
-		Currency:          "EUR",
-		Status:            status,
-		Persons:           2,
-		Rooms:             1,
-		RoomNights:        1,
-		HotelID:           "13452548",
-		BookedOn:          mustParse("2025-12-16T23:41:28Z"),
-		CheckInDate:       "2025-12-31",
-		CheckOutDate:      "2026-01-01",
-		Raw:               map[string]string{"reference": ref, "status": status},
+		Source:          SourceStatement,
+		ReferenceNumber: ref,
+		AmountCents:     10000,
+		CommissionCents: 1500,
+		PaymentFeeCents: 100,
+		Currency:        "EUR",
+		Status:          status,
+		Persons:         2,
+		Rooms:           1,
+		RoomNights:      1,
+		HotelID:         "13452548",
+		BookedOn:        mustParse("2025-12-16T23:41:28Z"),
+		CheckInDate:     "2025-12-31",
+		CheckOutDate:    "2026-01-01",
+		Raw:             map[string]string{"reference": ref, "status": status},
 	}
 }
 
@@ -148,3 +148,35 @@ func TestMerge_IdempotentReupload(t *testing.T) {
 		t.Fatalf("action = %v want unchanged", second.Action)
 	}
 }
+
+func TestMerge_CommissionAdjustmentIsAdditive(t *testing.T) {
+	first := Merge(nil, mkPayoutRow("X1", "ok", 5716))
+	cb := first.Result
+	adjustment := Row{Source: SourcePayout, ReferenceNumber: "X1", RowType: "Commission adjustment", AmountCents: -318, NetCents: -318}
+	out := Merge(&cb, adjustment)
+	if out.Result.CommissionCents == nil || *out.Result.CommissionCents != 1818 {
+		t.Fatalf("commission = %v, want 1818", out.Result.CommissionCents)
+	}
+	if out.Result.NetCents == nil || *out.Result.NetCents != 5398 {
+		t.Fatalf("net = %v, want 5398", out.Result.NetCents)
+	}
+	if out.Result.AmountCents == nil || *out.Result.AmountCents != 10000 {
+		t.Fatalf("amount changed: %v", out.Result.AmountCents)
+	}
+}
+
+func TestMerge_RefundReducesAmountAndNet(t *testing.T) {
+	first := Merge(nil, mkPayoutRow("X1", "ok", 5158))
+	cb := first.Result
+	cb.AmountCents = intPtr(6405)
+	refund := Row{Source: SourcePayout, ReferenceNumber: "X1", RowType: "Reservation", AmountCents: -2848, NetCents: -2848}
+	out := Merge(&cb, refund)
+	if out.Result.AmountCents == nil || *out.Result.AmountCents != 3557 {
+		t.Fatalf("amount = %v, want 3557", out.Result.AmountCents)
+	}
+	if out.Result.NetCents == nil || *out.Result.NetCents != 2310 {
+		t.Fatalf("net = %v, want 2310", out.Result.NetCents)
+	}
+}
+
+func intPtr(v int) *int { return &v }

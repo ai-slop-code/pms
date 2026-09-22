@@ -1,0 +1,29 @@
+Type,"Booking number",Check-in,Checkout,"Guest name","Payments service provider","Reservation status",Currency,"Payment status",Amount,Commission,"VAT for online platform services","Payments Service Fee",Net,"Payout date","Payout ID"
+Reservation,6184079217,"7 Sept 2026","8 Sept 2026","Dolnák Ivan","Booking.com B.V.",ok,EUR,by_booking,85.38,-15.59,-3.82,-1.02,64.95,"10 Sept 2026",P5VcvNDIAHVOsVcu
+Reservation,5672486715,"6 Sept 2026","7 Sept 2026","Natália Balačinová","Booking.com B.V.",ok,EUR,by_booking,77.29,-14.11,-3.46,-0.93,58.79,"10 Sept 2026",P5VcvNDIAHVOsVcu
+Reservation,6965402732,"4 Sept 2026","6 Sept 2026","Adelina Martin","Booking.com B.V.",ok,EUR,by_booking,159.16,-29.06,-7.12,-1.91,121.07,"10 Sept 2026",P5VcvNDIAHVOsVcu
+Reservation,5562791321,"3 Sept 2026","4 Sept 2026","Petr Voltner","Booking.com B.V.",ok,EUR,by_booking,56.05,-10.24,-2.51,-0.67,42.63,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6800596898,"28 Aug 2026","30 Aug 2026","Michal Doležal","Booking.com B.V.",ok,EUR,by_booking,-10.60,0.00,0.00,0.00,-10.60,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6388468113,"26 Aug 2026","28 Aug 2026","Amelia Percy","Booking.com B.V.",ok,EUR,by_booking,-7.42,0.00,0.00,0.00,-7.42,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6940764496,"25 Aug 2026","26 Aug 2026","Javorka, s.r.o. Javorka, s.r.o.","Booking.com B.V.",ok,EUR,by_booking,-7.05,0.00,0.00,0.00,-7.05,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6104510626,"24 Aug 2026","25 Aug 2026","Campaniello Andrea Hans","Booking.com B.V.",ok,EUR,by_booking,-4.32,0.00,0.00,0.00,-4.32,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5424955375,"23 Aug 2026","24 Aug 2026","Erik Forro","Booking.com B.V.",ok,EUR,by_booking,-6.55,0.00,0.00,0.00,-6.55,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5079011734,"19 Aug 2026","23 Aug 2026","Jaroslav Kučírek","Booking.com B.V.",ok,EUR,by_booking,-17.63,0.00,0.00,0.00,-17.63,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5441941191,"18 Aug 2026","19 Aug 2026","Martin Schneider","Booking.com B.V.",ok,EUR,by_booking,-3.18,0.00,0.00,0.00,-3.18,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6986274535,"17 Aug 2026","18 Aug 2026","Krisztián Križan","Booking.com B.V.",ok,EUR,by_booking,-4.05,0.00,0.00,0.00,-4.05,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6222340864,"16 Aug 2026","17 Aug 2026","Adelina Martina","Booking.com B.V.",ok,EUR,by_booking,-4.04,0.00,0.00,0.00,-4.04,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6874089083,"15 Aug 2026","16 Aug 2026","Ihor Petrivskiy","Booking.com B.V.",ok,EUR,by_booking,-3.89,0.00,0.00,0.00,-3.89,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6255831315,"14 Aug 2026","15 Aug 2026","Veronika Sovanyova","Booking.com B.V.",ok,EUR,by_booking,-4.77,0.00,0.00,0.00,-4.77,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5916848183,"13 Aug 2026","14 Aug 2026","Zuzana Feledikova","Booking.com B.V.",ok,EUR,by_booking,-3.21,0.00,0.00,0.00,-3.21,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6237317051,"12 Aug 2026","13 Aug 2026","Richard Krall","Booking.com B.V.",ok,EUR,by_booking,-3.95,0.00,0.00,0.00,-3.95,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5832656436,"11 Aug 2026","12 Aug 2026","R Matt","Booking.com B.V.",ok,EUR,by_booking,-3.67,0.00,0.00,0.00,-3.67,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6773131904,"8 Aug 2026","10 Aug 2026","Michaela Chlebovcova","Booking.com B.V.",ok,EUR,by_booking,-12.44,0.00,0.00,0.00,-12.44,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5265338781,"7 Aug 2026","8 Aug 2026","Andrea Popovičová","Booking.com B.V.",ok,EUR,by_booking,-4.05,0.00,0.00,0.00,-4.05,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5586026055,"6 Aug 2026","7 Aug 2026","Richard Paulinyi","Booking.com B.V.",ok,EUR,by_booking,-3.54,0.00,0.00,0.00,-3.54,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6593934589,"5 Aug 2026","6 Aug 2026","Iurii Furman","Booking.com B.V.",ok,EUR,by_booking,-4.02,0.00,0.00,0.00,-4.02,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5789105994,"4 Aug 2026","5 Aug 2026","Yevheniia Zhernova","Booking.com B.V.",ok,EUR,by_booking,-3.96,0.00,0.00,0.00,-3.96,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",5746777721,"3 Aug 2026","4 Aug 2026","Marek Sedlak","Booking.com B.V.",ok,EUR,by_booking,-7.74,0.00,0.00,0.00,-7.74,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6270640410,"2 Aug 2026","3 Aug 2026","Kateřina Novotná","Booking.com B.V.",ok,EUR,by_booking,-2.94,0.00,0.00,0.00,-2.94,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6270622388,"1 Aug 2026","2 Aug 2026","Jozef Kocúr","Booking.com B.V.",ok,EUR,by_booking,-15.14,0.00,0.00,0.00,-15.14,"10 Sept 2026",P5VcvNDIAHVOsVcu
+"Commission adjustment",6042579020,"31 Jul 2026","1 Aug 2026","Joey Jans","Booking.com B.V.",ok,EUR,by_booking,-3.41,0.00,0.00,0.00,-3.41,"10 Sept 2026",P5VcvNDIAHVOsVcu
+Reservation,5126238619,"13 Jul 2026","14 Jul 2026","Jürgen Stieger","Booking.com B.V.",ok,EUR,by_booking,-28.48,-0.00,-0.00,-0.00,-28.48,"10 Sept 2026",P5VcvNDIAHVOsVcu

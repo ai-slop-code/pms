@@ -48,17 +48,22 @@ func (s *Store) cancellationCohort(ctx context.Context, propertyID int64, fromUT
 	if loc == nil {
 		loc = time.UTC
 	}
+	dateExpr := "ns.first_known_at"
+	if dateCol == "ns.check_in_date" {
+		dateExpr = "ns.check_in_date"
+	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT `+dateCol+` AS d,
-		       UPPER(COALESCE(fb.status, '')) AS st,
-		       COALESCE(fb.outcome_override, ns.stay_outcome, '') AS outcome
-		  FROM finance_bookings fb
-		  JOIN named_stays ns
-		    ON ns.property_id = fb.property_id
-		   AND ns.id = fb.named_stay_id
-		 WHERE fb.property_id = ?
-		   AND fb.has_statement_data = 1
-		   AND `+dateCol+` IS NOT NULL`, propertyID)
+		SELECT `+dateExpr+`, UPPER(COALESCE(fb.status, '')), COALESCE(fb.outcome_override, ns.stay_outcome, '')
+		FROM finance_bookings fb JOIN named_stays ns ON ns.property_id = fb.property_id AND ns.id = fb.named_stay_id
+		WHERE fb.property_id = ? AND fb.has_statement_data = 1 AND `+dateExpr+` IS NOT NULL
+		UNION ALL
+		SELECT CASE WHEN ? = 'ns.check_in_date' THEN COALESCE(ns2.check_in_date, e.check_in_date) ELSE COALESCE(ns2.first_known_at, e.booked_on) END,
+		       UPPER(e.status), COALESCE(fb2.outcome_override, ns2.stay_outcome, '')
+		FROM finance_statement_evidence e
+		LEFT JOIN finance_bookings fb2 ON fb2.property_id=e.property_id AND fb2.source_channel=e.source_channel AND fb2.reference_number=e.reference_number
+		LEFT JOIN named_stays ns2 ON ns2.property_id=fb2.property_id AND ns2.id=fb2.named_stay_id
+		WHERE e.property_id = ? AND UPPER(e.status) = 'CANCELLED'
+		  AND NOT EXISTS (SELECT 1 FROM finance_bookings fb3 WHERE fb3.property_id=e.property_id AND fb3.source_channel=e.source_channel AND fb3.reference_number=e.reference_number AND fb3.has_statement_data=1)`, propertyID, dateCol, propertyID)
 	if err != nil {
 		return nil, err
 	}
@@ -394,8 +399,10 @@ func (s *Store) ListCommissionPerStay(ctx context.Context, propertyID int64, fro
 func (s *Store) LastStatementBookedOn(ctx context.Context, propertyID int64) (*time.Time, error) {
 	var v sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT MAX(booked_on) FROM finance_bookings
-		 WHERE property_id = ? AND has_statement_data = 1`, propertyID).Scan(&v)
+		SELECT MAX(d) FROM (
+		 SELECT booked_on d FROM finance_bookings WHERE property_id = ? AND has_statement_data = 1
+		 UNION ALL SELECT booked_on FROM finance_statement_evidence WHERE property_id = ?
+		)`, propertyID, propertyID).Scan(&v)
 	if err != nil {
 		return nil, err
 	}
@@ -416,9 +423,8 @@ func (s *Store) LastStatementBookedOn(ctx context.Context, propertyID int64) (*t
 func (s *Store) HasAnyStatementData(ctx context.Context, propertyID int64) (bool, error) {
 	var n int
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT COUNT(1) FROM finance_bookings
-		 WHERE property_id = ? AND has_statement_data = 1
-		 LIMIT 1`, propertyID).Scan(&n)
+		SELECT CASE WHEN EXISTS (SELECT 1 FROM finance_bookings WHERE property_id = ? AND has_statement_data = 1)
+		 OR EXISTS (SELECT 1 FROM finance_statement_evidence WHERE property_id = ?) THEN 1 ELSE 0 END`, propertyID, propertyID).Scan(&n)
 	if err != nil {
 		return false, err
 	}

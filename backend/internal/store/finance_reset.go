@@ -10,15 +10,16 @@ import (
 )
 
 type FinanceResetDeleteCounts struct {
-	FinanceTransactions    int `json:"finance_transactions"`
-	FinanceRecurringRules  int `json:"finance_recurring_rules"`
-	FinanceBookings        int `json:"finance_bookings"`
-	FinanceImports         int `json:"finance_imports"`
-	FinanceBookingMerges   int `json:"finance_booking_merges"`
-	FinanceMonthStates     int `json:"finance_month_states"`
-	FinanceAttachmentFiles int `json:"finance_attachment_files"`
-	Invoices               int `json:"invoices"`
-	InvoiceFiles           int `json:"invoice_files"`
+	FinanceTransactions      int `json:"finance_transactions"`
+	FinanceRecurringRules    int `json:"finance_recurring_rules"`
+	FinanceBookings          int `json:"finance_bookings"`
+	FinanceImports           int `json:"finance_imports"`
+	FinanceStatementEvidence int `json:"finance_statement_evidence"`
+	FinanceBookingMerges     int `json:"finance_booking_merges"`
+	FinanceMonthStates       int `json:"finance_month_states"`
+	FinanceAttachmentFiles   int `json:"finance_attachment_files"`
+	Invoices                 int `json:"invoices"`
+	InvoiceFiles             int `json:"invoice_files"`
 }
 
 type FinanceResetPreserveCounts struct {
@@ -127,6 +128,9 @@ func (s *Store) ResetFinanceRecords(ctx context.Context, propertyID int64, actor
 		   OR import_id IN (SELECT id FROM finance_imports WHERE property_id = ?)`, propertyID, propertyID); err != nil {
 		return nil, nil, err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM finance_statement_evidence WHERE property_id = ?`, propertyID); err != nil {
+		return nil, nil, err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM finance_imports WHERE property_id = ?`, propertyID); err != nil {
 		return nil, nil, err
 	}
@@ -208,6 +212,7 @@ func (s *Store) fillFinanceResetDeleteCounts(ctx context.Context, q financeReset
 		{&counts.FinanceRecurringRules, `SELECT COUNT(*) FROM finance_recurring_rules WHERE property_id = ?`, []interface{}{propertyID}},
 		{&counts.FinanceBookings, `SELECT COUNT(*) FROM finance_bookings WHERE property_id = ?`, []interface{}{propertyID}},
 		{&counts.FinanceImports, `SELECT COUNT(*) FROM finance_imports WHERE property_id = ?`, []interface{}{propertyID}},
+		{&counts.FinanceStatementEvidence, `SELECT COUNT(*) FROM finance_statement_evidence WHERE property_id = ?`, []interface{}{propertyID}},
 		{&counts.FinanceBookingMerges, `SELECT COUNT(*) FROM finance_booking_merges WHERE booking_id IN (SELECT id FROM finance_bookings WHERE property_id = ?) OR import_id IN (SELECT id FROM finance_imports WHERE property_id = ?)`, []interface{}{propertyID, propertyID}},
 		{&counts.FinanceMonthStates, `
 			SELECT COUNT(*)

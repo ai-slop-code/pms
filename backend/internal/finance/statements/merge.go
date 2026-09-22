@@ -121,6 +121,14 @@ func Merge(existing *CanonicalBooking, row Row) MergeOutcome {
 }
 
 func mergePayout(b *CanonicalBooking, row Row, rawJSON string, out *MergeOutcome) {
+	if row.IsCommissionAdjustment() {
+		mergeCommissionAdjustment(b, row, out)
+		return
+	}
+	if row.IsRefund() {
+		mergeRefund(b, row, out)
+		return
+	}
 	b.HasPayoutData = true
 	// Payout-side authoritative.
 	setStrIfWins(&b.PayoutID, valOrNil(row.PayoutID), "payout_id", true, out)
@@ -155,6 +163,32 @@ func mergePayout(b *CanonicalBooking, row Row, rawJSON string, out *MergeOutcome
 			// Raw blob change alone is not a canonical-field change;
 			// don't add to Changed.
 		}
+	}
+}
+
+func mergeCommissionAdjustment(b *CanonicalBooking, row Row, out *MergeOutcome) {
+	charge := -row.AmountCents
+	if charge < 0 {
+		return
+	}
+	if b.CommissionCents != nil {
+		v := *b.CommissionCents + charge
+		setIntPtrIfWins(&b.CommissionCents, &v, "commission_cents", true, out)
+	}
+	if b.NetCents != nil {
+		v := *b.NetCents + row.NetCents
+		setIntPtrIfWins(&b.NetCents, &v, "net_cents", true, out)
+	}
+}
+
+func mergeRefund(b *CanonicalBooking, row Row, out *MergeOutcome) {
+	if b.AmountCents != nil {
+		v := *b.AmountCents + row.AmountCents
+		setIntPtrIfWins(&b.AmountCents, &v, "amount_cents", true, out)
+	}
+	if b.NetCents != nil {
+		v := *b.NetCents + row.NetCents
+		setIntPtrIfWins(&b.NetCents, &v, "net_cents", true, out)
 	}
 }
 

@@ -109,7 +109,7 @@ func (s *Store) CreateBookingPayout(ctx context.Context, row *FinanceBookingPayo
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.DB.ExecContext(ctx, `
+	_, err := dbForContext(ctx, s.DB).ExecContext(ctx, `
 		INSERT INTO finance_bookings (
 			property_id, reference_number, payout_id, row_type, check_in_date, check_out_date, guest_name, reservation_status,
 			currency, payment_status, amount_cents, commission_cents, payment_service_fee_cents, net_cents, payout_date,
@@ -268,7 +268,7 @@ func (s *Store) UpdateBookingPayoutNamedStayMapping(ctx context.Context, propert
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.DB.ExecContext(ctx, `
+	_, err := dbForContext(ctx, s.DB).ExecContext(ctx, `
 		UPDATE finance_bookings
 		SET named_stay_id = ?, updated_at = ?
 		WHERE property_id = ? AND reference_number = ?`, *namedStayID, now, propertyID, referenceNumber)
@@ -287,7 +287,7 @@ func (s *Store) LinkBookingToNamedStay(ctx context.Context, propertyID, bookingI
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.DB.ExecContext(ctx, `
+	_, err := dbForContext(ctx, s.DB).ExecContext(ctx, `
 		UPDATE finance_bookings
 		SET named_stay_id = ?, updated_at = ?
 		WHERE property_id = ? AND id = ?`, namedStayID, now, propertyID, bookingID)
@@ -303,7 +303,7 @@ func (s *Store) validateFinanceBookingStay(ctx context.Context, propertyID int64
 		return fmt.Errorf("named_stay_id is required")
 	}
 	var exists int
-	if err := s.DB.QueryRowContext(ctx, `SELECT 1 FROM named_stays WHERE property_id = ? AND id = ?`, propertyID, namedStayID.Int64).Scan(&exists); err != nil {
+	if err := dbForContext(ctx, s.DB).QueryRowContext(ctx, `SELECT 1 FROM named_stays WHERE property_id = ? AND id = ?`, propertyID, namedStayID.Int64).Scan(&exists); err != nil {
 		return fmt.Errorf("invalid named_stay_id: %w", err)
 	}
 	return nil
@@ -319,20 +319,11 @@ func (s *Store) ConfirmNamedStayWithFinanceEvidence(ctx context.Context, propert
 		return false, err
 	}
 	now := time.Now().UTC()
-	res, err := s.DB.ExecContext(ctx, `
+	res, err := dbForContext(ctx, s.DB).ExecContext(ctx, `
 		UPDATE named_stays
 		SET review_status = 'confirmed',
 		    review_resolution = 'confirmed',
 		    review_reason = NULL,
-		    nuki_generation_status = CASE
-		        WHEN status = 'active'
-		         AND stay_type IN ('booking_com', 'external')
-		         AND (stay_outcome IS NULL OR stay_outcome NOT IN ('cancelled_non_refundable', 'no_show'))
-		         AND check_out_date >= ?
-		         AND COALESCE(nuki_generation_status, 'not_applicable') = 'not_applicable'
-		        THEN 'pending'
-		        ELSE nuki_generation_status
-		    END,
 		    updated_at = ?
 		WHERE property_id = ?
 		  AND id = ?
@@ -348,7 +339,7 @@ func (s *Store) ConfirmNamedStayWithFinanceEvidence(ctx context.Context, propert
 		        AND (fb.has_payout_data = 1 OR fb.has_statement_data = 1)
 		        AND upper(trim(COALESCE(fb.status, fb.reservation_status, ''))) NOT IN
 		            ('CANCELLED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_PARTNER')
-		  )`, now.Format("2006-01-02"), now.Format(time.RFC3339), propertyID, namedStayID)
+		  )`, now.Format(time.RFC3339), propertyID, namedStayID)
 	if err != nil {
 		return false, err
 	}
@@ -357,7 +348,7 @@ func (s *Store) ConfirmNamedStayWithFinanceEvidence(ctx context.Context, propert
 }
 
 func (s *Store) lowerNamedStayFirstKnownFromFinanceEvidence(ctx context.Context, propertyID, namedStayID int64) error {
-	_, err := s.DB.ExecContext(ctx, `
+	_, err := dbForContext(ctx, s.DB).ExecContext(ctx, `
 		WITH earliest AS (
 			SELECT booked_on
 			FROM finance_bookings
@@ -424,6 +415,88 @@ func (s *Store) FindNamedStayForFinanceStayDates(ctx context.Context, propertyID
 	return nil, nil
 }
 
+func (s *Store) ListNamedStaysForFinanceReferenceDates(ctx context.Context, propertyID int64, referenceNumber, checkInDate, checkOutDate string) ([]NamedStay, error) {
+	rows, err := s.DB.QueryContext(ctx, namedStaySelectSQL+`
+		WHERE ns.property_id = ? AND ns.source_reference = ? AND ns.check_in_date = ? AND ns.check_out_date = ?
+		  AND ns.status = 'active' AND ns.stay_type = 'booking_com'`, propertyID, strings.TrimSpace(referenceNumber), strings.TrimSpace(checkInDate), strings.TrimSpace(checkOutDate))
+	if err != nil {
+		return nil, err
+	}
+	return scanNamedStays(rows)
+}
+
+// ListNamedStaysForFinanceExactDates returns all eligible Booking.com stays
+// for the supplied named-stay dates. It intentionally does not inspect raw
+// blocks or source links.
+func (s *Store) ListNamedStaysForFinanceExactDates(ctx context.Context, propertyID int64, checkInDate, checkOutDate string) ([]NamedStayFinanceCandidate, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT ns.id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
+		       COALESCE(ns.review_resolution, ns.review_status), ns.manual_revenue_cents,
+		       CASE WHEN EXISTS (SELECT 1 FROM finance_bookings fb WHERE fb.property_id = ns.property_id AND fb.named_stay_id = ns.id) THEN 1 ELSE 0 END
+		FROM named_stays ns
+		WHERE ns.property_id = ? AND ns.check_in_date = ? AND ns.check_out_date = ?
+		  AND ns.status = 'active' AND ns.stay_type = 'booking_com'
+		ORDER BY ns.id`, propertyID, strings.TrimSpace(checkInDate), strings.TrimSpace(checkOutDate))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]NamedStayFinanceCandidate, 0)
+	for rows.Next() {
+		var row NamedStayFinanceCandidate
+		var has int
+		if err := rows.Scan(&row.ID, &row.DisplayName, &row.StayType, &row.CheckInDate, &row.CheckOutDate, &row.Status, &row.ReviewStatus, &row.ManualRevenueCents, &has); err != nil {
+			return nil, err
+		}
+		row.HasFinanceData = has != 0
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) FinanceBookingNamedStay(ctx context.Context, propertyID, bookingID int64) (*NamedStay, error) {
+	var stayID sql.NullInt64
+	if err := s.DB.QueryRowContext(ctx, `SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND id = ?`, propertyID, bookingID).Scan(&stayID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !stayID.Valid || stayID.Int64 <= 0 {
+		return nil, nil
+	}
+	return s.GetNamedStay(ctx, propertyID, stayID.Int64)
+}
+
+// UpdateFinanceMatchedStayName changes only the operator-facing name. It is
+// deliberately narrower than the general stay editor: payout imports must not
+// alter dates, source links, nights, lifecycle, or access-code state.
+func (s *Store) UpdateFinanceMatchedStayName(ctx context.Context, propertyID, stayID int64, name string, userID int64) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("display name is required")
+	}
+	db := dbForContext(ctx, s.DB)
+	var previous string
+	if err := db.QueryRowContext(ctx, `SELECT display_name FROM named_stays WHERE property_id = ? AND id = ? AND status = 'active' AND stay_type = 'booking_com'`, propertyID, stayID).Scan(&previous); err != nil {
+		return err
+	}
+	res, err := db.ExecContext(ctx, `
+		UPDATE named_stays
+		SET display_name = ?, updated_by_user_id = ?, updated_at = ?
+		WHERE property_id = ? AND id = ? AND status = 'active' AND stay_type = 'booking_com' AND display_name = ?`,
+		name, nullableInt64(userID), time.Now().UTC().Format(time.RFC3339), propertyID, stayID, previous)
+	if err != nil {
+		return err
+	}
+	if affected, err := res.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return fmt.Errorf("named stay changed during payout import")
+	}
+	return nil
+}
+
 func (s *Store) MarkNamedStayFinanceReviewForBooking(ctx context.Context, propertyID, bookingID int64, reason string) error {
 	if bookingID <= 0 {
 		return nil
@@ -456,7 +529,11 @@ func (s *Store) FinanceCategoryIDByCode(ctx context.Context, propertyID int64, c
 }
 
 func (s *Store) FinanceTransactionBySourceReference(ctx context.Context, propertyID int64, sourceType, sourceReference string) (*FinanceTransaction, error) {
-	rows, err := s.DB.QueryContext(ctx, `
+	return s.financeTransactionBySourceReference(ctx, dbForContext(ctx, s.DB), propertyID, sourceType, sourceReference)
+}
+
+func (s *Store) financeTransactionBySourceReference(ctx context.Context, db sqlContextDB, propertyID int64, sourceType, sourceReference string) (*FinanceTransaction, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT ft.id, ft.property_id, ft.transaction_date, ft.direction, ft.amount_cents, ft.category_id,
 			ft.note, ft.source_type, ft.source_reference_id, ft.is_auto_generated, ft.attachment_path, ft.created_at, ft.updated_at,
 			fc.code, fc.title, COALESCE(fc.counts_toward_property_income, 0),

@@ -189,10 +189,26 @@ type financeRevenueRecognitionIssueRow struct {
 }
 
 type financeRevenueRecognitionResponse struct {
-	Month             string                                `json:"month"`
-	GrossRevenueCents int                                   `json:"gross_revenue_cents"`
-	Bookings          []financeRevenueRecognitionBookingRow `json:"bookings"`
-	ExcludedBookings  []financeRevenueRecognitionIssueRow   `json:"excluded_bookings"`
+	Month                     string                                `json:"month"`
+	GrossRevenueCents         int                                   `json:"gross_revenue_cents"`
+	RecognizedBookingNetCents int                                   `json:"recognized_booking_net_cents"`
+	OtherIncomingCents        int                                   `json:"other_incoming_cents"`
+	OtherOutgoingCents        int                                   `json:"other_outgoing_cents"`
+	RecognizedNetCents        int                                   `json:"recognized_net_cents"`
+	Bookings                  []financeRevenueRecognitionBookingRow `json:"bookings"`
+	ExcludedBookings          []financeRevenueRecognitionIssueRow   `json:"excluded_bookings"`
+	LongTermComparison        financeLongTermComparisonResponse     `json:"long_term_comparison"`
+}
+
+type financeLongTermComparisonResponse struct {
+	Status                   string  `json:"status"`
+	RateID                   *int64  `json:"rate_id"`
+	EffectiveFromMonth       *string `json:"effective_from_month"`
+	MonthlyRentCents         *int64  `json:"monthly_rent_cents"`
+	EligibleOutgoingCents    *int64  `json:"eligible_outgoing_cents"`
+	LongTermNetCents         *int64  `json:"long_term_net_cents"`
+	ShortTermDifferenceCents *int64  `json:"short_term_difference_cents"`
+	Outcome                  *string `json:"outcome"`
 }
 
 type financeGeneratedEntrySyncResponse struct {
@@ -462,6 +478,37 @@ func (s *Server) getFinanceRevenueRecognition(w http.ResponseWriter, r *http.Req
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	otherIncoming, otherOutgoing, err := s.Store.ComputeFinanceOtherMovements(r.Context(), pid, month)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	comparison := financeLongTermComparisonResponse{Status: "not_configured"}
+	rate, err := s.Store.ApplicableFinanceLongTermRentRate(r.Context(), pid, month)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if rate != nil {
+		eligibleOutgoing, err := s.Store.ComputeFinanceEligibleOutgoing(r.Context(), pid, month)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		recognizedNet := int64(report.RecognizedBookingNetCents + otherIncoming - otherOutgoing)
+		longTermNet := rate.MonthlyRentCents - eligibleOutgoing
+		difference := recognizedNet - longTermNet
+		outcome := "equal"
+		if difference > 0 {
+			outcome = "ahead"
+		} else if difference < 0 {
+			outcome = "behind"
+		}
+		comparison = financeLongTermComparisonResponse{Status: "configured", RateID: &rate.ID,
+			EffectiveFromMonth: &rate.EffectiveFromMonth, MonthlyRentCents: &rate.MonthlyRentCents,
+			EligibleOutgoingCents: &eligibleOutgoing, LongTermNetCents: &longTermNet,
+			ShortTermDifferenceCents: &difference, Outcome: &outcome}
+	}
 	bookings := make([]financeRevenueRecognitionBookingRow, 0, len(report.Bookings))
 	for _, row := range report.Bookings {
 		bookings = append(bookings, financeRevenueRecognitionBookingRow{
@@ -491,10 +538,15 @@ func (s *Server) getFinanceRevenueRecognition(w http.ResponseWriter, r *http.Req
 		})
 	}
 	WriteJSON(w, http.StatusOK, financeRevenueRecognitionResponse{
-		Month:             report.Month,
-		GrossRevenueCents: report.GrossRevenueCents,
-		Bookings:          bookings,
-		ExcludedBookings:  issues,
+		Month:                     report.Month,
+		GrossRevenueCents:         report.GrossRevenueCents,
+		RecognizedBookingNetCents: report.RecognizedBookingNetCents,
+		OtherIncomingCents:        otherIncoming,
+		OtherOutgoingCents:        otherOutgoing,
+		RecognizedNetCents:        report.RecognizedBookingNetCents + otherIncoming - otherOutgoing,
+		Bookings:                  bookings,
+		ExcludedBookings:          issues,
+		LongTermComparison:        comparison,
 	})
 }
 
@@ -1733,6 +1785,9 @@ func ptrString(v *string) string {
 }
 
 func parseFinanceMonth(month string) (int, int, error) {
+	if len(month) != 7 || month[4] != '-' || month[0] < '0' || month[0] > '9' || month[1] < '0' || month[1] > '9' || month[2] < '0' || month[2] > '9' || month[3] < '0' || month[3] > '9' || month[5] < '0' || month[5] > '9' || month[6] < '0' || month[6] > '9' {
+		return 0, 0, fmt.Errorf("month must be YYYY-MM")
+	}
 	var y, m int
 	if _, err := fmt.Sscanf(month, "%d-%d", &y, &m); err != nil {
 		return 0, 0, fmt.Errorf("month must be YYYY-MM")

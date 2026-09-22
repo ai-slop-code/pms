@@ -957,6 +957,14 @@ func payoutInvoiceBillableCents(p *store.FinanceBookingPayout) int {
 	if p == nil {
 		return 0
 	}
+	// A negative Reservation row is a refund. Its canonical Amount is the
+	// effective guest-paid total; the raw payout snapshot intentionally keeps
+	// the original gross amount.
+	if p.RowType.Valid && strings.EqualFold(strings.TrimSpace(p.RowType.String), "reservation") && p.AmountCents.Valid {
+		if raw, ok := bookingPayoutRawAmountCents(p.RawRowJSON); ok && raw != int(p.AmountCents.Int64) {
+			return int(p.AmountCents.Int64)
+		}
+	}
 	if cents, ok := bookingPayoutRawAmountCents(p.RawRowJSON); ok {
 		return cents
 	}

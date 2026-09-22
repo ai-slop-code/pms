@@ -151,7 +151,7 @@ func TestGenerateCodes_CreatesAndUpdatesWithoutDuplicates(t *testing.T) {
 	now := time.Now().UTC().Add(48 * time.Hour)
 
 	stayID := upsertNukiStay(t, st, pid, "uid-1", "active", now, now.Add(48*time.Hour))
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-1"); err != nil {
 		t.Fatal(err)
 	}
 	if fc.createCalls != 1 {
@@ -161,7 +161,7 @@ func TestGenerateCodes_CreatesAndUpdatesWithoutDuplicates(t *testing.T) {
 	if err != nil || before == nil {
 		t.Fatalf("initial code err=%v code=%+v", err, before)
 	}
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-1"); err != nil {
 		t.Fatal(err)
 	}
 	after, err := st.GetNukiCodeByNamedStayID(context.Background(), pid, stayID)
@@ -174,7 +174,7 @@ func TestGenerateCodes_CreatesAndUpdatesWithoutDuplicates(t *testing.T) {
 	}
 	// Change stay dates: update the existing code rather than creating a duplicate.
 	upsertNukiStay(t, st, pid, "uid-1", "updated", now.Add(24*time.Hour), now.Add(72*time.Hour))
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-1"); err != nil {
 		t.Fatal(err)
 	}
 	if fc.createCalls != 1 {
@@ -249,7 +249,7 @@ func TestReconcileNamedStay_UpdatesAndRevokesAcrossLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ReconcileNamedStay(context.Background(), pid, stay.ID, "create"); err != nil {
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stay.ID, "manual", stay.DisplayName); err != nil {
 		t.Fatal(err)
 	}
 	newName := "Lifecycle Updated"
@@ -257,7 +257,7 @@ func TestReconcileNamedStay_UpdatesAndRevokesAcrossLifecycle(t *testing.T) {
 	if _, err := st.UpdateNamedStayRecord(context.Background(), pid, stay.ID, store.NamedStayUpdateInput{DisplayName: &newName, CheckOutDate: &newEnd}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ReconcileNamedStay(context.Background(), pid, stay.ID, "patch"); err != nil {
+	if err := svc.MaintainNamedStay(context.Background(), pid, stay.ID, "patch"); err != nil {
 		t.Fatal(err)
 	}
 	if fc.updateCalls != 1 {
@@ -273,7 +273,7 @@ func TestReconcileNamedStay_UpdatesAndRevokesAcrossLifecycle(t *testing.T) {
 	if _, err := st.UpdateNamedStayStatus(context.Background(), pid, stay.ID, store.NamedStayStatusCancelled, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ReconcileNamedStay(context.Background(), pid, stay.ID, "cancel"); err != nil {
+	if err := svc.MaintainNamedStay(context.Background(), pid, stay.ID, "cancel"); err != nil {
 		t.Fatal(err)
 	}
 	code, _ = st.GetNukiCodeByNamedStayID(context.Background(), pid, stay.ID)
@@ -283,10 +283,10 @@ func TestReconcileNamedStay_UpdatesAndRevokesAcrossLifecycle(t *testing.T) {
 	if _, err := st.UpdateNamedStayStatus(context.Background(), pid, stay.ID, store.NamedStayStatusActive, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ReconcileNamedStay(context.Background(), pid, stay.ID, "reactivate"); err != nil {
+	if err := svc.MaintainNamedStay(context.Background(), pid, stay.ID, "reactivate"); err != nil {
 		t.Fatal(err)
 	}
-	if fc.createCalls != 2 {
+	if fc.createCalls != 1 {
 		t.Fatalf("create calls after reactivation=%d", fc.createCalls)
 	}
 }
@@ -306,7 +306,7 @@ func TestReconcileNamedStay_UpdateFailurePreservesCredentialAndReturnsError(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ReconcileNamedStay(ctx, pid, stay.ID, "create"); err != nil {
+	if err := svc.GenerateCodeForNamedStay(ctx, pid, stay.ID, "manual", stay.DisplayName); err != nil {
 		t.Fatal(err)
 	}
 	before, err := st.GetNukiCodeByNamedStayID(ctx, pid, stay.ID)
@@ -319,7 +319,7 @@ func TestReconcileNamedStay_UpdateFailurePreservesCredentialAndReturnsError(t *t
 		t.Fatal(err)
 	}
 	fc.failUpdate = true
-	if err := svc.ReconcileNamedStay(ctx, pid, stay.ID, "patch"); !errors.Is(err, sql.ErrConnDone) {
+	if err := svc.MaintainNamedStay(ctx, pid, stay.ID, "patch"); !errors.Is(err, sql.ErrConnDone) {
 		t.Fatalf("reconcile error=%v want %v", err, sql.ErrConnDone)
 	}
 
@@ -330,7 +330,7 @@ func TestReconcileNamedStay_UpdateFailurePreservesCredentialAndReturnsError(t *t
 	if after.ID != before.ID || after.GeneratedPINPlain != before.GeneratedPINPlain || after.ExternalNukiID != before.ExternalNukiID {
 		t.Fatalf("credential identity changed: before=%+v after=%+v", before, after)
 	}
-	if after.Status != "not_generated" || !after.ErrorMessage.Valid {
+	if after.Status != "generated" || !after.ErrorMessage.Valid {
 		t.Fatalf("failure state not persisted: %+v", after)
 	}
 	refreshed, err := st.GetNamedStay(ctx, pid, stay.ID)
@@ -350,8 +350,8 @@ func TestGenerateCodes_FailureMarksCodeNotGenerated(t *testing.T) {
 	now := time.Now().UTC().Add(48 * time.Hour)
 	stayID := upsertNukiStay(t, st, pid, "uid-fail", "active", now, now.Add(24*time.Hour))
 
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
-		t.Fatal(err)
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-fail"); !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("error=%v", err)
 	}
 	code, err := st.GetNukiCodeByNamedStayID(context.Background(), pid, stayID)
 	if err != nil || code == nil {
@@ -369,7 +369,7 @@ func TestCleanupExpiredCodes_MovesToRevoked(t *testing.T) {
 	svc := &Service{Store: st, Client: fc}
 	now := time.Now().UTC()
 	stayID := upsertNukiStay(t, st, pid, "uid-exp", "active", now.Add(24*time.Hour), now.Add(72*time.Hour))
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-exp"); err != nil {
 		t.Fatal(err)
 	}
 	code, err := st.GetNukiCodeByNamedStayID(context.Background(), pid, stayID)
@@ -405,8 +405,8 @@ func TestGenerateCodes_StatusTransition_NotGeneratedToGeneratedToRevoked(t *test
 	now := time.Now().UTC().Add(48 * time.Hour)
 	stayID := upsertNukiStay(t, st, pid, "uid-transition", "active", now, now.Add(24*time.Hour))
 
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
-		t.Fatal(err)
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-transition"); !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("error=%v", err)
 	}
 	code, err := st.GetNukiCodeByNamedStayID(context.Background(), pid, stayID)
 	if err != nil || code == nil {
@@ -417,7 +417,7 @@ func TestGenerateCodes_StatusTransition_NotGeneratedToGeneratedToRevoked(t *test
 	}
 
 	fc.failCreate = false
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-transition"); err != nil {
 		t.Fatal(err)
 	}
 	code, err = st.GetNukiCodeByNamedStayID(context.Background(), pid, stayID)
@@ -449,12 +449,12 @@ func TestGenerateCodes_ReconcilesCancelledNamedStayByRevokingCode(t *testing.T) 
 	fc := &fakeClient{}
 	svc := &Service{Store: st, Client: fc}
 	now := time.Now().UTC().Add(24 * time.Hour)
-	upsertNukiStay(t, st, pid, "uid-can", "active", now, now.Add(48*time.Hour))
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
+	stayID := upsertNukiStay(t, st, pid, "uid-can", "active", now, now.Add(48*time.Hour))
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-can"); err != nil {
 		t.Fatal(err)
 	}
 	upsertNukiStay(t, st, pid, "uid-can", "cancelled", now, now.Add(48*time.Hour))
-	if err := svc.GenerateCodes(context.Background(), pid, "manual"); err != nil {
+	if err := svc.MaintainNamedStay(context.Background(), pid, stayID, "cancel"); err != nil {
 		t.Fatal(err)
 	}
 	if fc.revokeCalls < 1 {

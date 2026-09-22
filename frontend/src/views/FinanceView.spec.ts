@@ -89,6 +89,10 @@ function apiRouter(handlers: Record<string, () => unknown>) {
       return Promise.resolve({
         month: '2026-04',
         gross_revenue_cents: 0,
+        recognized_booking_net_cents: 0,
+        other_incoming_cents: 0,
+        other_outgoing_cents: 0,
+        recognized_net_cents: 0,
         bookings: [],
         excluded_bookings: [],
       })
@@ -149,6 +153,8 @@ describe('FinanceView', () => {
     expect(w.text().toLowerCase()).toContain('finance')
     expect(w.text()).toContain('Not synced')
     expect(w.text()).toContain('Sync generated entries')
+    expect(w.text()).toContain('Recognized net')
+    expect(w.text()).toContain('Provisional')
   })
 
   it('renders synced generated-entry status from the summary', async () => {
@@ -176,6 +182,10 @@ describe('FinanceView', () => {
       '/finance/revenue-recognition': () => ({
         month: '2026-04',
         gross_revenue_cents: 6666,
+        recognized_booking_net_cents: 5333,
+        other_incoming_cents: 0,
+        other_outgoing_cents: 0,
+        recognized_net_cents: 5333,
         bookings: [
           {
             booking_id: 41,
@@ -298,8 +308,12 @@ describe('FinanceView', () => {
       if (url.includes('/finance/recurring-rules')) return Promise.resolve({ rules: [] })
       if (url.includes('/finance/revenue-recognition')) {
         return Promise.resolve({
-          month: '2026-04',
-          gross_revenue_cents: 0,
+        month: '2026-04',
+        gross_revenue_cents: 0,
+        recognized_booking_net_cents: 0,
+        other_incoming_cents: 0,
+        other_outgoing_cents: 0,
+        recognized_net_cents: 0,
           bookings: [],
           excluded_bookings: [],
         })

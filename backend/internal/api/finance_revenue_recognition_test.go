@@ -69,8 +69,12 @@ func TestFinanceRevenueRecognitionEndpoint_ReturnsProratedGross(t *testing.T) {
 		t.Fatalf("status=%d want 200 body=%s", res.StatusCode, string(raw))
 	}
 	var payload struct {
-		GrossRevenueCents int `json:"gross_revenue_cents"`
-		Bookings          []struct {
+		GrossRevenueCents         int `json:"gross_revenue_cents"`
+		RecognizedBookingNetCents int `json:"recognized_booking_net_cents"`
+		OtherIncomingCents        int `json:"other_incoming_cents"`
+		OtherOutgoingCents        int `json:"other_outgoing_cents"`
+		RecognizedNetCents        int `json:"recognized_net_cents"`
+		Bookings                  []struct {
 			ReferenceNumber      string `json:"reference_number"`
 			RecognizedGrossCents int    `json:"recognized_gross_cents"`
 			Unmatched            bool   `json:"unmatched"`
@@ -80,7 +84,7 @@ func TestFinanceRevenueRecognitionEndpoint_ReturnsProratedGross(t *testing.T) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.GrossRevenueCents != 6666 || len(payload.Bookings) != 1 || payload.Bookings[0].RecognizedGrossCents != 6666 || payload.Bookings[0].Unmatched {
+	if payload.GrossRevenueCents != 6666 || payload.RecognizedBookingNetCents != 5333 || payload.OtherIncomingCents != 0 || payload.OtherOutgoingCents != 0 || payload.RecognizedNetCents != 5333 || len(payload.Bookings) != 1 || payload.Bookings[0].RecognizedGrossCents != 6666 || payload.Bookings[0].Unmatched {
 		t.Fatalf("unexpected response: %+v", payload)
 	}
 	if payload.Excluded == nil {

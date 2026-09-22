@@ -814,8 +814,8 @@ func TestGenerateNukiCode_RequiresPinName(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status=%d want 200", res.StatusCode)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", res.StatusCode)
 	}
 	raw, _ := io.ReadAll(res.Body)
 	var payload map[string]interface{}

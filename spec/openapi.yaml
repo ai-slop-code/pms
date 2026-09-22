@@ -632,9 +632,9 @@ paths:
       - $ref: "#/components/parameters/IdPath"
     post:
       tags: [Nuki]
-      summary: Generate Nuki guest codes for all eligible named stays or one named stay.
+      summary: Generate or reuse a Nuki guest code for one eligible named stay.
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/NukiGenerateRequest" }
@@ -706,6 +706,62 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/FinanceRevenueRecognitionResponse" }
         "403": { $ref: "#/components/responses/Forbidden" }
+
+  /properties/{id}/finance/long-term-rent-rates:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Finance]
+      summary: List long-term rent benchmark history.
+      responses:
+        "200":
+          description: Long-term rent rates and mutation capability.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceLongTermRentRatesResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Finance]
+      summary: Add a long-term rent rate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FinanceLongTermRentRateRequest" }
+      responses:
+        "201": { description: Created }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: Effective month already configured }
+
+  /properties/{id}/finance/long-term-rent-rates/{rateId}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - name: rateId
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    patch:
+      tags: [Finance]
+      summary: Update a long-term rent rate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FinanceLongTermRentRateRequest" }
+      responses:
+        "200": { description: Updated }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Effective month already configured }
+    delete:
+      tags: [Finance]
+      summary: Delete a long-term rent rate.
+      responses:
+        "200": { description: Deleted }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /properties/{id}/finance/stay-candidates:
     parameters:
@@ -1168,6 +1224,11 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Preview data or a matched stay changed before commit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "410":
           description: Preview token expired or does not belong to this property.
           content:
@@ -2279,16 +2340,63 @@ components:
 
     FinanceRevenueRecognitionResponse:
       type: object
-      required: [month, gross_revenue_cents, bookings, excluded_bookings]
+      required: [month, gross_revenue_cents, recognized_booking_net_cents, other_incoming_cents, other_outgoing_cents, recognized_net_cents, bookings, excluded_bookings, long_term_comparison]
       properties:
         month: { type: string, pattern: "^\\d{4}-\\d{2}$" }
         gross_revenue_cents: { type: integer, format: int64 }
+        recognized_booking_net_cents: { type: integer, format: int64 }
+        other_incoming_cents: { type: integer, format: int64 }
+        other_outgoing_cents: { type: integer, format: int64 }
+        recognized_net_cents: { type: integer, format: int64 }
         bookings:
           type: array
           items: { $ref: "#/components/schemas/FinanceRevenueRecognitionBooking" }
         excluded_bookings:
           type: array
           items: { $ref: "#/components/schemas/FinanceRevenueRecognitionIssue" }
+        long_term_comparison:
+          $ref: "#/components/schemas/FinanceLongTermComparison"
+
+    FinanceLongTermComparison:
+      type: object
+      required: [status, rate_id, effective_from_month, monthly_rent_cents, eligible_outgoing_cents, long_term_net_cents, short_term_difference_cents, outcome]
+      properties:
+        status: { type: string, enum: [configured, not_configured] }
+        rate_id: { type: integer, format: int64, nullable: true }
+        effective_from_month: { type: string, pattern: "^\\d{4}-\\d{2}$", nullable: true }
+        monthly_rent_cents: { type: integer, format: int64, nullable: true }
+        eligible_outgoing_cents: { type: integer, format: int64, nullable: true }
+        long_term_net_cents: { type: integer, format: int64, nullable: true }
+        short_term_difference_cents: { type: integer, format: int64, nullable: true }
+        outcome: { type: string, enum: [ahead, behind, equal], nullable: true }
+
+    FinanceLongTermRentRate:
+      type: object
+      required: [id, effective_from_month, monthly_rent_cents, currency, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        effective_from_month: { type: string, pattern: "^\\d{4}-\\d{2}$" }
+        monthly_rent_cents: { type: integer, format: int64, minimum: 1 }
+        currency: { type: string, enum: [EUR] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    FinanceLongTermRentRateRequest:
+      type: object
+      additionalProperties: false
+      required: [effective_from_month, monthly_rent_cents]
+      properties:
+        effective_from_month: { type: string, pattern: "^\\d{4}-\\d{2}$" }
+        monthly_rent_cents: { type: integer, format: int64, minimum: 1 }
+
+    FinanceLongTermRentRatesResponse:
+      type: object
+      required: [rates, can_manage]
+      properties:
+        rates:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceLongTermRentRate" }
+        can_manage: { type: boolean }
 
     FinanceRevenueRecognitionBooking:
       type: object
@@ -2368,6 +2476,12 @@ components:
         amount_cents: { type: integer }
         status: { type: string }
         status_changed: { type: boolean }
+        line: { type: integer, minimum: 1 }
+        named_stay_id: { type: integer, format: int64, minimum: 1 }
+        match_basis: { type: string }
+        stay_name: { type: string }
+        stay_check_in_date: { type: string, format: date }
+        stay_check_out_date: { type: string, format: date }
 
     FinanceImportPreviewUpdate:
       type: object
@@ -2383,6 +2497,44 @@ components:
             required: [field]
             properties:
               field: { type: string }
+        line: { type: integer, minimum: 1 }
+        named_stay_id: { type: integer, format: int64, minimum: 1 }
+        match_basis: { type: string }
+
+    FinanceImportStayNameChange:
+      type: object
+      required: [line, reference, named_stay_id, previous_display_name, payout_guest_name]
+      properties:
+        line: { type: integer, minimum: 1 }
+        reference: { type: string }
+        named_stay_id: { type: integer, format: int64, minimum: 1 }
+        previous_display_name: { type: string }
+        payout_guest_name: { type: string }
+
+    FinanceImportStayCandidate:
+      type: object
+      required: [named_stay_id, display_name, stay_type, check_in_date, check_out_date]
+      properties:
+        named_stay_id: { type: integer, format: int64, minimum: 1 }
+        display_name: { type: string }
+        stay_type: { type: string }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+
+    FinanceImportNeedsStaySelection:
+      type: object
+      required: [line, reference, guest_name, check_in_date, check_out_date, net_cents, reason, candidates]
+      properties:
+        line: { type: integer, minimum: 1 }
+        reference: { type: string }
+        guest_name: { type: string }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+        net_cents: { type: integer }
+        reason: { type: string }
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceImportStayCandidate" }
 
     FinanceImportSkippedRow:
       type: object
@@ -2399,10 +2551,22 @@ components:
         line: { type: integer, minimum: 0 }
         reason: { type: string }
 
+    FinanceImportSkippedCancellation:
+      type: object
+      required: [line, reference, guest_name, check_in_date, check_out_date, booked_on, reason]
+      properties:
+        line: { type: integer, minimum: 1 }
+        reference: { type: string }
+        guest_name: { type: string }
+        check_in_date: { type: string, format: date }
+        check_out_date: { type: string, format: date }
+        booked_on: { type: string, format: date-time }
+        reason: { type: string }
+
     FinanceImportPreviewResponse:
       type: object
       required:
-        [ok, preview_token, source_type, file_sha256, inserts, updates, unchanged_count, skipped_other_hotel, rejected]
+        [ok, preview_token, source_type, file_sha256, inserts, updates, unchanged_count, skipped_other_hotel, rejected, stay_name_changes, needs_stay_selection, skipped_cancellations]
       properties:
         ok: { type: boolean }
         preview_token: { type: string }
@@ -2425,6 +2589,15 @@ components:
         rejected:
           type: array
           items: { $ref: "#/components/schemas/FinanceImportRejectedRow" }
+        stay_name_changes:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceImportStayNameChange" }
+        needs_stay_selection:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceImportNeedsStaySelection" }
+        skipped_cancellations:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceImportSkippedCancellation" }
 
     FinanceImportCommitRequest:
       type: object
@@ -2432,11 +2605,19 @@ components:
       required: [preview_token]
       properties:
         preview_token: { type: string, minLength: 1 }
+        stay_selections:
+          type: array
+          items:
+            type: object
+            required: [line, named_stay_id]
+            properties:
+              line: { type: integer, minimum: 1 }
+              named_stay_id: { type: integer, format: int64, minimum: 1 }
 
     FinanceImportCommitResponse:
       type: object
       required:
-        [ok, import_id, source_type, row_count_total, row_count_inserted, row_count_updated, row_count_unchanged, row_count_skipped_other_hotel, row_count_rejected]
+        [ok, import_id, source_type, row_count_total, row_count_inserted, row_count_updated, row_count_unchanged, row_count_skipped_other_hotel, row_count_skipped_cancellations, row_count_rejected]
       properties:
         ok: { type: boolean }
         import_id: { type: integer, format: int64 }
@@ -2446,12 +2627,13 @@ components:
         row_count_updated: { type: integer }
         row_count_unchanged: { type: integer }
         row_count_skipped_other_hotel: { type: integer }
+        row_count_skipped_cancellations: { type: integer }
         row_count_rejected: { type: integer }
 
     FinanceImport:
       type: object
       required:
-        [id, source_type, source_channel, uploaded_at, row_count_total, row_count_inserted, row_count_updated, row_count_unchanged, row_count_skipped_other_hotel, row_count_rejected]
+        [id, source_type, source_channel, uploaded_at, row_count_total, row_count_inserted, row_count_updated, row_count_unchanged, row_count_skipped_other_hotel, row_count_skipped_cancellations, row_count_rejected]
       properties:
         id: { type: integer, format: int64 }
         source_type: { type: string }
@@ -2464,6 +2646,7 @@ components:
         row_count_updated: { type: integer }
         row_count_unchanged: { type: integer }
         row_count_skipped_other_hotel: { type: integer }
+        row_count_skipped_cancellations: { type: integer }
         row_count_rejected: { type: integer }
 
     FinanceImportsResponse:
@@ -2672,12 +2855,14 @@ components:
     NukiGenerateRequest:
       type: object
       additionalProperties: false
+      required: [stay_id, pin_name]
       properties:
         stay_id:
           type: integer
           format: int64
+          minimum: 1
           description: Named stay identity for single-stay generation.
-        pin_name: { type: string }
+        pin_name: { type: string, minLength: 1 }
 
     NukiCodesResponse:
       type: object

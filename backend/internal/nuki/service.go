@@ -122,18 +122,19 @@ func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger st
 	return s.finishRun(ctx, propertyID, runID, status, msg, stats)
 }
 
-func (s *Service) GenerateCodes(ctx context.Context, propertyID int64, trigger string) error {
-	return s.generateCodesInternal(ctx, propertyID, trigger, nil, nil)
-}
-
 func (s *Service) GenerateCodeForNamedStay(ctx context.Context, propertyID, stayID int64, trigger string, pinName string) error {
+	if stayID <= 0 {
+		return errors.New("stay_id required")
+	}
+	if strings.TrimSpace(pinName) == "" {
+		return errors.New("pin_name required")
+	}
 	return s.generateCodesInternal(ctx, propertyID, trigger, &stayID, &pinName)
 }
 
-// ReconcileNamedStay applies the Nuki eligibility transition for one stay.
-// The local stay update has already committed; external failures are persisted
-// by the caller as visible nuki_generation_error state.
-func (s *Service) ReconcileNamedStay(ctx context.Context, propertyID, stayID int64, trigger string) error {
+// MaintainNamedStay updates an existing usable credential or revokes it when
+// the stay is no longer eligible. It never creates or recreates access.
+func (s *Service) MaintainNamedStay(ctx context.Context, propertyID, stayID int64, trigger string) error {
 	stay, err := s.Store.GetNamedStay(ctx, propertyID, stayID)
 	if err != nil {
 		return err
@@ -145,17 +146,74 @@ func (s *Service) ReconcileNamedStay(ctx context.Context, propertyID, stayID int
 	eligible := stay.Status == store.NamedStayStatusActive &&
 		store.NamedStayNukiEligible(stay.StayType, reviewStatus) &&
 		(!stay.StayOutcome.Valid || (stay.StayOutcome.String != store.StayOutcomeCancelledNonRefundable && stay.StayOutcome.String != store.StayOutcomeNoShow))
-	if eligible {
-		return s.GenerateCodeForNamedStay(ctx, propertyID, stayID, trigger, stay.DisplayName)
-	}
 	code, err := s.Store.GetNukiCodeByNamedStayID(ctx, propertyID, stayID)
 	if err != nil || code == nil || code.Status == "revoked" {
 		return err
 	}
-	return s.RevokeCode(ctx, propertyID, code.ID, trigger)
+	if !eligible {
+		return s.revokeNamedStayCode(ctx, propertyID, code, trigger)
+	}
+	if code.Status != "generated" || !code.ExternalNukiID.Valid || strings.TrimSpace(code.ExternalNukiID.String) == "" {
+		err := errors.New("nuki_existing_credential_requires_manual_recovery")
+		_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stayID, store.NukiGenerationError, err.Error())
+		return err
+	}
+	if s.Client == nil {
+		s.Client = NewClient(Config{})
+	}
+	_, _, cred, loc, inH, inM, outH, outM, err := s.loadNukiSyncContext(ctx, propertyID, true)
+	if err != nil {
+		return err
+	}
+	nukiStay := store.NukiStay{NamedStayID: stay.ID, PropertyID: propertyID, DisplayName: stay.DisplayName, CheckInDate: stay.CheckInDate, CheckOutDate: stay.CheckOutDate}
+	from, until := namedStayWindow(nukiStay, loc, inH, inM, outH, outM)
+	res, err := s.Client.UpdateAccess(ctx, cred, code.ExternalNukiID.String, UpsertAccessRequest{Label: buildGuestCodeLabelFromName(stay.DisplayName), ValidFrom: from, ValidUntil: until})
+	if err != nil {
+		code.ErrorMessage = sql.NullString{String: truncateErr(err.Error()), Valid: true}
+		_ = s.Store.UpsertNukiCode(ctx, code)
+		_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stayID, store.NukiGenerationError, err.Error())
+		return err
+	}
+	code.CodeLabel = buildGuestCodeLabelFromName(stay.DisplayName)
+	code.ValidFrom, code.ValidUntil = from, until
+	code.ErrorMessage = sql.NullString{}
+	if res != nil && strings.TrimSpace(res.ExternalID) != "" && strings.TrimSpace(res.ExternalID) != code.ExternalNukiID.String {
+		err := errors.New("nuki_update_changed_credential_identity")
+		_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stayID, store.NukiGenerationError, err.Error())
+		return err
+	}
+	if err := s.Store.UpsertNukiCode(ctx, code); err != nil {
+		_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stayID, store.NukiGenerationError, err.Error())
+		return err
+	}
+	_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stayID, store.NukiGenerationGenerated, "")
+	return nil
+}
+
+func (s *Service) revokeNamedStayCode(ctx context.Context, propertyID int64, code *store.NukiAccessCode, reason string) error {
+	if code.ExternalNukiID.Valid && strings.TrimSpace(code.ExternalNukiID.String) != "" {
+		if s.Client == nil {
+			s.Client = NewClient(Config{})
+		}
+		sec, err := s.Store.GetPropertySecrets(ctx, propertyID)
+		if err != nil {
+			return err
+		}
+		cred := Credentials{APIToken: strings.TrimSpace(sec.NukiAPIToken.String), SmartLockID: strings.TrimSpace(sec.NukiSmartlockID.String)}
+		if err := s.Client.RevokeAccess(ctx, cred, code.ExternalNukiID.String); err != nil {
+			return err
+		}
+	}
+	code.Status = "revoked"
+	code.ErrorMessage = sql.NullString{}
+	code.RevokedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	return s.Store.UpsertNukiCode(ctx, code)
 }
 
 func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, trigger string, onlyStayID *int64, pinName *string) error {
+	if onlyStayID == nil || *onlyStayID <= 0 || pinName == nil || strings.TrimSpace(*pinName) == "" {
+		return errors.New("single_stay_generation_required")
+	}
 	if s.Client == nil {
 		s.Client = NewClient(Config{})
 	}
@@ -175,40 +233,20 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 	accountUserID := s.discoverAccountUserID(ctx, propertyID)
 	keypadCodes, _ := s.Store.ListNukiKeypadCodes(ctx, propertyID)
 
-	// 1) Revoke codes for named stays that are no longer Nuki-eligible.
-	revokeStays, err := s.Store.ListNamedStaysForNukiRevocation(ctx, propertyID)
-	if err != nil {
-		msg := "list_revoke_named_stays_failed"
-		_ = s.finishRun(ctx, propertyID, runID, "partial", &msg, stats)
-		return err
-	}
-	for _, stay := range revokeStays {
-		code, err := s.Store.GetNukiCodeByNamedStayID(ctx, propertyID, stay.NamedStayID)
-		if err != nil || code == nil {
-			continue
-		}
-		if code.Status == "revoked" {
-			continue
-		}
-		stats.processed++
-		if err := s.revokeCode(ctx, cred, runID, code, "named_stay_"+stay.Status); err != nil {
-			stats.failedN++
-			continue
-		}
-		stats.revokedN++
-	}
-
-	// 2) Create/update codes for active confirmed named stays.
+	// Process only the explicitly selected stay. No bulk generation or
+	// property-wide revocation is part of this command.
 	stays, err := s.Store.ListNamedStaysForNukiSync(ctx, propertyID)
 	if err != nil {
 		msg := "list_sync_named_stays_failed"
 		_ = s.finishRun(ctx, propertyID, runID, "partial", &msg, stats)
 		return err
 	}
+	selected := false
 	for _, stay := range stays {
-		if onlyStayID != nil && stay.NamedStayID != *onlyStayID {
+		if stay.NamedStayID != *onlyStayID {
 			continue
 		}
+		selected = true
 		from, until := namedStayWindow(stay, loc, inH, inM, outH, outM)
 		label := buildGuestCodeLabelFromName(stay.DisplayName)
 		if pinName != nil && onlyStayID != nil && stay.NamedStayID == *onlyStayID {
@@ -364,7 +402,7 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 		_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationGenerated, "")
 		stats.updatedN++
 	}
-	if onlyStayID != nil && stats.processed == 0 {
+	if !selected {
 		msg := "named_stay_not_found_or_not_upcoming"
 		_ = s.finishRun(ctx, propertyID, runID, "failure", &msg, stats)
 		return errors.New(msg)

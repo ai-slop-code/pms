@@ -1317,7 +1317,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Generate Nuki guest codes for all eligible named stays or one named stay. */
+        /** Generate or reuse a Nuki guest code for one eligible named stay. */
         post: {
             parameters: {
                 query?: never;
@@ -1327,7 +1327,7 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
                     "application/json": components["schemas"]["NukiGenerateRequest"];
                 };
@@ -1481,6 +1481,157 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/finance/long-term-rent-rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** List long-term rent benchmark history. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Long-term rent rates and mutation capability. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinanceLongTermRentRatesResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        /** Add a long-term rent rate. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FinanceLongTermRentRateRequest"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                /** @description Effective month already configured */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/finance/long-term-rent-rates/{rateId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                rateId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a long-term rent rate. */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    rateId: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update a long-term rent rate. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    rateId: number;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FinanceLongTermRentRateRequest"];
+                };
+            };
+            responses: {
+                /** @description Updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                /** @description Effective month already configured */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         trace?: never;
     };
     "/properties/{id}/finance/stay-candidates": {
@@ -3127,6 +3278,15 @@ export interface paths {
                 400: components["responses"]["BadRequest"];
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
+                /** @description Preview data or a matched stay changed before commit. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
                 /** @description Preview token expired or does not belong to this property. */
                 410: {
                     headers: {
@@ -5082,8 +5242,56 @@ export interface components {
             month: string;
             /** Format: int64 */
             gross_revenue_cents: number;
+            /** Format: int64 */
+            recognized_booking_net_cents: number;
+            /** Format: int64 */
+            other_incoming_cents: number;
+            /** Format: int64 */
+            other_outgoing_cents: number;
+            /** Format: int64 */
+            recognized_net_cents: number;
             bookings: components["schemas"]["FinanceRevenueRecognitionBooking"][];
             excluded_bookings: components["schemas"]["FinanceRevenueRecognitionIssue"][];
+            long_term_comparison: components["schemas"]["FinanceLongTermComparison"];
+        };
+        FinanceLongTermComparison: {
+            /** @enum {string} */
+            status: "configured" | "not_configured";
+            /** Format: int64 */
+            rate_id: number | null;
+            effective_from_month: string | null;
+            /** Format: int64 */
+            monthly_rent_cents: number | null;
+            /** Format: int64 */
+            eligible_outgoing_cents: number | null;
+            /** Format: int64 */
+            long_term_net_cents: number | null;
+            /** Format: int64 */
+            short_term_difference_cents: number | null;
+            /** @enum {string|null} */
+            outcome: "ahead" | "behind" | "equal" | null;
+        };
+        FinanceLongTermRentRate: {
+            /** Format: int64 */
+            id: number;
+            effective_from_month: string;
+            /** Format: int64 */
+            monthly_rent_cents: number;
+            /** @enum {string} */
+            currency: "EUR";
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        FinanceLongTermRentRateRequest: {
+            effective_from_month: string;
+            /** Format: int64 */
+            monthly_rent_cents: number;
+        };
+        FinanceLongTermRentRatesResponse: {
+            rates: components["schemas"]["FinanceLongTermRentRate"][];
+            can_manage: boolean;
         };
         FinanceRevenueRecognitionBooking: {
             /** Format: int64 */
@@ -5155,6 +5363,15 @@ export interface components {
             amount_cents?: number;
             status?: string;
             status_changed?: boolean;
+            line?: number;
+            /** Format: int64 */
+            named_stay_id?: number;
+            match_basis?: string;
+            stay_name?: string;
+            /** Format: date */
+            stay_check_in_date?: string;
+            /** Format: date */
+            stay_check_out_date?: string;
         };
         FinanceImportPreviewUpdate: {
             reference: string;
@@ -5163,6 +5380,40 @@ export interface components {
             changes?: {
                 field: string;
             }[];
+            line?: number;
+            /** Format: int64 */
+            named_stay_id?: number;
+            match_basis?: string;
+        };
+        FinanceImportStayNameChange: {
+            line: number;
+            reference: string;
+            /** Format: int64 */
+            named_stay_id: number;
+            previous_display_name: string;
+            payout_guest_name: string;
+        };
+        FinanceImportStayCandidate: {
+            /** Format: int64 */
+            named_stay_id: number;
+            display_name: string;
+            stay_type: string;
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+        };
+        FinanceImportNeedsStaySelection: {
+            line: number;
+            reference: string;
+            guest_name: string;
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+            net_cents: number;
+            reason: string;
+            candidates: components["schemas"]["FinanceImportStayCandidate"][];
         };
         FinanceImportSkippedRow: {
             reference: string;
@@ -5171,6 +5422,18 @@ export interface components {
         };
         FinanceImportRejectedRow: {
             line: number;
+            reason: string;
+        };
+        FinanceImportSkippedCancellation: {
+            line: number;
+            reference: string;
+            guest_name: string;
+            /** Format: date */
+            check_in_date: string;
+            /** Format: date */
+            check_out_date: string;
+            /** Format: date-time */
+            booked_on: string;
             reason: string;
         };
         FinanceImportPreviewResponse: {
@@ -5191,9 +5454,17 @@ export interface components {
             unchanged_count: number;
             skipped_other_hotel: components["schemas"]["FinanceImportSkippedRow"][];
             rejected: components["schemas"]["FinanceImportRejectedRow"][];
+            stay_name_changes: components["schemas"]["FinanceImportStayNameChange"][];
+            needs_stay_selection: components["schemas"]["FinanceImportNeedsStaySelection"][];
+            skipped_cancellations: components["schemas"]["FinanceImportSkippedCancellation"][];
         };
         FinanceImportCommitRequest: {
             preview_token: string;
+            stay_selections?: {
+                line: number;
+                /** Format: int64 */
+                named_stay_id: number;
+            }[];
         };
         FinanceImportCommitResponse: {
             ok: boolean;
@@ -5206,6 +5477,7 @@ export interface components {
             row_count_updated: number;
             row_count_unchanged: number;
             row_count_skipped_other_hotel: number;
+            row_count_skipped_cancellations: number;
             row_count_rejected: number;
         };
         FinanceImport: {
@@ -5222,6 +5494,7 @@ export interface components {
             row_count_updated: number;
             row_count_unchanged: number;
             row_count_skipped_other_hotel: number;
+            row_count_skipped_cancellations: number;
             row_count_rejected: number;
         };
         FinanceImportsResponse: {
@@ -5380,8 +5653,8 @@ export interface components {
              * Format: int64
              * @description Named stay identity for single-stay generation.
              */
-            stay_id?: number;
-            pin_name?: string;
+            stay_id: number;
+            pin_name: string;
         };
         NukiCodesResponse: {
             codes: components["schemas"]["NukiKeypadCode"][];

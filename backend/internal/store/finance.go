@@ -690,23 +690,22 @@ func (s *Store) SyncFinanceGeneratedEntriesForMonth(ctx context.Context, propert
 				) VALUES (?, ?, 'outgoing', ?, ?, ?, 'cleaning_salary', ?, 1, ?, ?)`,
 				propertyID, monthStartRFC, cleaningSummary.FinalSalaryCents, cleaningCategoryID,
 				fmt.Sprintf("Cleaner salary for %s", monthRef), monthRef, now, now)
-			if err == nil {
-				aff, _ := res.RowsAffected()
-				changes.CleaningSalaryInserted += int(aff)
+			if err != nil {
+				return nil, changes, err
 			}
+			aff, _ := res.RowsAffected()
+			changes.CleaningSalaryInserted += int(aff)
 		} else {
 			res, err := tx.ExecContext(ctx, `
 				UPDATE finance_transactions
 				SET transaction_date = ?, amount_cents = ?, category_id = ?, note = ?, updated_at = ?
 				WHERE id = ?`,
 				monthStartRFC, cleaningSummary.FinalSalaryCents, cleaningCategoryID, fmt.Sprintf("Cleaner salary for %s", monthRef), now, existingID)
-			if err == nil {
-				aff, _ := res.RowsAffected()
-				changes.CleaningSalaryUpdated += int(aff)
+			if err != nil {
+				return nil, changes, err
 			}
-		}
-		if err != nil {
-			return nil, changes, err
+			aff, _ := res.RowsAffected()
+			changes.CleaningSalaryUpdated += int(aff)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `

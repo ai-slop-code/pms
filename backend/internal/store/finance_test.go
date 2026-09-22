@@ -108,7 +108,7 @@ func TestLinkBookingToNamedStayConfirmsOnlyMigrationReviewWithEligibleNukiState(
 	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("CONFIRMED", "OK", confirmed.ID), confirmed.ID); err != nil {
 		t.Fatal(err)
 	}
-	assertState(confirmed.ID, "confirmed", "", "pending")
+	assertState(confirmed.ID, "confirmed", "", "not_applicable")
 
 	cancelReview := createStay("Cancellation review", "2099-02-01", "2099-02-02", "finance_status_cancelled")
 	if err := st.LinkBookingToNamedStay(ctx, pid, insertBooking("REVIEW", "OK", cancelReview.ID), cancelReview.ID); err != nil {
@@ -207,7 +207,7 @@ func TestCanonicalFinanceEvidenceUpdateConfirmsAlreadyLinkedMigrationStay(t *tes
 	if err := st.DB.QueryRow(`SELECT review_status, nuki_generation_status FROM named_stays WHERE id = ?`, stay.ID).Scan(&reviewStatus, &nukiStatus); err != nil {
 		t.Fatal(err)
 	}
-	if reviewStatus != "confirmed" || nukiStatus != "pending" {
+	if reviewStatus != "confirmed" || nukiStatus != "not_applicable" {
 		t.Fatalf("status=%q nuki=%q", reviewStatus, nukiStatus)
 	}
 	updated, err := st.GetNamedStay(ctx, pid, stay.ID)

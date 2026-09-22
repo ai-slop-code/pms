@@ -15,9 +15,11 @@ type FinanceRevenueRecognitionBooking struct {
 	CheckInDate          string
 	CheckOutDate         string
 	GrossCents           int
+	NetCents             int
 	StayNights           int
 	RecognizedNights     int
 	RecognizedGrossCents int
+	RecognizedNetCents   int
 	Unmatched            bool
 	Cancelled            bool
 	NoShow               bool
@@ -33,10 +35,11 @@ type FinanceRevenueRecognitionIssue struct {
 }
 
 type FinanceRevenueRecognitionReport struct {
-	Month             string
-	GrossRevenueCents int
-	Bookings          []FinanceRevenueRecognitionBooking
-	ExcludedBookings  []FinanceRevenueRecognitionIssue
+	Month                     string
+	GrossRevenueCents         int
+	RecognizedBookingNetCents int
+	Bookings                  []FinanceRevenueRecognitionBooking
+	ExcludedBookings          []FinanceRevenueRecognitionIssue
 }
 
 // ComputeFinanceRevenueRecognition allocates payout-backed gross booking
@@ -59,7 +62,7 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT fb.id, fb.reference_number, COALESCE(fb.guest_name, ''),
 		       COALESCE(fb.check_in_date, ''), COALESCE(fb.check_out_date, ''),
-		       COALESCE(fb.amount_cents, 0), fb.named_stay_id,
+		       COALESCE(fb.amount_cents, 0), COALESCE(fb.net_cents, 0), fb.named_stay_id,
 		       COALESCE(fb.status, ''), COALESCE(fb.reservation_status, ''),
 		       COALESCE(fb.outcome_override, ns.stay_outcome, '')
 		FROM finance_bookings fb
@@ -77,12 +80,13 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 			reference, guestName string
 			checkIn, checkOut    string
 			grossCents           int
+			netCents             int
 			namedStayID          sql.NullInt64
 			status               string
 			reservationStatus    string
 			outcome              string
 		)
-		if err := rows.Scan(&bookingID, &reference, &guestName, &checkIn, &checkOut, &grossCents, &namedStayID, &status, &reservationStatus, &outcome); err != nil {
+		if err := rows.Scan(&bookingID, &reference, &guestName, &checkIn, &checkOut, &grossCents, &netCents, &namedStayID, &status, &reservationStatus, &outcome); err != nil {
 			return nil, err
 		}
 
@@ -119,13 +123,16 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 				CheckInDate:          checkIn,
 				CheckOutDate:         checkOut,
 				GrossCents:           grossCents,
+				NetCents:             netCents,
 				StayNights:           stayNights,
 				RecognizedGrossCents: grossCents,
+				RecognizedNetCents:   netCents,
 				Unmatched:            !namedStayID.Valid,
 				Cancelled:            cancelled,
 				NoShow:               noShow,
 			})
 			report.GrossRevenueCents += grossCents
+			report.RecognizedBookingNetCents += netCents
 			continue
 		}
 
@@ -144,6 +151,7 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 		startOffset := financeCalendarDays(stayStart, overlapStart)
 		endOffset := financeCalendarDays(stayStart, overlapEnd)
 		recognizedGross := allocateFinanceGross(grossCents, stayNights, startOffset, endOffset)
+		recognizedNet := allocateFinanceGross(netCents, stayNights, startOffset, endOffset)
 
 		report.Bookings = append(report.Bookings, FinanceRevenueRecognitionBooking{
 			BookingID:            bookingID,
@@ -152,19 +160,37 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 			CheckInDate:          checkIn,
 			CheckOutDate:         checkOut,
 			GrossCents:           grossCents,
+			NetCents:             netCents,
 			StayNights:           stayNights,
 			RecognizedNights:     endOffset - startOffset,
 			RecognizedGrossCents: recognizedGross,
+			RecognizedNetCents:   recognizedNet,
 			Unmatched:            !namedStayID.Valid,
 			Cancelled:            false,
 			NoShow:               false,
 		})
 		report.GrossRevenueCents += recognizedGross
+		report.RecognizedBookingNetCents += recognizedNet
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return report, nil
+}
+
+// ComputeFinanceOtherMovements returns monthly Finance transactions excluding
+// booking payouts. It deliberately does not join categories.
+func (s *Store) ComputeFinanceOtherMovements(ctx context.Context, propertyID int64, month string) (incoming, outgoing int, err error) {
+	err = s.DB.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN direction = 'incoming' THEN amount_cents ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN direction = 'outgoing' THEN amount_cents ELSE 0 END), 0)
+		FROM finance_transactions
+		WHERE property_id = ?
+		  AND substr(transaction_date, 1, 7) = ?
+		  AND source_type <> 'booking_payout'`, propertyID, month).
+		Scan(&incoming, &outgoing)
+	return incoming, outgoing, err
 }
 
 func parseFinanceStayWindow(checkIn, checkOut string, loc *time.Location) (time.Time, time.Time, string) {

@@ -31,6 +31,35 @@ describe('UiInput', () => {
     expect(input.attributes('max')).toBe('2026-07-11')
   })
 
+  it('forwards step to the native input and preserves numeric validity', () => {
+    const wrapper = mount(UiInput, {
+      props: { modelValue: '', type: 'number', min: 0, step: '0.01' },
+    })
+    const input = wrapper.find('input').element as HTMLInputElement
+
+    expect(input.getAttribute('step')).toBe('0.01')
+
+    input.value = '123.99'
+    expect(input.validity.stepMismatch).toBe(false)
+    input.value = '123.999'
+    expect(input.validity.stepMismatch).toBe(true)
+    input.value = '-0.01'
+    expect(input.validity.rangeUnderflow).toBe(true)
+  })
+
+  it('preserves explicit integer steps and omits step when not supplied', () => {
+    const integerStep = mount(UiInput, {
+      props: { modelValue: '', type: 'number', min: 0, step: 1 },
+    }).find('input').element as HTMLInputElement
+    integerStep.value = '1.5'
+
+    expect(integerStep.getAttribute('step')).toBe('1')
+    expect(integerStep.validity.stepMismatch).toBe(true)
+
+    const defaultStep = mount(UiInput, { props: { modelValue: '', type: 'number' } }).find('input')
+    expect(defaultStep.attributes('step')).toBeUndefined()
+  })
+
   it('renders help text with aria-describedby linkage', () => {
     const wrapper = mount(UiInput, {
       props: { modelValue: '', label: 'L', help: 'Some help' },

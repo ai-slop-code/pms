@@ -100,8 +100,33 @@ export interface FinanceRevenueRecognitionIssue {
 export interface FinanceRevenueRecognitionResponse {
   month: string
   gross_revenue_cents: number
+  recognized_booking_net_cents: number
+  other_incoming_cents: number
+  other_outgoing_cents: number
+  recognized_net_cents: number
   bookings: FinanceRevenueRecognitionBooking[]
   excluded_bookings: FinanceRevenueRecognitionIssue[]
+  long_term_comparison?: FinanceLongTermComparison
+}
+
+export interface FinanceLongTermComparison {
+  status: 'configured' | 'not_configured'
+  rate_id: number | null
+  effective_from_month: string | null
+  monthly_rent_cents: number | null
+  eligible_outgoing_cents: number | null
+  long_term_net_cents: number | null
+  short_term_difference_cents: number | null
+  outcome: 'ahead' | 'behind' | 'equal' | null
+}
+
+export interface FinanceLongTermRentRate {
+  id: number
+  effective_from_month: string
+  monthly_rent_cents: number
+  currency: 'EUR'
+  created_at: string
+  updated_at: string
 }
 
 export interface FinanceResetDeleteCounts {
@@ -109,6 +134,7 @@ export interface FinanceResetDeleteCounts {
   finance_recurring_rules: number
   finance_bookings: number
   finance_imports: number
+  finance_statement_evidence: number
   finance_booking_merges: number
   finance_month_states: number
   finance_attachment_files: number

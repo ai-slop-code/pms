@@ -12,23 +12,24 @@ import (
 // once per upload (preview-then-commit happens server-side; only commits
 // produce rows).
 type FinanceImport struct {
-	ID                        int64
-	PropertyID                int64
-	SourceType                string
-	SourceChannel             string
-	HotelID                   sql.NullString
-	InvoiceNumber             sql.NullString
-	PeriodStart               sql.NullString
-	PeriodEnd                 sql.NullString
-	UploadedByUserID          sql.NullInt64
-	UploadedAt                time.Time
-	FileSHA256                sql.NullString
-	RowCountTotal             int
-	RowCountInserted          int
-	RowCountUpdated           int
-	RowCountUnchanged         int
-	RowCountSkippedOtherHotel int
-	RowCountRejected          int
+	ID                           int64
+	PropertyID                   int64
+	SourceType                   string
+	SourceChannel                string
+	HotelID                      sql.NullString
+	InvoiceNumber                sql.NullString
+	PeriodStart                  sql.NullString
+	PeriodEnd                    sql.NullString
+	UploadedByUserID             sql.NullInt64
+	UploadedAt                   time.Time
+	FileSHA256                   sql.NullString
+	RowCountTotal                int
+	RowCountInserted             int
+	RowCountUpdated              int
+	RowCountUnchanged            int
+	RowCountSkippedOtherHotel    int
+	RowCountSkippedCancellations int
+	RowCountRejected             int
 }
 
 // FinanceBookingMerge is one row of the merge audit log — describes
@@ -52,15 +53,15 @@ func (s *Store) CreateFinanceImport(ctx context.Context, imp *FinanceImport) (in
 			property_id, source_type, source_channel, hotel_id, invoice_number, period_start, period_end,
 			uploaded_by_user_id, uploaded_at, file_sha256,
 			row_count_total, row_count_inserted, row_count_updated, row_count_unchanged,
-			row_count_skipped_other_hotel, row_count_rejected
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row_count_skipped_other_hotel, row_count_skipped_cancellations, row_count_rejected
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		imp.PropertyID, imp.SourceType, imp.SourceChannel,
 		nullStringValue(imp.HotelID), nullStringValue(imp.InvoiceNumber),
 		nullStringValue(imp.PeriodStart), nullStringValue(imp.PeriodEnd),
 		nullInt64Value(imp.UploadedByUserID), imp.UploadedAt.UTC().Format(time.RFC3339),
 		nullStringValue(imp.FileSHA256),
 		imp.RowCountTotal, imp.RowCountInserted, imp.RowCountUpdated, imp.RowCountUnchanged,
-		imp.RowCountSkippedOtherHotel, imp.RowCountRejected,
+		imp.RowCountSkippedOtherHotel, imp.RowCountSkippedCancellations, imp.RowCountRejected,
 	)
 	if err != nil {
 		return 0, err
@@ -77,7 +78,7 @@ func (s *Store) ListFinanceImports(ctx context.Context, propertyID int64, limit 
 		SELECT id, property_id, source_type, source_channel, hotel_id, invoice_number,
 			period_start, period_end, uploaded_by_user_id, uploaded_at, file_sha256,
 			row_count_total, row_count_inserted, row_count_updated, row_count_unchanged,
-			row_count_skipped_other_hotel, row_count_rejected
+			row_count_skipped_other_hotel, row_count_skipped_cancellations, row_count_rejected
 		FROM finance_imports
 		WHERE property_id = ?
 		ORDER BY uploaded_at DESC, id DESC
@@ -95,7 +96,7 @@ func (s *Store) ListFinanceImports(ctx context.Context, propertyID int64, limit 
 			&imp.HotelID, &imp.InvoiceNumber, &imp.PeriodStart, &imp.PeriodEnd,
 			&imp.UploadedByUserID, &uploadedAt, &imp.FileSHA256,
 			&imp.RowCountTotal, &imp.RowCountInserted, &imp.RowCountUpdated,
-			&imp.RowCountUnchanged, &imp.RowCountSkippedOtherHotel, &imp.RowCountRejected,
+			&imp.RowCountUnchanged, &imp.RowCountSkippedOtherHotel, &imp.RowCountSkippedCancellations, &imp.RowCountRejected,
 		); err != nil {
 			return nil, err
 		}
@@ -116,7 +117,7 @@ func (s *Store) LastFinanceImportBySHA(ctx context.Context, propertyID int64, sh
 		SELECT id, property_id, source_type, source_channel, hotel_id, invoice_number,
 			period_start, period_end, uploaded_by_user_id, uploaded_at, file_sha256,
 			row_count_total, row_count_inserted, row_count_updated, row_count_unchanged,
-			row_count_skipped_other_hotel, row_count_rejected
+			row_count_skipped_other_hotel, row_count_skipped_cancellations, row_count_rejected
 		FROM finance_imports
 		WHERE property_id = ? AND file_sha256 = ?
 		ORDER BY uploaded_at DESC, id DESC
@@ -128,7 +129,7 @@ func (s *Store) LastFinanceImportBySHA(ctx context.Context, propertyID int64, sh
 		&imp.HotelID, &imp.InvoiceNumber, &imp.PeriodStart, &imp.PeriodEnd,
 		&imp.UploadedByUserID, &uploadedAt, &imp.FileSHA256,
 		&imp.RowCountTotal, &imp.RowCountInserted, &imp.RowCountUpdated,
-		&imp.RowCountUnchanged, &imp.RowCountSkippedOtherHotel, &imp.RowCountRejected,
+		&imp.RowCountUnchanged, &imp.RowCountSkippedOtherHotel, &imp.RowCountSkippedCancellations, &imp.RowCountRejected,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -145,7 +146,7 @@ func (s *Store) CreateFinanceBookingMerge(ctx context.Context, m *FinanceBooking
 	if m.OccurredAt.IsZero() {
 		m.OccurredAt = time.Now().UTC()
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	_, err := dbForContext(ctx, s.DB).ExecContext(ctx, `
 		INSERT INTO finance_booking_merges (
 			booking_id, import_id, source_type, changed_fields_json, occurred_at
 		) VALUES (?, ?, ?, ?, ?)`,

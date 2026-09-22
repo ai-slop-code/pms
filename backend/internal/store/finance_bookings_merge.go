@@ -142,9 +142,10 @@ func (s *Store) FinanceBookingByReference(ctx context.Context, propertyID int64,
 // (or updates the existing one identified by id when id > 0) using the
 // merger's CanonicalBooking shape. Returns the row id.
 func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyID int64, existingID, namedStayID int64, b statements.CanonicalBooking) (int64, error) {
+	db := dbForContext(ctx, s.DB)
 	now := time.Now().UTC().Format(time.RFC3339)
 	if existingID > 0 {
-		_, err := s.DB.ExecContext(ctx, `
+		_, err := db.ExecContext(ctx, `
 			UPDATE finance_bookings SET
 				has_payout_data = ?,
 				has_statement_data = ?,
@@ -198,7 +199,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 			return existingID, err
 		}
 		var namedStayID sql.NullInt64
-		if err := s.DB.QueryRowContext(ctx, `SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND id = ?`, propertyID, existingID).Scan(&namedStayID); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND id = ?`, propertyID, existingID).Scan(&namedStayID); err != nil {
 			return existingID, err
 		}
 		if namedStayID.Valid {
@@ -212,7 +213,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 		return 0, fmt.Errorf("named_stay_id is required")
 	}
 	var stayPropertyID int64
-	if err := s.DB.QueryRowContext(ctx, `SELECT property_id FROM named_stays WHERE id = ?`, namedStayID).Scan(&stayPropertyID); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT property_id FROM named_stays WHERE id = ?`, namedStayID).Scan(&stayPropertyID); err != nil {
 		return 0, fmt.Errorf("invalid named_stay_id: %w", err)
 	}
 	if stayPropertyID != propertyID {
@@ -240,7 +241,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 	if channel == "" {
 		channel = "booking_com"
 	}
-	res, err := s.DB.ExecContext(ctx, `
+	res, err := db.ExecContext(ctx, `
 		INSERT INTO finance_bookings (
 			property_id, named_stay_id, reference_number, source_channel,
 			has_payout_data, has_statement_data,
@@ -291,6 +292,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 // "booking_payout", source_reference_id = reference). It also writes
 // the resulting transaction_id back onto finance_bookings.id.
 func (s *Store) UpsertBookingFinanceTransaction(ctx context.Context, propertyID, bookingID int64, reference string, netCents int, payoutDate time.Time, categoryID int64, payoutID string) error {
+	db := dbForContext(ctx, s.DB)
 	if bookingID <= 0 || netCents == 0 {
 		return nil
 	}
@@ -305,14 +307,14 @@ func (s *Store) UpsertBookingFinanceTransaction(ctx context.Context, propertyID,
 	if payoutID != "" {
 		note = note + " (" + payoutID + ")"
 	}
-	existing, err := s.FinanceTransactionBySourceReference(ctx, propertyID, "booking_payout", reference)
+	existing, err := s.financeTransactionBySourceReference(ctx, db, propertyID, "booking_payout", reference)
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
 	var txID int64
 	if existing != nil {
 		txID = existing.ID
-		if _, err := s.DB.ExecContext(ctx, `
+		if _, err := db.ExecContext(ctx, `
 			UPDATE finance_transactions
 			   SET transaction_date = ?, direction = ?, amount_cents = ?, category_id = ?,
 			       note = ?, is_auto_generated = 1, updated_at = ?
@@ -321,7 +323,7 @@ func (s *Store) UpsertBookingFinanceTransaction(ctx context.Context, propertyID,
 			return err
 		}
 	} else {
-		res, err := s.DB.ExecContext(ctx, `
+		res, err := db.ExecContext(ctx, `
 			INSERT INTO finance_transactions (
 				property_id, transaction_date, direction, amount_cents, category_id, note,
 				source_type, source_reference_id, is_auto_generated, created_at, updated_at
@@ -336,7 +338,7 @@ func (s *Store) UpsertBookingFinanceTransaction(ctx context.Context, propertyID,
 			return err
 		}
 	}
-	_, err = s.DB.ExecContext(ctx, `
+	_, err = db.ExecContext(ctx, `
 		UPDATE finance_bookings SET transaction_id = ?, updated_at = ? WHERE id = ?`,
 		txID, now, bookingID)
 	return err
@@ -355,10 +357,11 @@ func (s *Store) UpdateFinanceImportCounts(ctx context.Context, importID int64, i
 			row_count_updated = ?,
 			row_count_unchanged = ?,
 			row_count_skipped_other_hotel = ?,
+			row_count_skipped_cancellations = ?,
 			row_count_rejected = ?
 		 WHERE id = ?`,
 		imp.RowCountTotal, imp.RowCountInserted, imp.RowCountUpdated,
-		imp.RowCountUnchanged, imp.RowCountSkippedOtherHotel, imp.RowCountRejected,
+		imp.RowCountUnchanged, imp.RowCountSkippedOtherHotel, imp.RowCountSkippedCancellations, imp.RowCountRejected,
 		importID)
 	return err
 }

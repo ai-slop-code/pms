@@ -59,6 +59,9 @@ func TestComputeFinanceRevenueRecognition_ProrationConservesGross(t *testing.T) 
 	// remainder cent, and payout timing in March is irrelevant.
 	insertRevenueRecognitionBooking(t, st, pid, "CROSS-MONTH", "2026-01-31", "2026-02-03", 10000, true, "OK")
 	insertRevenueRecognitionBooking(t, st, pid, "STATEMENT-ONLY", "2026-02-10", "2026-02-11", 5000, false, "OK")
+	if _, err := st.DB.Exec(`UPDATE finance_bookings SET net_cents = 8000 WHERE property_id = ? AND reference_number = 'CROSS-MONTH'`, pid); err != nil {
+		t.Fatal(err)
+	}
 
 	jan, err := st.ComputeFinanceRevenueRecognition(context.Background(), pid, "2026-01", loc)
 	if err != nil {
@@ -74,8 +77,49 @@ func TestComputeFinanceRevenueRecognition_ProrationConservesGross(t *testing.T) 
 	if jan.GrossRevenueCents+feb.GrossRevenueCents != 10000 {
 		t.Fatalf("allocated total=%d want 10000", jan.GrossRevenueCents+feb.GrossRevenueCents)
 	}
+	if jan.RecognizedBookingNetCents != 2667 || feb.RecognizedBookingNetCents != 5333 {
+		t.Fatalf("recognized booking net jan=%d feb=%d, want 2667 and 5333", jan.RecognizedBookingNetCents, feb.RecognizedBookingNetCents)
+	}
+	if jan.RecognizedBookingNetCents+feb.RecognizedBookingNetCents != 8000 {
+		t.Fatalf("allocated net=%d want 8000", jan.RecognizedBookingNetCents+feb.RecognizedBookingNetCents)
+	}
 	if len(feb.Bookings) != 1 || feb.Bookings[0].RecognizedNights != 2 || feb.Bookings[0].Unmatched {
 		t.Fatalf("unexpected February rows: %+v", feb.Bookings)
+	}
+}
+
+func TestComputeFinanceOtherMovements_ExcludesBookingPayouts(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	ctx := context.Background()
+	for _, row := range []*FinanceTransaction{
+		{PropertyID: pid, TransactionDate: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Direction: "incoming", AmountCents: 1200, SourceType: "manual"},
+		{PropertyID: pid, TransactionDate: time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC), Direction: "outgoing", AmountCents: 3000, SourceType: "recurring_rule"},
+		{PropertyID: pid, TransactionDate: time.Date(2026, 4, 12, 12, 0, 0, 0, time.UTC), Direction: "incoming", AmountCents: 8000, SourceType: "booking_payout"},
+		{PropertyID: pid, TransactionDate: time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC), Direction: "outgoing", AmountCents: 8000, SourceType: "booking_payout"},
+	} {
+		if _, err := st.CreateFinanceTransaction(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	incoming, outgoing, err := st.ComputeFinanceOtherMovements(ctx, pid, "2026-04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incoming != 1200 || outgoing != 3000 {
+		t.Fatalf("other movements=%d/%d, want 1200/3000", incoming, outgoing)
+	}
+}
+
+func TestAllocateFinanceGross_PreservesSignedRemainder(t *testing.T) {
+	if got := allocateFinanceGross(-100, 3, 0, 1); got != -34 {
+		t.Fatalf("first negative night=%d, want -34", got)
+	}
+	if got := allocateFinanceGross(-100, 3, 1, 3); got != -66 {
+		t.Fatalf("remaining negative nights=%d, want -66", got)
+	}
+	if got := allocateFinanceGross(0, 3, 0, 3); got != 0 {
+		t.Fatalf("zero allocation=%d, want 0", got)
 	}
 }
 

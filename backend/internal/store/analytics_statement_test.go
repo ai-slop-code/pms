@@ -373,6 +373,41 @@ func TestHasAnyStatementData_TogglesWithStatementRows(t *testing.T) {
 	}
 }
 
+func TestCancellationCohortsIncludeEvidenceOnlyCancellation(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := seedAnalyticsProperty(t, st)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := st.DB.ExecContext(context.Background(), `
+		INSERT INTO finance_statement_evidence
+		(property_id, source_channel, reference_number, status, booked_on, check_in_date, check_out_date,
+		 raw_statement_row_json, last_import_id, source_line, created_at, updated_at)
+		VALUES (?, 'booking_com', 'EVIDENCE-1', 'CANCELLED', '2025-12-25T13:14:28Z', '2026-08-07', '2026-08-10', '{}',
+		 (SELECT id FROM finance_imports LIMIT 1), 2, ?, ?)`, pid, now, now)
+	if err != nil {
+		// The fixture has no import parent, so create the minimal parent and retry.
+		importResult, createErr := st.DB.ExecContext(context.Background(), `INSERT INTO finance_imports (property_id, source_type, source_channel, uploaded_at) VALUES (?, 'statement', 'booking_com', ?)`, pid, now)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		importID, _ := importResult.LastInsertId()
+		_, err = st.DB.ExecContext(context.Background(), `INSERT INTO finance_statement_evidence (property_id, source_channel, reference_number, status, booked_on, check_in_date, check_out_date, raw_statement_row_json, last_import_id, source_line, created_at, updated_at) VALUES (?, 'booking_com', 'EVIDENCE-1', 'CANCELLED', '2025-12-25T13:14:28Z', '2026-08-07', '2026-08-10', '{}', ?, 2, ?, ?)`, pid, importID, now, now)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, to := defaultStatementWindow()
+	rows, err := st.ListCancellationByArrivalCohort(context.Background(), pid, from, to, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Month != "2026-08" || rows[0].Cancelled != 1 {
+		t.Fatalf("rows=%+v", rows)
+	}
+	if has, err := st.HasAnyStatementData(context.Background(), pid); err != nil || !has {
+		t.Fatalf("has=%v err=%v", has, err)
+	}
+}
+
 func TestGetAnalyticsFreshness_PopulatesLastStatementDateAndFlag(t *testing.T) {
 	st := &Store{DB: testutil.OpenTestDB(t)}
 	pid := seedAnalyticsProperty(t, st)

@@ -102,7 +102,6 @@ func (s *Server) postBookingBlockPromote(w http.ResponseWriter, r *http.Request)
 		writeNamedStayError(w, err)
 		return
 	}
-	stay = s.triggerNamedStayNukiGeneration(r, propID, stay)
 	cleaningErr := s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_promote", stayRange{stay.CheckInDate, stay.CheckOutDate})
 	s.audit(r, actor, "named_stay_promoted", "named_stay", strconv.FormatInt(stay.ID, 10), "success")
 	WriteJSON(w, http.StatusOK, namedStayResponseWithCleaning(stay, cleaningErr))
@@ -133,7 +132,6 @@ func (s *Server) postStay(w http.ResponseWriter, r *http.Request) {
 		writeNamedStayError(w, err)
 		return
 	}
-	stay = s.triggerNamedStayNukiGeneration(r, propID, stay)
 	cleaningErr := s.reconcileCleaningStayRangesBestEffort(r, propID, "named_stay_create", stayRange{stay.CheckInDate, stay.CheckOutDate})
 	s.audit(r, actor, "named_stay_created", "named_stay", strconv.FormatInt(stay.ID, 10), "success")
 	WriteJSON(w, http.StatusOK, namedStayResponseWithCleaning(stay, cleaningErr))
@@ -346,30 +344,6 @@ func affectedCleaningDateRange(ranges ...stayRange) (string, string) {
 	return from, to
 }
 
-func (s *Server) triggerNamedStayNukiGeneration(r *http.Request, propID int64, stay *store.NamedStay) *store.NamedStay {
-	if stay == nil {
-		return stay
-	}
-	reviewStatus := "confirmed"
-	if stay.ReviewStatus.Valid && strings.TrimSpace(stay.ReviewStatus.String) != "" {
-		reviewStatus = strings.TrimSpace(stay.ReviewStatus.String)
-	}
-	if !store.NamedStayNukiEligible(stay.StayType, reviewStatus) {
-		_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationNotApplicable, "")
-		return s.refreshedNamedStayOrOriginal(r, propID, stay)
-	}
-	if s.Nuki == nil {
-		_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationError, "nuki_service_unavailable")
-		return s.refreshedNamedStayOrOriginal(r, propID, stay)
-	}
-	if err := s.Nuki.GenerateCodeForNamedStay(r.Context(), propID, stay.ID, "named_stay_create", stay.DisplayName); err != nil {
-		_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationError, err.Error())
-		return s.refreshedNamedStayOrOriginal(r, propID, stay)
-	}
-	_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationGenerated, "")
-	return s.refreshedNamedStayOrOriginal(r, propID, stay)
-}
-
 func namedStayNukiFieldsChanged(before, after *store.NamedStay) bool {
 	if before == nil || after == nil {
 		return true
@@ -384,19 +358,15 @@ func (s *Server) reconcileNamedStayNuki(r *http.Request, propID int64, stay *sto
 		return stay
 	}
 	if s.Nuki == nil {
-		_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationError, "nuki_service_unavailable")
 		return s.refreshedNamedStayOrOriginal(r, propID, stay)
 	}
-	if err := s.Nuki.ReconcileNamedStay(r.Context(), propID, stay.ID, trigger); err != nil {
+	if err := s.Nuki.MaintainNamedStay(r.Context(), propID, stay.ID, trigger); err != nil {
 		_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, store.NukiGenerationError, err.Error())
 		return s.refreshedNamedStayOrOriginal(r, propID, stay)
 	}
-	reviewStatus := "confirmed"
-	if stay.ReviewStatus.Valid && strings.TrimSpace(stay.ReviewStatus.String) != "" {
-		reviewStatus = strings.TrimSpace(stay.ReviewStatus.String)
-	}
 	status := store.NukiGenerationNotApplicable
-	if stay.Status == store.NamedStayStatusActive && store.NamedStayNukiEligible(stay.StayType, reviewStatus) && !stay.StayOutcome.Valid {
+	code, codeErr := s.Store.GetNukiCodeByNamedStayID(r.Context(), propID, stay.ID)
+	if codeErr == nil && code != nil && code.Status == "generated" && code.ExternalNukiID.Valid && strings.TrimSpace(code.ExternalNukiID.String) != "" {
 		status = store.NukiGenerationGenerated
 	}
 	_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), propID, stay.ID, status, "")

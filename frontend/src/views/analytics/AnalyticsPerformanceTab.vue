@@ -453,8 +453,8 @@ function onHeatKeydown(e: KeyboardEvent) {
       <h3 class="block-head">Cancellation rate — booking cohort</h3>
       <div class="card">
         <p v-if="!hasStatementData" class="muted">
-          No Booking.com statement data uploaded yet — booking-cohort cancellation
-          rate will appear after the first statement import.
+          No Booking.com statement data uploaded yet. This chart also includes
+          reservations cancelled before a PMS stay existed.
         </p>
         <p v-else-if="cancellationBookingCohort.length === 0" class="muted">
           No cancellations recorded in the selected window.
@@ -471,8 +471,8 @@ function onHeatKeydown(e: KeyboardEvent) {
       <h3 class="block-head">Cancellation rate — arrival cohort</h3>
       <div class="card">
         <p v-if="!hasStatementData" class="muted">
-          No Booking.com statement data uploaded yet — arrival-cohort cancellation
-          rate will appear after the first statement import.
+          No Booking.com statement data uploaded yet. This chart also includes
+          reservations cancelled before a PMS stay existed.
         </p>
         <p v-else-if="cancellationArrivalCohort.length === 0" class="muted">
           No cancellations recorded in the selected window.

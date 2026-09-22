@@ -1,0 +1,8 @@
+Type,"Booking number",Check-in,Checkout,"Guest name","Payments service provider","Reservation status",Currency,"Payment status",Amount,Commission,"Payments Service Fee",Net,"Payout date","Payout ID"
+Reservation,5441941191,"18 Aug 2026","19 Aug 2026","Martin Schneider","Booking.com B.V.",ok,EUR,by_booking,70.97,-12.96,-0.85,57.16,"20 Aug 2026",e9bS4LeTAGXWtgIq
+Reservation,6986274535,"17 Aug 2026","18 Aug 2026","Krisztián Križan","Booking.com B.V.",ok,EUR,by_booking,90.54,-16.53,-1.09,72.92,"20 Aug 2026",e9bS4LeTAGXWtgIq
+Reservation,6222340864,"16 Aug 2026","17 Aug 2026","Adelina Martina","Booking.com B.V.",ok,EUR,by_booking,90.30,-16.49,-1.08,72.73,"20 Aug 2026",e9bS4LeTAGXWtgIq
+Reservation,6874089083,"15 Aug 2026","16 Aug 2026","Ihor Petrivskiy","Booking.com B.V.",ok,EUR,by_booking,86.83,-15.86,-1.04,69.93,"20 Aug 2026",e9bS4LeTAGXWtgIq
+Reservation,6255831315,"14 Aug 2026","15 Aug 2026","Veronika Sovanyova","Booking.com B.V.",ok,EUR,by_booking,106.59,-19.46,-1.28,85.85,"20 Aug 2026",e9bS4LeTAGXWtgIq
+Reservation,5916848183,"13 Aug 2026","14 Aug 2026","Zuzana Feledikova","Booking.com B.V.",ok,EUR,by_booking,71.62,-13.08,-0.86,57.68,"20 Aug 2026",e9bS4LeTAGXWtgIq
+Reservation,6237317051,"12 Aug 2026","13 Aug 2026","Richard Krall","Booking.com B.V.",ok,EUR,by_booking,88.36,-16.14,-1.06,71.16,"20 Aug 2026",e9bS4LeTAGXWtgIq

@@ -230,10 +230,7 @@ async function submitManualStay() {
     }
     if (result.ok === false) throw new Error(result.error || 'Failed to create stay')
     manualStayDialogOpen.value = false
-    success.value =
-      result.nuki_generation_status === 'error'
-        ? `Named stay “${name}” created. Nuki generation needs attention.`
-        : `Named stay “${name}” created.`
+    success.value = `Named stay “${name}” saved.`
     await loadCalendar()
   } catch (cause) {
     manualStayError.value = cause instanceof Error ? cause.message : 'Failed to create stay'
@@ -294,10 +291,7 @@ async function submitPromoteRawBlock() {
     }
     if (result.ok === false) throw new Error(result.error || 'Failed to promote raw block')
     promoteDialogOpen.value = false
-    success.value =
-      result.nuki_generation_status === 'error'
-        ? `Named stay “${name}” created. Nuki generation needs attention.`
-        : `Named stay “${name}” created.`
+    success.value = `Named stay “${name}” saved.`
     await loadCalendar()
   } catch (cause) {
     promoteError.value = cause instanceof Error ? cause.message : 'Failed to promote raw block'

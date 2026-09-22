@@ -1,0 +1,1 @@
+DROP TABLE finance_long_term_rent_rates;

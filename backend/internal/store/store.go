@@ -19,6 +19,25 @@ type Store struct {
 	Crypto *secretbox.Box
 }
 
+type transactionContextKey struct{}
+
+type sqlContextDB interface {
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+}
+
+func ContextWithTransaction(ctx context.Context, tx *sql.Tx) context.Context {
+	return context.WithValue(ctx, transactionContextKey{}, tx)
+}
+
+func dbForContext(ctx context.Context, db *sql.DB) sqlContextDB {
+	if tx, ok := ctx.Value(transactionContextKey{}).(*sql.Tx); ok && tx != nil {
+		return tx
+	}
+	return db
+}
+
 // encryptNS encrypts a NullString in place, returning a value safe to pass
 // into placeholder binds. No-op when Crypto is nil or the value is empty.
 func (s *Store) encryptNS(v sql.NullString) (sql.NullString, error) {

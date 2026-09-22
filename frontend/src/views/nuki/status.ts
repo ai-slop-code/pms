@@ -4,7 +4,8 @@ export function displayStatus(status?: string | null): string {
   switch (status) {
     case 'generated': return 'Generated'
     case 'revoked': return 'Revoked'
-    case 'not_generated': return 'Not generated'
+    case 'not_generated':
+    case 'pending': return 'Not generated'
     case 'success': return 'Healthy'
     case 'failure': return 'Failed'
     case 'partial': return 'Partial'
@@ -26,5 +27,5 @@ export function statusTone(status?: string | null): NukiBadgeTone {
 }
 
 export function canGenerate(status?: string | null): boolean {
-  return status === 'not_generated' || status === 'revoked' || !status
+  return status === 'not_generated' || status === 'pending' || status === 'revoked' || !status
 }

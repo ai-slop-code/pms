@@ -44,6 +44,7 @@ const (
 // the source flag to decide which values are authoritative.
 type Row struct {
 	Source SourceType
+	Line   int // source CSV record line; transport provenance only.
 
 	// Merge key.
 	ReferenceNumber string
@@ -69,6 +70,7 @@ type Row struct {
 	Currency        string
 	AmountCents     int // gross amount (positive)
 	CommissionCents int // positive
+	VATCents        int // positive VAT cost from payout exports
 	PaymentFeeCents int // positive
 	Status          string
 
@@ -83,6 +85,14 @@ type Row struct {
 	// Raw row used for audit + idempotence (stable-key serialised by
 	// the caller).
 	Raw map[string]string
+}
+
+func (r Row) IsCommissionAdjustment() bool {
+	return r.Source == SourcePayout && strings.EqualFold(strings.TrimSpace(r.RowType), "commission adjustment")
+}
+
+func (r Row) IsRefund() bool {
+	return r.Source == SourcePayout && strings.EqualFold(strings.TrimSpace(r.RowType), "reservation") && r.AmountCents < 0
 }
 
 // Rejection is one CSV row that failed validation. Rejected rows are
@@ -189,17 +199,20 @@ func parsePayout(r *csv.Reader, idx map[string]int, loc *time.Location) (*ParseR
 		}
 	}
 	res := &ParseResult{Source: SourcePayout}
-	line := 1
 	for {
 		rec, err := r.Read()
 		if err == io.EOF {
 			break
 		}
-		line++
 		if err != nil {
+			line := 0
+			if pe, ok := err.(*csv.ParseError); ok {
+				line = pe.Line
+			}
 			res.Rejected = append(res.Rejected, Rejection{Line: line, Reason: err.Error()})
 			continue
 		}
+		line, _ := r.FieldPos(0)
 		ref := strings.TrimSpace(csvVal(rec, idx, "reference number"))
 		if ref == "" {
 			res.Rejected = append(res.Rejected, Rejection{Line: line, Reason: "missing reference number"})
@@ -222,18 +235,25 @@ func parsePayout(r *csv.Reader, idx map[string]int, loc *time.Location) (*ParseR
 		}
 		amount, _ := parseMoneyToCents(csvVal(rec, idx, "amount"))
 		commission, _ := parseMoneyToCents(csvVal(rec, idx, "commission"))
+		vat, _ := parseMoneyToCents(csvVal(rec, idx, "vat for online platform services"))
 		payFee, _ := parseMoneyToCents(csvVal(rec, idx, "payments service fee"))
 		// Sign normalisation: payout file expresses cost as negative;
 		// canonical storage is positive.
 		commission = abs(commission)
+		vat = abs(vat)
 		payFee = abs(payFee)
+		rowType := strings.TrimSpace(csvVal(rec, idx, "type"))
+		if strings.EqualFold(rowType, "reservation") {
+			commission += vat
+		}
 		checkIn, _ := parseShortDate(csvVal(rec, idx, "check-in"), loc)
 		checkOut, _ := parseShortDate(csvVal(rec, idx, "checkout"), loc)
 		raw := buildRawMap(rec, idx)
 		res.Rows = append(res.Rows, Row{
 			Source:            SourcePayout,
+			Line:              line,
 			ReferenceNumber:   ref,
-			RowType:           strings.TrimSpace(csvVal(rec, idx, "type")),
+			RowType:           rowType,
 			CheckInDate:       checkIn,
 			CheckOutDate:      checkOut,
 			GuestName:         strings.TrimSpace(csvVal(rec, idx, "guest name")),
@@ -242,6 +262,7 @@ func parsePayout(r *csv.Reader, idx map[string]int, loc *time.Location) (*ParseR
 			PaymentStatus:     strings.TrimSpace(csvVal(rec, idx, "payment status")),
 			AmountCents:       amount,
 			CommissionCents:   commission,
+			VATCents:          vat,
 			PaymentFeeCents:   payFee,
 			NetCents:          net,
 			PayoutDate:        payoutDate,
@@ -262,17 +283,21 @@ func parseStatement(r *csv.Reader, idx map[string]int, loc *time.Location) (*Par
 		}
 	}
 	res := &ParseResult{Source: SourceStatement}
-	line := 1
+	seen := make(map[string]string)
 	for {
 		rec, err := r.Read()
 		if err == io.EOF {
 			break
 		}
-		line++
 		if err != nil {
+			line := 0
+			if pe, ok := err.(*csv.ParseError); ok {
+				line = pe.Line
+			}
 			res.Rejected = append(res.Rejected, Rejection{Line: line, Reason: err.Error()})
 			continue
 		}
+		line, _ := r.FieldPos(0)
 		ref := strings.TrimSpace(csvVal(rec, idx, "reservation number"))
 		if ref == "" {
 			res.Rejected = append(res.Rejected, Rejection{Line: line, Reason: "missing reservation number"})
@@ -298,6 +323,10 @@ func parseStatement(r *csv.Reader, idx map[string]int, loc *time.Location) (*Par
 			res.Rejected = append(res.Rejected, Rejection{Line: line, Reason: "invalid departure"})
 			continue
 		}
+		if arrival == "" || departure == "" {
+			res.Rejected = append(res.Rejected, Rejection{Line: line, Reason: "missing arrival or departure"})
+			continue
+		}
 		original, _ := parseMoneyToCents(csvVal(rec, idx, "original amount"))
 		final, _ := parseMoneyToCents(csvVal(rec, idx, "final amount"))
 		commission, _ := parseMoneyToCents(csvVal(rec, idx, "commission amount"))
@@ -309,8 +338,19 @@ func parseStatement(r *csv.Reader, idx map[string]int, loc *time.Location) (*Par
 		rooms, _ := strconv.Atoi(strings.TrimSpace(csvVal(rec, idx, "rooms")))
 		roomNights, _ := strconv.Atoi(strings.TrimSpace(csvVal(rec, idx, "room nights")))
 		raw := buildRawMap(rec, idx)
+		rawJSON := CanonicalRawJSON(raw)
+		if previous, exists := seen[ref]; exists {
+			if previous == rawJSON {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("line %d: identical duplicate for reservation %s ignored", line, ref))
+			} else {
+				res.Rejected = append(res.Rejected, Rejection{Line: line, Reason: "conflicting duplicate reservation number in upload"})
+			}
+			continue
+		}
+		seen[ref] = rawJSON
 		res.Rows = append(res.Rows, Row{
 			Source:              SourceStatement,
+			Line:                line,
 			ReferenceNumber:     ref,
 			BookedOn:            bookedOn,
 			InvoiceNumber:       strings.TrimSpace(csvVal(rec, idx, "invoice number")),
@@ -445,7 +485,7 @@ func parseStatementDateTime(v string, loc *time.Location) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, fmt.Errorf("empty datetime")
 	}
-	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02"} {
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02"} {
 		if t, err := time.ParseInLocation(layout, s, loc); err == nil {
 			return t.UTC(), nil
 		}

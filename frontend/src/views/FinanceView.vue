@@ -23,6 +23,7 @@ import FinanceTransactionsTab from '@/views/finance/FinanceTransactionsTab.vue'
 import FinanceRecurringTab from '@/views/finance/FinanceRecurringTab.vue'
 import FinanceCategoriesTab from '@/views/finance/FinanceCategoriesTab.vue'
 import FinanceBreakdownTab from '@/views/finance/FinanceBreakdownTab.vue'
+import FinanceLongTermRentDialog from '@/views/finance/FinanceLongTermRentDialog.vue'
 import { FINANCE_TABS, type FinanceTab } from '@/views/finance/helpers'
 import type {
   FinanceCategory,
@@ -32,9 +33,10 @@ import type {
   FinanceResetResult,
   FinanceSummary,
   FinanceRevenueRecognitionResponse,
+  FinanceLongTermRentRate,
 } from '@/api/types/finance'
 
-const { pid } = useCurrentProperty()
+const { pid, currentProperty } = useCurrentProperty()
 const month = ref(monthKey(new Date()))
 const tab = ref<FinanceTab>('overview')
 
@@ -74,9 +76,20 @@ const summary = ref<FinanceSummary | null>(null)
 const revenueRecognition = ref<FinanceRevenueRecognitionResponse>({
   month: month.value,
   gross_revenue_cents: 0,
+  recognized_booking_net_cents: 0,
+  other_incoming_cents: 0,
+  other_outgoing_cents: 0,
+  recognized_net_cents: 0,
   bookings: [],
   excluded_bookings: [],
+  long_term_comparison: { status: 'not_configured', rate_id: null, effective_from_month: null, monthly_rent_cents: null, eligible_outgoing_cents: null, long_term_net_cents: null, short_term_difference_cents: null, outcome: null },
 })
+const revenueRecognitionAvailable = ref(false)
+const rentRates = ref<FinanceLongTermRentRate[]>([])
+const rentCanManage = ref(false)
+const rentDialogOpen = ref(false)
+watch(pid, () => { rentDialogOpen.value = false })
+let loadSequence = 0
 
 const txFilterDirection = ref<'' | 'incoming' | 'outgoing'>('')
 const txFilterCategory = ref<number>(0)
@@ -100,12 +113,21 @@ interface ImportPreviewInsert {
   amount_cents?: number
   status?: string
   status_changed?: boolean
+  line?: number
+  named_stay_id?: number
+  match_basis?: string
+  stay_name?: string
+  stay_check_in_date?: string
+  stay_check_out_date?: string
 }
 interface ImportPreviewUpdate {
   reference: string
   guest_name?: string
   status_changed?: boolean
   changes?: { field: string }[]
+  line?: number
+  named_stay_id?: number
+  match_basis?: string
 }
 interface ImportPreviewSkipped {
   reference: string
@@ -130,11 +152,64 @@ interface ImportPreviewResponse {
   unchanged_count: number
   skipped_other_hotel: ImportPreviewSkipped[]
   rejected: ImportPreviewRejected[]
+  stay_name_changes: {
+    line: number
+    reference: string
+    named_stay_id: number
+    previous_display_name: string
+    payout_guest_name: string
+  }[]
+  needs_stay_selection: {
+    line: number
+    reference: string
+    guest_name: string
+    check_in_date: string
+    check_out_date: string
+    net_cents: number
+    reason: string
+    candidates: {
+      named_stay_id: number
+      display_name: string
+      stay_type: string
+      check_in_date: string
+      check_out_date: string
+    }[]
+  }[]
+  skipped_cancellations: {
+    line: number
+    reference: string
+    guest_name: string
+    check_in_date: string
+    check_out_date: string
+    booked_on: string
+    reason: string
+  }[]
 }
 
 const importPreview = ref<ImportPreviewResponse | null>(null)
 const importPreviewOpen = ref(false)
 const importCommitting = ref(false)
+const staySelections = ref<Record<number, number>>({})
+const selectedStayCount = computed(
+  () => Object.values(staySelections.value).filter((namedStayID) => Number(namedStayID) > 0).length,
+)
+const plannedInsertCount = computed(
+  () => (importPreview.value?.inserts.length || 0) + selectedStayCount.value,
+)
+const pendingOmissionCount = computed(
+  () => (importPreview.value?.needs_stay_selection.length || 0) - selectedStayCount.value,
+)
+const plannedStayNameChangeCount = computed(() => {
+  const preview = importPreview.value
+  if (!preview) return 0
+  const automatic = preview.stay_name_changes.length
+  const selected = preview.needs_stay_selection.filter((item) => {
+    const selectedID = Number(staySelections.value[item.line] || 0)
+    const candidate = item.candidates.find((entry) => entry.named_stay_id === selectedID)
+    return candidate && item.guest_name.trim() !== '' && candidate.display_name !== item.guest_name.trim()
+  }).length
+  return automatic + selected
+})
 
 const resetDialogOpen = ref(false)
 const resetPreview = ref<FinanceResetPreview | null>(null)
@@ -210,6 +285,7 @@ const resetDeleteCountItems = computed(() => {
     ['Recurring rules', counts.finance_recurring_rules],
     ['Finance bookings', counts.finance_bookings],
     ['Finance imports', counts.finance_imports],
+    ['Statement evidence', counts.finance_statement_evidence],
     ['Booking merge rows', counts.finance_booking_merges],
     ['Month sync states', counts.finance_month_states],
     ['Finance attachment files', counts.finance_attachment_files],
@@ -233,10 +309,14 @@ const resetPreserveCountItems = computed(() => {
 
 async function loadAll() {
   if (!pid.value) return
+  const sequence = ++loadSequence
+  const requestedPropertyID = pid.value
+  const requestedMonth = month.value
   loading.value = true
   error.value = ''
+  revenueRecognitionAvailable.value = false
   try {
-    const [cats, txs, sum, rules, revenue] = await Promise.all([
+    const [cats, txs, sum, rules, revenue, rentHistory] = await Promise.all([
       api<{ categories: FinanceCategory[] }>(`/api/properties/${pid.value}/finance/categories`),
       api<{ transactions: FinanceTransaction[] }>(
         `/api/properties/${pid.value}/finance/transactions?month=${encodeURIComponent(month.value)}`,
@@ -248,21 +328,42 @@ async function loadAll() {
       api<FinanceRevenueRecognitionResponse>(
         `/api/properties/${pid.value}/finance/revenue-recognition?month=${encodeURIComponent(month.value)}`,
       ),
+      api<{ rates: FinanceLongTermRentRate[]; can_manage: boolean }>(`/api/properties/${pid.value}/finance/long-term-rent-rates`),
     ])
+    if (sequence !== loadSequence || pid.value !== requestedPropertyID || month.value !== requestedMonth) return
+    const requiredRecognitionFields = [
+      revenue.gross_revenue_cents,
+      revenue.recognized_booking_net_cents,
+      revenue.other_incoming_cents,
+      revenue.other_outgoing_cents,
+      revenue.recognized_net_cents,
+    ]
+    if (requiredRecognitionFields.some((value) => !Number.isInteger(value))) {
+      throw new Error('Finance recognition data is unavailable')
+    }
     categories.value = cats.categories
     transactions.value = txs.transactions
     summary.value = sum
     recurringRules.value = rules.rules
-    revenueRecognition.value = {
+      revenueRecognition.value = {
       month: revenue.month || month.value,
-      gross_revenue_cents: revenue.gross_revenue_cents || 0,
+      gross_revenue_cents: revenue.gross_revenue_cents,
+      recognized_booking_net_cents: revenue.recognized_booking_net_cents,
+      other_incoming_cents: revenue.other_incoming_cents,
+      other_outgoing_cents: revenue.other_outgoing_cents,
+      recognized_net_cents: revenue.recognized_net_cents,
       bookings: revenue.bookings || [],
-      excluded_bookings: revenue.excluded_bookings || [],
-    }
+        excluded_bookings: revenue.excluded_bookings || [],
+        long_term_comparison: revenue.long_term_comparison,
+      }
+      rentRates.value = rentHistory.rates || []
+      rentCanManage.value = rentHistory.can_manage === true
+    revenueRecognitionAvailable.value = true
   } catch (e) {
+    if (sequence !== loadSequence) return
     error.value = e instanceof Error ? e.message : 'Failed to load finance data'
   } finally {
-    loading.value = false
+    if (sequence === loadSequence) loading.value = false
   }
 }
 
@@ -289,9 +390,10 @@ async function openResetDialog() {
 async function submitFinanceReset() {
   if (!pid.value || !resetPreview.value) return
   const invoiceCount = resetPreview.value.would_delete.invoices
-  const invoiceCopy = invoiceCount > 0
-    ? ` This will also delete ${invoiceCount} linked invoice${invoiceCount === 1 ? '' : 's'} and their invoice files. Invoice numbers will not be reused.`
-    : ' No linked invoices are currently in the reset preview.'
+  const invoiceCopy =
+    invoiceCount > 0
+      ? ` This will also delete ${invoiceCount} linked invoice${invoiceCount === 1 ? '' : 's'} and their invoice files. Invoice numbers will not be reused.`
+      : ' No linked invoices are currently in the reset preview.'
   const ok = await confirm({
     title: 'Reset finance records?',
     message: `This permanently deletes manual transactions, Booking.com imports, payout/statement rows, recurring rules, generated recurring rows, and finance attachments for this property.${invoiceCopy} Cleaning salary from flat entries will remain.`,
@@ -355,11 +457,17 @@ async function importBookingPayoutCSV() {
   try {
     const fd = new FormData()
     fd.append('file', payoutImportFile.value)
-    const r = await api<ImportPreviewResponse>(
-      `/api/properties/${pid.value}/finance/imports/preview`,
-      { method: 'POST', body: fd },
-    )
-    importPreview.value = r
+    const r = await api<ImportPreviewResponse>(`/api/properties/${pid.value}/finance/imports/preview`, {
+      method: 'POST',
+      body: fd,
+    })
+    importPreview.value = {
+      ...r,
+      stay_name_changes: r.stay_name_changes || [],
+      needs_stay_selection: r.needs_stay_selection || [],
+      skipped_cancellations: r.skipped_cancellations || [],
+    }
+    staySelections.value = {}
     importPreviewOpen.value = true
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Failed to upload Booking.com CSV'
@@ -384,16 +492,24 @@ async function commitBookingImport() {
       row_count_unchanged: number
       row_count_skipped_other_hotel: number
       row_count_rejected: number
+      row_count_skipped_cancellations: number
     }>(`/api/properties/${pid.value}/finance/imports/commit`, {
       method: 'POST',
-      json: { preview_token: preview.preview_token },
+      json: {
+        preview_token: preview.preview_token,
+        stay_selections: Object.entries(staySelections.value).map(([line, named_stay_id]) => ({
+          line: Number(line),
+          named_stay_id: Number(named_stay_id),
+        })),
+      },
     })
     toast.success(
-      `Imported ${r.row_count_inserted} new, updated ${r.row_count_updated}, unchanged ${r.row_count_unchanged}.`,
+      `Imported ${r.row_count_inserted} new, updated ${r.row_count_updated}, unchanged ${r.row_count_unchanged}${r.row_count_skipped_cancellations ? `, retained ${r.row_count_skipped_cancellations} cancellations` : ''}.`,
       'CSV import committed',
     )
     importPreviewOpen.value = false
     importPreview.value = null
+    staySelections.value = {}
     payoutImportFile.value = null
     await loadAll()
   } catch (e) {
@@ -637,6 +753,11 @@ function prevMonth() {
 function nextMonth() {
   month.value = shiftMonth(month.value, 1)
 }
+function cancelBookingImport() {
+  importPreviewOpen.value = false
+  importPreview.value = null
+  staySelections.value = {}
+}
 
 watch(
   [pid, month],
@@ -645,6 +766,18 @@ watch(
   },
   { immediate: true },
 )
+watch(pid, () => {
+  importPreviewOpen.value = false
+  importPreview.value = null
+  staySelections.value = {}
+})
+watch(payoutImportFile, (file, previous) => {
+  if (file !== previous && importPreview.value) {
+    importPreviewOpen.value = false
+    importPreview.value = null
+    staySelections.value = {}
+  }
+})
 </script>
 
 <template>
@@ -674,14 +807,17 @@ watch(
           <template #iconLeft><ChevronRight :size="16" aria-hidden="true" /></template>
         </UiButton>
         <template #trailing>
-          <UiButton variant="danger" :disabled="loading" @click="openResetDialog">Reset finance records</UiButton>
+          <UiButton variant="danger" :disabled="loading" @click="openResetDialog"
+            >Reset finance records</UiButton
+          >
           <UiButton variant="secondary" :disabled="loading" @click="loadAll">Refresh</UiButton>
           <UiButton
             variant="primary"
             :loading="syncBusy"
             title="Creates or updates this month's recurring expenses and cleaning salary entry. Manual transactions and imported payouts are not changed."
             @click="syncGeneratedEntries"
-          >Sync generated entries</UiButton>
+            >Sync generated entries</UiButton
+          >
         </template>
       </UiToolbar>
 
@@ -696,6 +832,13 @@ watch(
         v-if="tab === 'overview'"
         :summary="summary"
         :recognized-gross-cents="revenueRecognition.gross_revenue_cents"
+        :recognized-net-cents="revenueRecognitionAvailable ? revenueRecognition.recognized_net_cents : null"
+        :recognized-net-available="revenueRecognitionAvailable"
+        :long-term-comparison="revenueRecognitionAvailable ? (revenueRecognition.long_term_comparison ?? null) : null"
+        :month="month"
+        :can-manage-rent="rentCanManage"
+        :property-timezone="currentProperty?.timezone"
+        @manage-long-term-rent="rentDialogOpen = true"
       />
 
       <FinanceRevenueTab v-if="tab === 'revenue'" :report="revenueRecognition" />
@@ -743,6 +886,17 @@ watch(
       <FinanceBreakdownTab v-if="tab === 'breakdown'" :summary="summary" />
     </template>
 
+    <FinanceLongTermRentDialog
+      v-if="rentDialogOpen"
+      :open="rentDialogOpen"
+      :property-id="pid"
+      :selected-month="month"
+      :rates="rentRates"
+      :can-manage="rentCanManage"
+      @update:open="rentDialogOpen = $event"
+      @changed="loadAll"
+    />
+
     <UiDialog
       :open="resetDialogOpen"
       title="Reset finance records?"
@@ -751,9 +905,8 @@ watch(
     >
       <div class="reset-preview">
         <p>
-          This destructive reset deletes manual transactions, Booking.com imports,
-          payout/statement rows, recurring rules, generated recurring rows, and finance attachments
-          for this property.
+          This destructive reset deletes manual transactions, Booking.com imports, payout/statement rows,
+          recurring rules, generated recurring rows, and finance attachments for this property.
         </p>
         <p class="reset-preview__keep">Cleaning salary from flat entries will remain visible in finance.</p>
         <UiInlineBanner
@@ -767,7 +920,7 @@ watch(
           <section>
             <h3>Will Delete</h3>
             <dl>
-              <template v-for="([label, value]) in resetDeleteCountItems" :key="label">
+              <template v-for="[label, value] in resetDeleteCountItems" :key="label">
                 <dt>{{ label }}</dt>
                 <dd>{{ value }}</dd>
               </template>
@@ -776,7 +929,7 @@ watch(
           <section>
             <h3>Will Preserve</h3>
             <dl>
-              <template v-for="([label, value]) in resetPreserveCountItems" :key="label">
+              <template v-for="[label, value] in resetPreserveCountItems" :key="label">
                 <dt>{{ label }}</dt>
                 <dd>{{ value }}</dd>
               </template>
@@ -785,13 +938,16 @@ watch(
         </div>
       </div>
       <template #footer>
-        <UiButton variant="secondary" :disabled="resetSubmitting" @click="resetDialogOpen = false">Cancel</UiButton>
+        <UiButton variant="secondary" :disabled="resetSubmitting" @click="resetDialogOpen = false"
+          >Cancel</UiButton
+        >
         <UiButton
           variant="danger"
           :disabled="resetPreviewLoading || !resetPreview"
           :loading="resetSubmitting"
           @click="submitFinanceReset"
-        >Reset finance records</UiButton>
+          >Reset finance records</UiButton
+        >
       </template>
     </UiDialog>
 
@@ -807,7 +963,9 @@ watch(
         <UiInlineBanner v-if="editError" tone="danger" :message="editError" />
       </form>
       <template #footer>
-        <UiButton variant="secondary" :disabled="editSubmitting" @click="editDialogOpen = false">Cancel</UiButton>
+        <UiButton variant="secondary" :disabled="editSubmitting" @click="editDialogOpen = false"
+          >Cancel</UiButton
+        >
         <UiButton variant="primary" :loading="editSubmitting" @click="submitEditTransaction">Save</UiButton>
       </template>
     </UiDialog>
@@ -828,10 +986,14 @@ watch(
         <UiSelect v-model.number="editRuleForm.category_id" label="Category">
           <option :value="0">Uncategorized</option>
           <option
-            v-for="c in categories.filter((x) => x.direction === 'both' || x.direction === editRuleForm.direction)"
+            v-for="c in categories.filter(
+              (x) => x.direction === 'both' || x.direction === editRuleForm.direction,
+            )"
             :key="c.id"
             :value="c.id"
-          >{{ c.title }}</option>
+          >
+            {{ c.title }}
+          </option>
         </UiSelect>
         <UiInput v-model="editRuleForm.start_month" type="month" label="Start month" />
         <UiInput v-model="editRuleForm.end_month" type="month" label="End month (optional)" />
@@ -839,8 +1001,12 @@ watch(
         <UiInlineBanner v-if="editRuleError" tone="danger" :message="editRuleError" />
       </form>
       <template #footer>
-        <UiButton variant="secondary" :disabled="editRuleSubmitting" @click="editRuleDialogOpen = false">Cancel</UiButton>
-        <UiButton variant="primary" :loading="editRuleSubmitting" @click="submitEditRecurringRule">Save</UiButton>
+        <UiButton variant="secondary" :disabled="editRuleSubmitting" @click="editRuleDialogOpen = false"
+          >Cancel</UiButton
+        >
+        <UiButton variant="primary" :loading="editRuleSubmitting" @click="submitEditRecurringRule"
+          >Save</UiButton
+        >
       </template>
     </UiDialog>
 
@@ -859,36 +1025,118 @@ watch(
           </span>
         </p>
         <p v-if="importPreview.duplicate_of_import_id" class="import-preview__warn">
-          This file (SHA-256 match) was previously committed as import #{{ importPreview.duplicate_of_import_id }}.
+          This file (SHA-256 match) was previously committed as import #{{
+            importPreview.duplicate_of_import_id
+          }}.
         </p>
         <ul class="import-preview__counts">
-          <li><strong>{{ importPreview.inserts.length }}</strong> new bookings</li>
-          <li><strong>{{ importPreview.updates.length }}</strong> updated bookings</li>
-          <li><strong>{{ importPreview.unchanged_count }}</strong> unchanged</li>
+          <li>
+            <strong>{{ plannedInsertCount }}</strong> planned new bookings
+          </li>
+          <li>
+            <strong>{{ importPreview.updates.length }}</strong> updated bookings
+          </li>
+          <li>
+            <strong>{{ importPreview.unchanged_count }}</strong> unchanged
+          </li>
           <li v-if="importPreview.skipped_other_hotel.length">
             <strong>{{ importPreview.skipped_other_hotel.length }}</strong> skipped (other hotel)
           </li>
           <li v-if="importPreview.rejected.length">
             <strong>{{ importPreview.rejected.length }}</strong> rejected
           </li>
+           <li v-if="plannedStayNameChangeCount && importPreview.source_type === 'payout'">
+             <strong>{{ plannedStayNameChangeCount }}</strong> stay-name changes
+          </li>
+          <li v-if="pendingOmissionCount > 0">
+            <strong>{{ pendingOmissionCount }}</strong> rows omitted unless selected
+          </li>
         </ul>
         <details v-if="importPreview.inserts.length" class="import-preview__list">
           <summary>New bookings ({{ importPreview.inserts.length }})</summary>
           <ul>
-            <li v-for="ins in importPreview.inserts.slice(0, 50)" :key="ins.reference">
+             <li v-for="ins in importPreview.inserts" :key="`${ins.line}-${ins.reference}`">
               {{ ins.reference }} — {{ ins.guest_name || '—' }}
               <span v-if="ins.check_in_date">({{ ins.check_in_date }} → {{ ins.check_out_date }})</span>
+              <span v-if="ins.named_stay_id"> · stay #{{ ins.named_stay_id }} · {{ ins.match_basis }}</span>
+              <span v-if="ins.stay_name && ins.stay_name !== ins.guest_name">
+                · {{ ins.stay_name }} → {{ ins.guest_name }}</span
+              >
               <span v-if="ins.status">[{{ ins.status }}]</span>
             </li>
           </ul>
+         </details>
+         <details v-if="importPreview.skipped_cancellations.length" open class="import-preview__list">
+           <summary>Cancelled reservations retained for statement analytics ({{ importPreview.skipped_cancellations.length }})</summary>
+           <ul>
+             <li v-for="item in importPreview.skipped_cancellations" :key="`${item.line}-${item.reference}`">
+               Line {{ item.line }}: {{ item.reference }} — {{ item.guest_name || '—' }}
+               ({{ item.check_in_date }} → {{ item.check_out_date }})
+             </li>
+           </ul>
+         </details>
+        <details v-if="importPreview.stay_name_changes.length" open class="import-preview__list">
+          <summary>Stay-name changes ({{ importPreview.stay_name_changes.length }})</summary>
+          <ul>
+            <li
+              v-for="change in importPreview.stay_name_changes"
+              :key="`${change.line}-${change.named_stay_id}`"
+            >
+              Line {{ change.line }}: {{ change.previous_display_name }} →
+              {{ change.payout_guest_name }} (stay #{{ change.named_stay_id }})
+            </li>
+          </ul>
         </details>
+        <section v-if="importPreview.needs_stay_selection.length" class="import-preview__selection">
+          <h3>Needs stay selection</h3>
+          <p>
+            Select an existing Booking.com stay for each ambiguous payout. Unselected rows remain rejected.
+          </p>
+          <article
+            v-for="item in importPreview.needs_stay_selection"
+            :key="item.line"
+            class="import-preview__selection-row"
+          >
+            <div>
+              <strong>Line {{ item.line }} · {{ item.reference }}</strong>
+              <div>
+                {{ item.guest_name || '—' }} · {{ item.check_in_date }} → {{ item.check_out_date }} ·
+                {{ item.net_cents }} cents
+              </div>
+             <small>{{ item.reason }}</small>
+              <small
+                v-if="importPreview.source_type === 'payout' &&
+                  staySelections[item.line] &&
+                  item.guest_name.trim() &&
+                  item.candidates.find((candidate) => candidate.named_stay_id === Number(staySelections[item.line]))
+                "
+               >
+                Proposed rename:
+                {{ item.candidates.find((candidate) => candidate.named_stay_id === Number(staySelections[item.line]))?.display_name }}
+                → {{ item.guest_name.trim() }}
+              </small>
+            </div>
+            <UiSelect v-model="staySelections[item.line]" label="Existing stay">
+              <option :value="undefined">Clear selection</option>
+              <option
+                v-for="candidate in item.candidates"
+                :key="candidate.named_stay_id"
+                :value="candidate.named_stay_id"
+              >
+                {{ candidate.check_in_date }} → {{ candidate.check_out_date }} ·
+                {{ candidate.display_name }} · {{ candidate.stay_type }} · #{{ candidate.named_stay_id }}
+              </option>
+            </UiSelect>
+          </article>
+        </section>
         <details v-if="importPreview.updates.length" class="import-preview__list">
           <summary>Updated bookings ({{ importPreview.updates.length }})</summary>
           <ul>
-            <li v-for="upd in importPreview.updates.slice(0, 50)" :key="upd.reference">
+             <li v-for="upd in importPreview.updates" :key="`${upd.line}-${upd.reference}`">
               {{ upd.reference }} — {{ upd.guest_name || '—' }}
               <span v-if="upd.status_changed" class="import-preview__flag">status changed</span>
-              <span v-if="upd.changes?.length"> · {{ upd.changes.map(c => c.field).join(', ') }}</span>
+              <span v-if="upd.changes?.length"> · {{ upd.changes.map((c) => c.field).join(', ') }}</span>
+              <span v-if="upd.named_stay_id"> · stay #{{ upd.named_stay_id }} · {{ upd.match_basis }}</span>
             </li>
           </ul>
         </details>
@@ -903,14 +1151,16 @@ watch(
         <details v-if="importPreview.rejected.length" class="import-preview__list">
           <summary>Rejected ({{ importPreview.rejected.length }})</summary>
           <ul>
-            <li v-for="r in importPreview.rejected.slice(0, 50)" :key="r.line">
+             <li v-for="r in importPreview.rejected" :key="`${r.line}-${r.reason}`">
               Line {{ r.line }}: {{ r.reason }}
             </li>
           </ul>
         </details>
       </div>
       <template #footer>
-        <UiButton variant="secondary" :disabled="importCommitting" @click="importPreviewOpen = false">Cancel</UiButton>
+        <UiButton variant="secondary" :disabled="importCommitting" @click="cancelBookingImport"
+          >Cancel</UiButton
+        >
         <UiButton variant="primary" :loading="importCommitting" @click="commitBookingImport">Commit</UiButton>
       </template>
     </UiDialog>

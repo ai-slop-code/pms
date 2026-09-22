@@ -210,7 +210,14 @@ func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, st
 		             AND upper(trim(COALESCE(fb.status, fb.reservation_status, ''))) NOT IN
 		                 ('CANCELLED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_PARTNER')
 		       ),
-		       ns.nuki_generation_status, ns.nuki_generation_error
+		       CASE
+		           WHEN ns.nuki_generation_status = 'pending' AND NOT EXISTS (
+		               SELECT 1 FROM nuki_access_codes nac
+		               WHERE nac.property_id = ns.property_id AND nac.named_stay_id = ns.id
+		                 AND nac.status = 'generated' AND TRIM(COALESCE(nac.external_nuki_id, '')) <> ''
+		           ) THEN 'not_generated'
+		           ELSE ns.nuki_generation_status
+		       END, ns.nuki_generation_error
 		FROM named_stays ns
 		WHERE ns.property_id = ? AND ns.status <> 'archived' AND ns.check_in_date < ? AND ns.check_out_date > ?
 		ORDER BY ns.check_in_date, ns.id`, propertyID, endDate, startDate)

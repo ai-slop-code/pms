@@ -17,6 +17,7 @@ interface Props {
   inputmode?: 'none' | 'text' | 'tel' | 'url' | 'email' | 'numeric' | 'decimal' | 'search'
   min?: string | number
   max?: string | number
+  step?: string | number
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -35,6 +36,7 @@ const props = withDefaults(defineProps<Props>(), {
   inputmode: undefined,
   min: undefined,
   max: undefined,
+  step: undefined,
 })
 
 const emit = defineEmits<{
@@ -78,6 +80,7 @@ function onInput(e: Event) {
       :inputmode="inputmode"
       :min="min ?? undefined"
       :max="max ?? undefined"
+      :step="step ?? undefined"
       :aria-invalid="!!error || undefined"
       :aria-describedby="describedBy"
       @input="onInput"

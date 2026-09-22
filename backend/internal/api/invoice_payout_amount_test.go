@@ -36,3 +36,15 @@ func TestPayoutInvoiceBillableCents_fallsBackToNet(t *testing.T) {
 		t.Fatalf("got %d want 5927", n)
 	}
 }
+
+func TestPayoutInvoiceBillableCents_UsesCorrectedRefundAmount(t *testing.T) {
+	p := &store.FinanceBookingPayout{
+		NetCents:    2310,
+		AmountCents: sql.NullInt64{Int64: 3557, Valid: true},
+		RowType:     sql.NullString{String: "Reservation", Valid: true},
+		RawRowJSON:  sql.NullString{String: `{"amount":"64.05"}`, Valid: true},
+	}
+	if n := payoutInvoiceBillableCents(p); n != 3557 {
+		t.Fatalf("got %d want 3557", n)
+	}
+}

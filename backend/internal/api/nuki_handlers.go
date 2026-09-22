@@ -211,23 +211,22 @@ func (s *Server) generateNukiCodes(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	var genErr error
-	if b.StayID != nil {
-		if b.PinName == nil || strings.TrimSpace(*b.PinName) == "" {
-			WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: "pin_name required"})
-			return
-		}
-		genErr = s.Nuki.GenerateCodeForNamedStay(r.Context(), pid, *b.StayID, "generate_one", strings.TrimSpace(*b.PinName))
-	} else {
-		genErr = s.Nuki.GenerateCodes(r.Context(), pid, "generate_all")
+	if b.StayID == nil || *b.StayID <= 0 {
+		WriteJSON(w, http.StatusBadRequest, actionResponse{OK: false, Error: "stay_id required"})
+		return
 	}
+	if b.PinName == nil || strings.TrimSpace(*b.PinName) == "" {
+		WriteJSON(w, http.StatusBadRequest, actionResponse{OK: false, Error: "pin_name required"})
+		return
+	}
+	genErr := s.Nuki.GenerateCodeForNamedStay(r.Context(), pid, *b.StayID, "generate_one", strings.TrimSpace(*b.PinName))
 	if genErr != nil {
 		WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: genErr.Error()})
 		return
 	}
 	// Refresh keypad cache so generated PIN value can be surfaced if provider returns it only in listing.
 	_ = s.Nuki.SyncProperty(r.Context(), pid, "after_generate_refresh")
-	s.audit(r, actor, "nuki_generate", "property", strconv.FormatInt(pid, 10), "success")
+	s.audit(r, actor, "nuki_generate", "named_stay", strconv.FormatInt(*b.StayID, 10), "success")
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
 }
 
@@ -321,6 +320,11 @@ func (s *Server) saveNukiStayName(w http.ResponseWriter, r *http.Request) {
 	var saved *string
 	if trimmed != "" {
 		saved = &trimmed
+	}
+	if s.Nuki != nil {
+		if err := s.Nuki.MaintainNamedStay(r.Context(), pid, stayID, "nuki_save_stay_name"); err != nil {
+			_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), pid, stayID, store.NukiGenerationError, err.Error())
+		}
 	}
 	s.audit(r, actor, "nuki_save_stay_name", "named_stay", strconv.FormatInt(stayID, 10), "success")
 	WriteJSON(w, http.StatusOK, struct {

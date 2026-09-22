@@ -42,8 +42,8 @@ func TestNamedStayStage4_PromoteRawBlockPartialPreservesRawCoverage(t *testing.T
 	if !stay.CleaningRequired {
 		t.Fatal("booking_com cleaning_required=false, want true")
 	}
-	if !stay.NukiGenerationStatus.Valid || stay.NukiGenerationStatus.String != NukiGenerationPending {
-		t.Fatalf("nuki_generation_status=%v want pending", stay.NukiGenerationStatus)
+	if !stay.NukiGenerationStatus.Valid || stay.NukiGenerationStatus.String != NukiGenerationNotApplicable {
+		t.Fatalf("nuki_generation_status=%v want not_applicable", stay.NukiGenerationStatus)
 	}
 	wantFirstKnown := dt("2026-07-01")
 	if !stay.FirstKnownAt.Equal(wantFirstKnown) {

@@ -180,9 +180,6 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 		reviewResolution = "confirmed"
 	}
 	nukiStatus := NukiGenerationNotApplicable
-	if namedStayNukiEligible(stayType, reviewStatus) {
-		nukiStatus = NukiGenerationPending
-	}
 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)

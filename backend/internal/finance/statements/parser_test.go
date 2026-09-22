@@ -41,6 +41,9 @@ func TestParsePayout_HappyPath(t *testing.T) {
 	if row.ReferenceNumber == "" {
 		t.Fatal("missing reference")
 	}
+	if row.Line != 2 {
+		t.Fatalf("line = %d, want 2", row.Line)
+	}
 	if row.NetCents == 0 {
 		t.Fatal("missing net cents")
 	}
@@ -52,6 +55,17 @@ func TestParsePayout_HappyPath(t *testing.T) {
 	}
 	if row.Currency != "EUR" {
 		t.Fatalf("currency = %q", row.Currency)
+	}
+}
+
+func TestParseRowsUsePhysicalCSVLinePositions(t *testing.T) {
+	body := strings.Replace(payoutCSV, "\n\"", "\n\n\"", 1)
+	res, err := DetectAndParse(strings.NewReader(body), testLoc(t))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(res.Rows) != 1 || res.Rows[0].Line != 3 {
+		t.Fatalf("rows = %+v, want one row at line 3", res.Rows)
 	}
 }
 
@@ -70,6 +84,21 @@ func TestParsePayout_BookingNumberColumn(t *testing.T) {
 	}
 	if res.Rows[0].ReferenceNumber != "6756848168" {
 		t.Fatalf("reference = %q, want 6756848168", res.Rows[0].ReferenceNumber)
+	}
+}
+
+func TestParsePayout_AddsVATToReservationCommission(t *testing.T) {
+	body := strings.Replace(payoutCSV, `"Commission","Payments service fee"`, `"Commission","VAT for online platform services","Payments service fee"`, 1)
+	body = strings.Replace(body, `"-37.50","-3.50"`, `"-37.50","-5.25","-3.50"`, 1)
+	res, err := DetectAndParse(strings.NewReader(body), testLoc(t))
+	if err != nil || len(res.Rows) != 1 {
+		t.Fatalf("parse: err=%v rows=%d", err, len(res.Rows))
+	}
+	if got := res.Rows[0].CommissionCents; got != 4275 {
+		t.Fatalf("commission = %d, want 4275", got)
+	}
+	if got := res.Rows[0].VATCents; got != 525 {
+		t.Fatalf("vat = %d, want 525", got)
 	}
 }
 
@@ -97,6 +126,18 @@ func TestParseStatement_HappyPath(t *testing.T) {
 	}
 	if row.AmountCents <= 0 {
 		t.Fatalf("amount cents = %d", row.AmountCents)
+	}
+}
+
+func TestParseStatement_MinutePrecisionUsesPropertyTimezone(t *testing.T) {
+	body := strings.Replace(statementCSV, "2026-08-20T14:30:00", "2026-08-30T10:25", 1)
+	res, err := DetectAndParse(strings.NewReader(body), testLoc(t))
+	if err != nil || len(res.Rows) != 1 {
+		t.Fatalf("parse: err=%v rows=%d rejected=%v", err, len(res.Rows), res.Rejected)
+	}
+	want := "2026-08-30T08:25:00Z"
+	if got := res.Rows[0].BookedOn.UTC().Format(time.RFC3339); got != want {
+		t.Fatalf("booked_on=%s want %s", got, want)
 	}
 }
 
