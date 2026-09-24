@@ -23,13 +23,26 @@ var manualMigrations = map[string]struct{}{
 }
 
 func Up(db *sql.DB) error {
-	return up(db, false)
+	return up(db, false, "")
 }
 
 // UpAutomatic applies ordinary migrations while leaving explicitly manual or
 // destructive migrations pending for an operator-controlled command.
 func UpAutomatic(db *sql.DB) error {
-	return up(db, true)
+	return up(db, true, "")
+}
+
+// UpCleaningCalendar explicitly completes the PMS-22 schema transition after
+// offline cleanup. It cannot apply PMS-21 or unrelated pending migrations.
+func UpCleaningCalendar(db *sql.DB) error {
+	var installed int
+	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE version = '000039_legacy_occupancy_removal'`).Scan(&installed); err != nil {
+		return fmt.Errorf("check PMS-21 migration prerequisite: %w", err)
+	}
+	if installed != 1 {
+		return fmt.Errorf("migration 000039_legacy_occupancy_removal must be completed through the PMS-21 procedure first")
+	}
+	return up(db, false, "000040_named_stay_only_cleaning_calendar")
 }
 
 // UpStartup applies the final schema for a new database, while existing
@@ -48,7 +61,7 @@ func UpStartup(db *sql.DB) error {
 	return UpAutomatic(db)
 }
 
-func up(db *sql.DB, automatic bool) error {
+func up(db *sql.DB, automatic bool, onlyVersion string) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY)`); err != nil {
 		return err
 	}
@@ -68,6 +81,9 @@ func up(db *sql.DB, automatic bool) error {
 	sort.Strings(ups)
 	for _, name := range ups {
 		version := strings.TrimSuffix(name, ".up.sql")
+		if onlyVersion != "" && version != onlyVersion {
+			continue
+		}
 		if automatic {
 			if _, manual := manualMigrations[version]; manual {
 				continue
@@ -76,6 +92,8 @@ func up(db *sql.DB, automatic bool) error {
 		var exists int
 		if err := db.QueryRow(`SELECT 1 FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err == nil {
 			continue
+		} else if err != sql.ErrNoRows {
+			return fmt.Errorf("check migration %s: %w", version, err)
 		}
 		body, err := embeddedMigrations.ReadFile(path.Join(".", name))
 		if err != nil {
@@ -89,6 +107,14 @@ func up(db *sql.DB, automatic bool) error {
 		tx, err := db.Begin()
 		if err != nil {
 			return err
+		}
+		// PMS-22 rebuilds both the event parent and its log children. Enforce
+		// their foreign keys at commit, once both replacement tables exist.
+		if version == "000040_named_stay_only_cleaning_calendar" {
+			if _, err := tx.Exec(`PRAGMA defer_foreign_keys = ON`); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("defer PMS-22 rebuild foreign keys: %w", err)
+			}
 		}
 		if _, err := tx.Exec(string(body)); err != nil {
 			_ = tx.Rollback()

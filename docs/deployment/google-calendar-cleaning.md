@@ -445,17 +445,24 @@ the one-time cleanup and migration. Build the backend, frontend, and
 Run the command against the configured database and current configured calendar:
 
 ```text
-cleaning-calendar-cleanup prepare
-cleaning-calendar-cleanup status
-cleaning-calendar-cleanup run
+/app/cleaning-calendar-cleanup prepare
+/app/cleaning-calendar-cleanup status
+/app/cleaning-calendar-cleanup run
+/app/cleaning-calendar-cleanup status
+/app/pms-migrate cleaning-calendar
 ```
 
 Repeat `run` after correcting access or configuration errors. It uses the
 original property-local cutoff and only the current calendar. Do not start an
 old backend after remote cleanup. Once `run` reports all properties complete,
-apply the forward migration and start only the new release. The migration
+apply the forward migration with `/app/pms-migrate cleaning-calendar` and start only the new release. The migration
 refuses incomplete cleanup and removes provisional local rows and logs without
 archiving them.
+
+Both commands are packaged in the main backend image alongside `/app/pms-server`.
+The migration command applies only migration 40 and requires the PMS-21
+transition (migration 39) already installed. For the standalone Podman deployment,
+use the [production repair runbook](pms-30-podman-calendar-repair.md).
 
 ## Troubleshooting
 
