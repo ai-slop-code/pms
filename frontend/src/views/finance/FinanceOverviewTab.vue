@@ -30,11 +30,42 @@ const periodLabel = computed(() => {
   const now = new Intl.DateTimeFormat('en-CA', { timeZone: props.propertyTimezone, year: 'numeric', month: '2-digit' }).format(new Date()).replace('/', '-')
   return props.month === now ? 'Month in progress' : props.month > now ? 'Future month — based on currently recorded data' : ''
 })
-const outcomeText = computed(() => {
+type LongTermNetPresentation = {
+  value: string
+  hint: string
+  tone: 'default' | 'success' | 'danger'
+}
+
+const longTermNetPresentation = computed<LongTermNetPresentation>(() => {
   const c = comparison.value
-  if (!c || c.status !== 'configured' || c.outcome === null || c.short_term_difference_cents === null) return ''
-  if (c.outcome === 'equal') return 'Same result as long-term rent'
-  return `Short-term ${c.outcome} by ${eur(Math.abs(c.short_term_difference_cents))}`
+  if (c?.status === 'not_configured') {
+    return {
+      value: 'Long-term rent not configured',
+      hint: 'Configure a monthly benchmark rent to compare results.',
+      tone: 'default',
+    }
+  }
+
+  const longTermNetCents = c?.status === 'configured' ? c.long_term_net_cents : null
+  const recognizedNetCents = props.recognizedNetCents
+  if (
+    c?.status !== 'configured' ||
+    !props.recognizedNetAvailable ||
+    typeof longTermNetCents !== 'number' ||
+    !Number.isInteger(longTermNetCents) ||
+    typeof recognizedNetCents !== 'number' ||
+    !Number.isInteger(recognizedNetCents)
+  ) {
+    return { value: 'Unavailable', hint: 'Not available for the current selection', tone: 'default' }
+  }
+
+  const displayCents = -Math.abs(longTermNetCents) + Math.max(recognizedNetCents, 0)
+  const normalizedDisplayCents = displayCents === 0 ? 0 : displayCents
+  return {
+    value: eur(normalizedDisplayCents),
+    hint: `Long term rent: ${eur(longTermNetCents)}`,
+    tone: normalizedDisplayCents < 0 ? 'danger' : normalizedDisplayCents > 0 ? 'success' : 'default',
+  }
 })
 </script>
 
@@ -84,14 +115,13 @@ const outcomeText = computed(() => {
         />
         <UiKpiCard
           label="Long-term net"
-          :value="comparison?.status === 'configured' && comparison.long_term_net_cents !== null ? eur(comparison.long_term_net_cents) : comparison?.status === 'not_configured' ? 'Long-term rent not configured' : 'Unavailable'"
-          :hint="comparison?.status === 'configured' ? outcomeText : comparison?.status === 'not_configured' ? 'Configure a monthly benchmark rent to compare results.' : 'Not available for the current selection'"
-          :tone="comparison?.status !== 'configured' ? 'default' : comparison.outcome === 'ahead' ? 'success' : comparison.outcome === 'behind' ? 'danger' : 'default'"
+          :value="longTermNetPresentation.value"
+          :hint="longTermNetPresentation.hint"
+          :tone="longTermNetPresentation.tone"
         />
         <div class="long-term-details">
           <UiButton v-if="canManageRent" size="sm" variant="secondary" @click="emit('manage-long-term-rent')">Manage long-term rent</UiButton>
           <template v-if="comparison?.status === 'configured'">
-            <span>{{ eur(comparison.monthly_rent_cents) }} rent − {{ eur(comparison.eligible_outgoing_cents) }} eligible expenses.</span>
             <span>Monthly rent less recorded outgoing, excluding booking payouts and cleaning salary/category expenses. Compared with Recognized net.</span>
             <strong v-if="periodLabel">{{ periodLabel }}</strong>
             <strong v-if="recognizedNetProvisional">Provisional — generated entries have not been synced.</strong>
