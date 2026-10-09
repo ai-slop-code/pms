@@ -5639,6 +5639,8 @@ export interface components {
             generated_error: string | null;
             /** Format: date-time */
             generated_updated_at: string | null;
+            operation_state?: string | null;
+            operation_error?: string | null;
         };
         NukiStayNamePatchRequest: {
             /** @description New named stay display name used for generated PIN labels. */

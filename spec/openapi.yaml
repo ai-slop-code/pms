@@ -2834,9 +2834,9 @@ components:
         generated_valid_from: { type: string, format: date-time, nullable: true }
         generated_valid_until: { type: string, format: date-time, nullable: true }
         generated_error: { type: string, nullable: true }
-         generated_updated_at: { type: string, format: date-time, nullable: true }
-         operation_state: { type: string, nullable: true }
-         operation_error: { type: string, nullable: true }
+        generated_updated_at: { type: string, format: date-time, nullable: true }
+        operation_state: { type: string, nullable: true }
+        operation_error: { type: string, nullable: true }
 
     NukiStayNamePatchRequest:
       type: object
