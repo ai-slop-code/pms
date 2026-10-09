@@ -132,6 +132,12 @@ The user supplied the production launch command: standalone Podman container
 and `--env-file ./pms.env`. The container runs read-only with `/tmp` tmpfs,
 dropped capabilities, and no-new-privileges.
 
+**Deployment update:** the user subsequently confirmed deployment of
+`ghcr.io/ai-slop-code/pms-backend:2.6.7` using those same launch settings. The
+production runbook now pins that image and provides copy-paste commands without
+a build step or release-tag placeholder. Deployment alone does not establish
+that the offline cleanup and migration have been executed.
+
 The original 2.6.5 image packages neither `cleaning-calendar-cleanup` nor a
 standalone PMS-22 migration command. The user requested that these tools ship in
 the main backend image rather than building a separate maintenance image.

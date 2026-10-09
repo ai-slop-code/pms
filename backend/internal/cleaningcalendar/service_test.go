@@ -16,11 +16,13 @@ import (
 )
 
 type fakeCalendarClient struct {
-	configured bool
-	upserts    []CalendarEventPayload
-	upsertIDs  []string
-	deletes    []string
-	events     []GoogleCalendarEvent
+	configured      bool
+	upserts         []CalendarEventPayload
+	upsertIDs       []string
+	deletes         []string
+	events          []GoogleCalendarEvent
+	upsertStatus    string
+	upsertStatusSet bool
 }
 
 func (f *fakeCalendarClient) Configured() bool { return f.configured }
@@ -29,13 +31,17 @@ func (f *fakeCalendarClient) ListEvents(context.Context, string, time.Time, time
 	return f.events, nil
 }
 
-func (f *fakeCalendarClient) UpsertEvent(_ context.Context, event CalendarEventPayload, googleEventID string) (string, error) {
+func (f *fakeCalendarClient) UpsertEvent(_ context.Context, event CalendarEventPayload, googleEventID string) (CalendarUpsertResult, error) {
 	f.upserts = append(f.upserts, event)
 	f.upsertIDs = append(f.upsertIDs, googleEventID)
 	if googleEventID != "" {
-		return googleEventID, nil
+		return CalendarUpsertResult{ID: googleEventID, Status: "confirmed"}, nil
 	}
-	return fmt.Sprintf("google-event-id-%d", len(f.upserts)), nil
+	status := f.upsertStatus
+	if !f.upsertStatusSet && status == "" {
+		status = "confirmed"
+	}
+	return CalendarUpsertResult{ID: fmt.Sprintf("google-event-id-%d", len(f.upserts)), Status: status}, nil
 }
 
 func (f *fakeCalendarClient) DeleteEvent(_ context.Context, _ string, googleEventID string) error {
@@ -146,6 +152,69 @@ func TestReconcileRemovalIsDateScoped(t *testing.T) {
 	}
 }
 
+func TestReconcileKeepsEligibleEventOutsideAffectedRange(t *testing.T) {
+	ctx := context.Background()
+	st, propertyID := setupCleaningCalendarProperty(t, ctx)
+	if _, err := st.DB.ExecContext(ctx, `UPDATE properties SET timezone = 'Europe/Bratislava' WHERE id = ?`, propertyID); err != nil {
+		t.Fatal(err)
+	}
+	outside := createCleaningStay(t, st, propertyID, "October 11", "2026-10-10", "2026-10-11")
+	client := &fakeCalendarClient{configured: true}
+	svc := testService(st, client)
+	svc.Now = func() time.Time { return time.Date(2026, 10, 8, 16, 34, 54, 0, time.UTC) }
+	if _, err := svc.ReconcilePropertyDateRange(ctx, propertyID, "2026-10-11", "2026-10-11", "named_stay_promote"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.GetCleaningCalendarEventByCleaningIdentity(ctx, store.NamedStayCleaningIdentity(propertyID, outside.ID, "2026-10-11"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrival := createCleaningStay(t, st, propertyID, "October 9", "2026-10-08", "2026-10-09")
+	if _, err := svc.ReconcilePropertyDateRange(ctx, propertyID, "2026-10-08", "2026-10-09", "named_stay_promote"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := st.GetCleaningCalendarEventByCleaningIdentity(ctx, store.NamedStayCleaningIdentity(propertyID, arrival.ID, "2026-10-09"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != store.CleaningCalendarStatusSynced || created.CleaningDate != "2026-10-09" {
+		t.Fatalf("arrival event was not created: %+v", created)
+	}
+	after, err := st.GetCleaningCalendarEventByCleaningIdentity(ctx, store.NamedStayCleaningIdentity(propertyID, outside.ID, "2026-10-11"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deletionLogs int
+	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM cleaning_calendar_event_logs WHERE cleaning_calendar_event_id = ? AND action = 'delete'`, before.ID).Scan(&deletionLogs); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.deletes) != 0 || deletionLogs != 0 || after.ID != before.ID || after.GoogleEventID.String != before.GoogleEventID.String || after.Status != before.Status || after.PendingAction != before.PendingAction || !after.StartsAt.Equal(before.StartsAt) || !after.EndsAt.Equal(before.EndsAt) {
+		t.Fatalf("outside-range event changed: before=%+v after=%+v deletes=%v", before, after, client.deletes)
+	}
+}
+
+func TestReconcileRejectsCancelledGoogleUpsertResponse(t *testing.T) {
+	for _, status := range []string{"cancelled", ""} {
+		t.Run(map[string]string{"cancelled": "cancelled", "": "missing"}[status], func(t *testing.T) {
+			ctx := context.Background()
+			st, propertyID := setupCleaningCalendarProperty(t, ctx)
+			stay := createCleaningStay(t, st, propertyID, "Invalid response", "2026-07-09", "2026-07-10")
+			client := &fakeCalendarClient{configured: true, upsertStatus: status, upsertStatusSet: true}
+			svc := testService(st, client)
+			if _, err := svc.ReconcilePropertyDateRange(ctx, propertyID, "2026-07-10", "2026-07-10", "test"); err == nil {
+				t.Fatalf("%s Google response unexpectedly succeeded", status)
+			}
+			event, err := st.GetCleaningCalendarEventByCleaningIdentity(ctx, store.NamedStayCleaningIdentity(propertyID, stay.ID, "2026-07-10"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.Status == store.CleaningCalendarStatusSynced || event.PendingAction != store.CleaningPendingActionUpsert {
+				t.Fatalf("%s response persisted as success: %+v", status, event)
+			}
+		})
+	}
+}
+
 func TestReconcilePreservesStoredGoogleIDAndEventHistory(t *testing.T) {
 	ctx := context.Background()
 	st, propertyID := setupCleaningCalendarProperty(t, ctx)
@@ -247,7 +316,7 @@ func TestGoogleWriteOmitsLegacyOccupancyProperty(t *testing.T) {
 		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
 			return nil, err
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewBufferString(`{"id":"google-id"}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewBufferString(`{"id":"google-id","status":"confirmed"}`)), Header: make(http.Header)}, nil
 	})}
 	client := &ServiceAccountClient{HTTP: httpClient, accessToken: "token", expiresAt: time.Now().Add(time.Hour)}
 	if _, err := client.writeEvent(context.Background(), http.MethodPost, "https://calendar.test/events", CalendarEventPayload{
@@ -263,6 +332,9 @@ func TestGoogleWriteOmitsLegacyOccupancyProperty(t *testing.T) {
 	}
 	if private["pms_named_stay_id"] != "7" || private["pms_cleaning_identity"] != "stay:1:7:2026-07-10" {
 		t.Fatalf("new ownership missing: %+v", private)
+	}
+	if requestBody["status"] != "confirmed" {
+		t.Fatalf("confirmed status missing from write payload: %+v", requestBody)
 	}
 }
 

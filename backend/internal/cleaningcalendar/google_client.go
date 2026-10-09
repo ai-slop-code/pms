@@ -65,14 +65,14 @@ func (c *ServiceAccountClient) Configured() bool {
 	return c != nil && c.ClientEmail != "" && c.PrivateKey != nil
 }
 
-func (c *ServiceAccountClient) UpsertEvent(ctx context.Context, event CalendarEventPayload, googleEventID string) (string, error) {
+func (c *ServiceAccountClient) UpsertEvent(ctx context.Context, event CalendarEventPayload, googleEventID string) (CalendarUpsertResult, error) {
 	if strings.TrimSpace(googleEventID) != "" {
 		id, err := c.patchEvent(ctx, event, googleEventID)
 		if err == nil {
 			return id, nil
 		}
 		if !errors.Is(err, errGoogleNotFound) {
-			return "", err
+			return CalendarUpsertResult{}, err
 		}
 	}
 	return c.insertEvent(ctx, event)
@@ -177,18 +177,18 @@ func (c *ServiceAccountClient) DeleteEvent(ctx context.Context, calendarID, goog
 	return googleAPIError(res)
 }
 
-func (c *ServiceAccountClient) insertEvent(ctx context.Context, event CalendarEventPayload) (string, error) {
+func (c *ServiceAccountClient) insertEvent(ctx context.Context, event CalendarEventPayload) (CalendarUpsertResult, error) {
 	return c.writeEvent(ctx, http.MethodPost, fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events", url.PathEscape(event.CalendarID)), event)
 }
 
-func (c *ServiceAccountClient) patchEvent(ctx context.Context, event CalendarEventPayload, googleEventID string) (string, error) {
+func (c *ServiceAccountClient) patchEvent(ctx context.Context, event CalendarEventPayload, googleEventID string) (CalendarUpsertResult, error) {
 	return c.writeEvent(ctx, http.MethodPatch, fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events/%s", url.PathEscape(event.CalendarID), url.PathEscape(googleEventID)), event)
 }
 
-func (c *ServiceAccountClient) writeEvent(ctx context.Context, method, endpoint string, event CalendarEventPayload) (string, error) {
+func (c *ServiceAccountClient) writeEvent(ctx context.Context, method, endpoint string, event CalendarEventPayload) (CalendarUpsertResult, error) {
 	token, err := c.token(ctx)
 	if err != nil {
-		return "", err
+		return CalendarUpsertResult{}, err
 	}
 	private := map[string]string{
 		"pms_property_id":           fmt.Sprintf("%d", event.PropertyID),
@@ -202,6 +202,7 @@ func (c *ServiceAccountClient) writeEvent(ctx context.Context, method, endpoint 
 		private["pms_cleaning_identity"] = strings.TrimSpace(event.Identity)
 	}
 	body := map[string]interface{}{
+		"status":      "confirmed",
 		"summary":     event.Summary,
 		"description": event.Description,
 		"start": map[string]string{
@@ -219,31 +220,32 @@ func (c *ServiceAccountClient) writeEvent(ctx context.Context, method, endpoint 
 	payload, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return "", err
+		return CalendarUpsertResult{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	res, err := c.HTTP.Do(req)
 	if err != nil {
-		return "", err
+		return CalendarUpsertResult{}, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
-		return "", errGoogleNotFound
+		return CalendarUpsertResult{}, errGoogleNotFound
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", googleAPIError(res)
+		return CalendarUpsertResult{}, googleAPIError(res)
 	}
 	var out struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
-		return "", err
+		return CalendarUpsertResult{}, err
 	}
 	if strings.TrimSpace(out.ID) == "" {
-		return "", errors.New("google calendar response missing event id")
+		return CalendarUpsertResult{}, errors.New("google calendar response missing event id")
 	}
-	return out.ID, nil
+	return CalendarUpsertResult{ID: out.ID, Status: out.Status}, nil
 }
 
 func parseGoogleEventTime(dateTimeValue, dateValue string) (time.Time, error) {

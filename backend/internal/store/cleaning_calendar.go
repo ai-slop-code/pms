@@ -396,17 +396,40 @@ type CleaningNamedStayTarget struct {
 	CheckOutDate string
 }
 
-func (s *Store) ListCleaningNamedStayTargets(ctx context.Context, propertyID int64, fromDate, toDate string) ([]CleaningNamedStayTarget, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date
+const cleaningNamedStayEligibility = `
 		FROM named_stays ns
 		WHERE ns.property_id = ?
 		  AND ns.status = 'active'
 		  AND ns.cleaning_required = 1
 		  AND COALESCE(ns.review_resolution, ns.review_status, 'confirmed') = 'confirmed'
-		  AND COALESCE(ns.stay_outcome, '') NOT IN ('no_show', 'cancelled_non_refundable')
+		  AND COALESCE(ns.stay_outcome, '') NOT IN ('no_show', 'cancelled_non_refundable')`
+
+func (s *Store) ListCleaningNamedStayTargets(ctx context.Context, propertyID int64, fromDate, toDate string) ([]CleaningNamedStayTarget, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date
+		`+cleaningNamedStayEligibility+`
 		  AND ns.check_out_date >= ? AND ns.check_out_date <= ?
 		ORDER BY ns.check_out_date ASC, ns.id ASC`, propertyID, fromDate, toDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CleaningNamedStayTarget{}
+	for rows.Next() {
+		var row CleaningNamedStayTarget
+		if err := rows.Scan(&row.NamedStayID, &row.PropertyID, &row.DisplayName, &row.StayType, &row.CheckInDate, &row.CheckOutDate); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListCleaningNamedStayOwners(ctx context.Context, propertyID int64) ([]CleaningNamedStayTarget, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date
+		`+cleaningNamedStayEligibility+`
+		ORDER BY ns.check_out_date ASC, ns.id ASC`, propertyID)
 	if err != nil {
 		return nil, err
 	}

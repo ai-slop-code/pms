@@ -22,8 +22,13 @@ const (
 type CalendarClient interface {
 	Configured() bool
 	ListEvents(ctx context.Context, calendarID string, timeMin, timeMax time.Time) ([]GoogleCalendarEvent, error)
-	UpsertEvent(ctx context.Context, event CalendarEventPayload, googleEventID string) (string, error)
+	UpsertEvent(ctx context.Context, event CalendarEventPayload, googleEventID string) (CalendarUpsertResult, error)
 	DeleteEvent(ctx context.Context, calendarID, googleEventID string) error
+}
+
+type CalendarUpsertResult struct {
+	ID     string
+	Status string
 }
 
 type GoogleCalendarEvent struct {
@@ -178,13 +183,10 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 	if err != nil {
 		return finish(err)
 	}
-	desired := make(map[string]struct{})
 	reusedGoogleIDs := make(map[string]struct{})
 	for i := range desiredEvents {
 		event := desiredEvents[i]
 		stats.EventsSeen++
-		key := cleaningEventKey(event)
-		desired[key] = struct{}{}
 		existing := s.lookupExistingDesiredEvent(ctx, event)
 		if existing != nil {
 			if !existing.ScheduleHash.Valid || existing.ScheduleHash.String == event.ScheduleHash.String {
@@ -197,6 +199,9 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 			}
 			if s.canSkipGoogleUpsert(existing, event, googleIndex.listed, googleIndex.seen(existing)) {
 				continue
+			}
+			if existing.GoogleEventID.Valid && strings.TrimSpace(existing.GoogleEventID.String) != "" {
+				reusedGoogleIDs[strings.TrimSpace(existing.GoogleEventID.String)] = struct{}{}
 			}
 		} else if matchedID := googleIndex.match(event, nil); matchedID != "" {
 			event.GoogleEventID = sql.NullString{String: matchedID, Valid: true}
@@ -218,8 +223,22 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 	if err != nil {
 		return finish(err)
 	}
+	owners, err := s.Store.ListCleaningNamedStayOwners(ctx, propertyID)
+	if err != nil {
+		return finish(err)
+	}
+	ownerByID := make(map[int64]store.CleaningNamedStayTarget, len(owners))
+	for _, owner := range owners {
+		ownerByID[owner.NamedStayID] = owner
+	}
 	for _, ev := range active {
-		if _, ok := desired[cleaningEventKey(&ev)]; ok {
+		if ev.PendingAction == store.CleaningPendingActionDelete {
+			if err := s.syncDelete(ctx, &ev, runID); err != nil {
+				msg := err.Error()
+				runErr = &msg
+				continue
+			}
+			stats.EventsRemoved++
 			continue
 		}
 		if ev.CleaningDate < horizonFrom && ev.PendingAction != store.CleaningPendingActionDelete {
@@ -227,6 +246,16 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 				_ = s.Store.SetCleaningCalendarEventPendingAction(ctx, ev.PropertyID, ev.ID, store.CleaningPendingActionNone)
 			}
 			continue
+		}
+		owner, ownerEligible := ownerByID[nullInt64Value(ev.NamedStayID)]
+		identityCurrent := ownerEligible && ev.CleaningDate == owner.CheckOutDate &&
+			nullStringValue(ev.CleaningIdentity) == store.NamedStayCleaningIdentity(propertyID, owner.NamedStayID, owner.CheckOutDate)
+		if identityCurrent {
+			continue
+		}
+		reason := "owner_ineligible"
+		if ownerEligible {
+			reason = "checkout_changed"
 		}
 		if ev.GoogleEventID.Valid {
 			if _, reused := reusedGoogleIDs[strings.TrimSpace(ev.GoogleEventID.String)]; reused {
@@ -243,7 +272,7 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 			ev.GoogleEventID = sql.NullString{String: matchedID, Valid: true}
 			_ = s.Store.MarkCleaningCalendarEventGoogleSeen(ctx, ev.PropertyID, ev.ID, matchedID)
 		}
-		if err := s.syncDelete(ctx, &ev, runID); err != nil {
+		if err := s.syncDelete(ctx, &ev, runID, fmt.Sprintf("property=%d trigger=%s range=%s..%s horizon=%s event_identity=%s reason=%s", propertyID, trigger, fromDate, toDate, horizonTo, nullStringValue(ev.CleaningIdentity), reason)); err != nil {
 			msg := err.Error()
 			runErr = &msg
 			continue
@@ -251,16 +280,6 @@ func (s *Service) ReconcilePropertyDateRange(ctx context.Context, propertyID int
 		stats.EventsRemoved++
 	}
 	return finish(nil)
-}
-
-func cleaningEventKey(event *store.CleaningCalendarEvent) string {
-	if event == nil {
-		return ""
-	}
-	if event.CleaningIdentity.Valid && strings.TrimSpace(event.CleaningIdentity.String) != "" {
-		return "identity:" + strings.TrimSpace(event.CleaningIdentity.String)
-	}
-	return fmt.Sprintf("event:%d", event.ID)
 }
 
 func (s *Service) buildDesiredEvents(ctx context.Context, propertyID int64, settings *store.GoogleCleaningSettings, profile *store.PropertyProfile, timezone string, loc *time.Location, fromDate, toDate string) ([]*store.CleaningCalendarEvent, error) {
@@ -514,7 +533,7 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 		insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, "upsert_error", msg)
 		return errors.New(msg)
 	}
-	googleID, err := s.Client.UpsertEvent(ctx, CalendarEventPayload{
+	result, err := s.Client.UpsertEvent(ctx, CalendarEventPayload{
 		CalendarID:   event.GoogleCalendarID,
 		Summary:      event.Title,
 		Description:  "",
@@ -532,7 +551,13 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 		insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, "upsert_error", msg)
 		return err
 	}
-	if err := s.Store.UpdateCleaningCalendarEventGoogleResult(ctx, event.PropertyID, event.ID, googleID, store.CleaningCalendarStatusSynced, nil); err != nil {
+	if strings.TrimSpace(result.ID) == "" || result.Status != "confirmed" {
+		msg := fmt.Sprintf("google calendar upsert returned invalid event state: id=%q status=%q", result.ID, result.Status)
+		_ = s.Store.UpdateCleaningCalendarEventGoogleResult(ctx, event.PropertyID, event.ID, result.ID, store.CleaningCalendarStatusError, &msg)
+		insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, "upsert_error", msg)
+		return errors.New(msg)
+	}
+	if err := s.Store.UpdateCleaningCalendarEventGoogleResult(ctx, event.PropertyID, event.ID, result.ID, store.CleaningCalendarStatusSynced, nil); err != nil {
 		return err
 	}
 	action := "upsert"
@@ -540,7 +565,7 @@ func (s *Service) syncUpsert(ctx context.Context, event *store.CleaningCalendarE
 	return nil
 }
 
-func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarEvent, runID int64) error {
+func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarEvent, runID int64, diagnostics ...string) error {
 	if err := s.Store.SetCleaningCalendarEventPendingAction(ctx, event.PropertyID, event.ID, store.CleaningPendingActionDelete); err != nil {
 		return err
 	}
@@ -562,6 +587,9 @@ func (s *Service) syncDelete(ctx context.Context, event *store.CleaningCalendarE
 		return err
 	}
 	message := "removed"
+	if len(diagnostics) > 0 && strings.TrimSpace(diagnostics[0]) != "" {
+		message += "; " + diagnostics[0]
+	}
 	action := "delete"
 	insertLog(s.Store, ctx, event.PropertyID, event.ID, runID, action, message)
 	return nil
