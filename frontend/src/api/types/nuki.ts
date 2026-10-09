@@ -30,6 +30,8 @@ export interface NukiUpcomingStay {
   generated_masked: string | null
   generated_error: string | null
   generated_updated_at: string | null
+  operation_state: string | null
+  operation_error: string | null
 }
 
 export interface NukiRun {

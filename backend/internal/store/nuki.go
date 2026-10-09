@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -81,23 +80,25 @@ type NukiKeypadCode struct {
 }
 
 type UpcomingStayWithCode struct {
-	StayID              int64
-	SourceEventUID      string
-	RawSummary          sql.NullString
-	GuestDisplayName    sql.NullString
-	StayType            string
-	StartAt             time.Time
-	EndAt               time.Time
-	StayStatus          string
-	GeneratedCodeID     sql.NullInt64
-	GeneratedLabel      sql.NullString
-	GeneratedStatus     sql.NullString
-	GeneratedMasked     sql.NullString
-	GeneratedPIN        sql.NullString
-	GeneratedValidFrom  sql.NullTime
-	GeneratedValidUntil sql.NullTime
-	GeneratedError      sql.NullString
-	GeneratedUpdated    sql.NullTime
+	StayID                  int64
+	SourceEventUID          string
+	RawSummary              sql.NullString
+	GuestDisplayName        sql.NullString
+	StayType                string
+	StartAt                 time.Time
+	EndAt                   time.Time
+	StayStatus              string
+	GeneratedCodeID         sql.NullInt64
+	GeneratedLabel          sql.NullString
+	GeneratedStatus         sql.NullString
+	GeneratedMasked         sql.NullString
+	GeneratedPIN            sql.NullString
+	GeneratedValidFrom      sql.NullTime
+	GeneratedValidUntil     sql.NullTime
+	GeneratedError          sql.NullString
+	GeneratedUpdated        sql.NullTime
+	GeneratedOperationState sql.NullString
+	GeneratedOperationError sql.NullString
 }
 
 func (s *Store) StartNukiSyncRun(ctx context.Context, propertyID int64, trigger string) (int64, error) {
@@ -201,6 +202,19 @@ func (s *Store) GetNukiCodeByID(ctx context.Context, propertyID, codeID int64) (
 	}
 	if len(rows) == 0 {
 		return nil, nil
+	}
+	return &rows[0], nil
+}
+
+func (s *Store) GetNukiCodeByExternalID(ctx context.Context, propertyID int64, externalID string) (*NukiAccessCode, error) {
+	rows, err := s.scanNukiCodes(ctx, `
+		SELECT id, property_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
+		FROM nuki_access_codes WHERE property_id = ? AND external_nuki_id = ?`, propertyID, strings.TrimSpace(externalID))
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, sql.ErrNoRows
 	}
 	return &rows[0], nil
 }
@@ -398,7 +412,14 @@ func (s *Store) ListNukiCodesForCleanup(ctx context.Context, propertyID int64, n
 	q := `
 		SELECT id, property_id, named_stay_id, code_label, access_code_masked, generated_pin_plain, external_nuki_id, valid_from, valid_until, status, error_message, last_sync_run_id, created_at, updated_at, revoked_at
 		FROM nuki_access_codes
-		WHERE property_id = ? AND status = 'generated' AND valid_until < ?
+		WHERE property_id = ? AND status IN ('generated', 'revoked')
+		  AND valid_until < ? AND external_nuki_id IS NOT NULL AND TRIM(external_nuki_id) != ''
+		  AND NOT EXISTS (
+		      SELECT 1 FROM nuki_managed_credentials mc
+		      WHERE mc.property_id = nuki_access_codes.property_id
+		        AND mc.remote_id = nuki_access_codes.external_nuki_id
+		        AND mc.operation_state = 'deleted'
+		  )
 		ORDER BY valid_until ASC`
 	return s.scanNukiCodes(ctx, q, propertyID, nowUTC.UTC().Format(time.RFC3339))
 }
@@ -559,26 +580,7 @@ func (s *Store) DeleteMissingNukiKeypadCodes(ctx context.Context, propertyID int
 }
 
 func nukiLabelWindowLinkPredicate(accessAlias, keypadAlias string) string {
-	return fmt.Sprintf(`
-		COALESCE(TRIM(%[1]s.code_label), '') != ''
-		AND COALESCE(TRIM(%[2]s.name), '') != ''
-		AND LOWER(TRIM(%[1]s.code_label)) = LOWER(TRIM(%[2]s.name))
-		AND (
-			(
-				%[1]s.valid_from IS NOT NULL
-				AND %[1]s.valid_until IS NOT NULL
-				AND %[2]s.valid_from IS NOT NULL
-				AND %[2]s.valid_until IS NOT NULL
-				AND (
-					(strftime('%%s', %[1]s.valid_from) < strftime('%%s', %[2]s.valid_until)
-					 AND strftime('%%s', %[1]s.valid_until) > strftime('%%s', %[2]s.valid_from))
-					OR
-					(date(%[1]s.valid_from) = date(%[2]s.valid_from)
-					 AND date(%[1]s.valid_until) = date(%[2]s.valid_until))
-				)
-			)
-			OR LOWER(TRIM(%[1]s.code_label)) LIKE 'booking-%%'
-		)`, accessAlias, keypadAlias)
+	return "1 = 0"
 }
 
 func (s *Store) ListNukiKeypadCodes(ctx context.Context, propertyID int64) ([]NukiKeypadCode, error) {
@@ -587,11 +589,7 @@ func (s *Store) ListNukiKeypadCodes(ctx context.Context, propertyID int64) ([]Nu
 		       EXISTS(
 		           SELECT 1 FROM nuki_access_codes nac
 		           WHERE nac.property_id = kc.property_id
-		             AND nac.status = 'generated'
-		             AND (
-		                 nac.external_nuki_id = kc.external_nuki_id
-		                 OR (` + nukiLabelWindowLinkPredicate("nac", "kc") + `)
-		             )
+		             AND nac.external_nuki_id = kc.external_nuki_id
 		       ) AS pms_linked,
 		       kc.raw_json, kc.last_seen_at, kc.created_at, kc.updated_at
 		FROM nuki_keypad_codes kc
@@ -649,7 +647,6 @@ func (s *Store) MarkNukiAccessCodesDeletedByExternalID(ctx context.Context, prop
 		SET status = 'revoked',
 		    access_code_masked = NULL,
 		    generated_pin_plain = NULL,
-		    external_nuki_id = NULL,
 		    error_message = NULL,
 		    revoked_at = ?,
 		    updated_at = ?
@@ -760,6 +757,16 @@ func (s *Store) GetNukiKeypadCodeByExternalID(ctx context.Context, propertyID in
 	return &r, nil
 }
 
+func (s *Store) IsNukiExternalIDOwned(ctx context.Context, propertyID int64, externalID string) (bool, error) {
+	var owned int
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM nuki_access_codes
+			WHERE property_id = ? AND external_nuki_id = ?
+		)`, propertyID, strings.TrimSpace(externalID)).Scan(&owned)
+	return owned == 1, err
+}
+
 func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, limit int) ([]UpcomingStayWithCode, error) {
 	if limit <= 0 || limit > 300 {
 		limit = 120
@@ -793,7 +800,13 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		           ELSE NULL
 		       END,
 		       nac.valid_from, nac.valid_until,
-		       nac.error_message, nac.updated_at
+		       nac.error_message, nac.updated_at,
+		       (SELECT mc.operation_state FROM nuki_managed_credentials mc
+		        WHERE mc.property_id = nac.property_id AND mc.named_stay_id = nac.named_stay_id
+		        ORDER BY mc.id DESC LIMIT 1),
+		       (SELECT mc.latest_error FROM nuki_managed_credentials mc
+		        WHERE mc.property_id = nac.property_id AND mc.named_stay_id = nac.named_stay_id
+		        ORDER BY mc.id DESC LIMIT 1)
 		FROM named_stays ns
 		LEFT JOIN nuki_access_codes nac ON nac.property_id = ns.property_id AND nac.named_stay_id = ns.id
 		LEFT JOIN nuki_keypad_codes nk ON nk.property_id = nac.property_id AND (
@@ -818,7 +831,7 @@ func (s *Store) ListUpcomingStaysForNuki(ctx context.Context, propertyID int64, 
 		var r UpcomingStayWithCode
 		var checkIn, checkOut string
 		var upd, vf, vu sql.NullString
-		if err := rows.Scan(&r.StayID, &r.SourceEventUID, &r.GuestDisplayName, &r.StayType, &checkIn, &checkOut, &r.StayStatus, &r.GeneratedCodeID, &r.GeneratedLabel, &r.GeneratedStatus, &r.GeneratedMasked, &r.GeneratedPIN, &vf, &vu, &r.GeneratedError, &upd); err != nil {
+		if err := rows.Scan(&r.StayID, &r.SourceEventUID, &r.GuestDisplayName, &r.StayType, &checkIn, &checkOut, &r.StayStatus, &r.GeneratedCodeID, &r.GeneratedLabel, &r.GeneratedStatus, &r.GeneratedMasked, &r.GeneratedPIN, &vf, &vu, &r.GeneratedError, &upd, &r.GeneratedOperationState, &r.GeneratedOperationError); err != nil {
 			return nil, err
 		}
 		if err := s.decryptNS(&r.GeneratedPIN); err != nil {

@@ -14,13 +14,17 @@ export function displayStatus(status?: string | null): string {
     case 'after_generate_refresh': return 'Post-generate refresh'
     case 'generate_all': return 'Generate all'
     case 'generate_one': return 'Generate one'
+    case 'create_pending': return 'Creation pending'
+    case 'update_pending': return 'Update pending'
+    case 'delete_pending': return 'Deletion pending'
+    case 'needs_review': return 'Needs review'
     default: return status ? status.replaceAll('_', ' ') : 'Unknown'
   }
 }
 
 export function statusTone(status?: string | null): NukiBadgeTone {
   if (status === 'generated' || status === 'success') return 'success'
-  if (status === 'revoked' || status === 'partial' || status === 'running') return 'warning'
+  if (status === 'revoked' || status === 'partial' || status === 'running' || status?.endsWith('_pending') || status === 'needs_review') return 'warning'
   if (status === 'failure') return 'danger'
   if (status === 'not_generated' || !status) return 'neutral'
   return 'neutral'

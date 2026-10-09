@@ -107,11 +107,7 @@ func (s *Service) SyncProperty(ctx context.Context, propertyID int64, trigger st
 	} else {
 		stats.failedN++
 	}
-	if destructiveReconcile {
-		if err := s.Store.ReconcileNukiAccessCodesWithKeypad(ctx, propertyID, keep); err != nil {
-			stats.failedN++
-		}
-	}
+	// Inventory absence never erases durable PMS ownership or provenance.
 	status := "success"
 	var msg *string
 	if stats.failedN > 0 {
@@ -167,14 +163,18 @@ func (s *Service) MaintainNamedStay(ctx context.Context, propertyID, stayID int6
 	}
 	nukiStay := store.NukiStay{NamedStayID: stay.ID, PropertyID: propertyID, DisplayName: stay.DisplayName, CheckInDate: stay.CheckInDate, CheckOutDate: stay.CheckOutDate}
 	from, until := namedStayWindow(nukiStay, loc, inH, inM, outH, outM)
-	res, err := s.Client.UpdateAccess(ctx, cred, code.ExternalNukiID.String, UpsertAccessRequest{Label: buildGuestCodeLabelFromName(stay.DisplayName), ValidFrom: from, ValidUntil: until})
+	label := buildGuestCodeLabelFromName(stay.DisplayName)
+	if len([]rune(label)) > 32 {
+		return errors.New("nuki_authorization_name_too_long")
+	}
+	res, err := s.Client.UpdateAccess(ctx, cred, code.ExternalNukiID.String, UpsertAccessRequest{Label: label, ValidFrom: from, ValidUntil: until})
 	if err != nil {
 		code.ErrorMessage = sql.NullString{String: truncateErr(err.Error()), Valid: true}
 		_ = s.Store.UpsertNukiCode(ctx, code)
 		_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stayID, store.NukiGenerationError, err.Error())
 		return err
 	}
-	code.CodeLabel = buildGuestCodeLabelFromName(stay.DisplayName)
+	code.CodeLabel = label
 	code.ValidFrom, code.ValidUntil = from, until
 	code.ErrorMessage = sql.NullString{}
 	if res != nil && strings.TrimSpace(res.ExternalID) != "" && strings.TrimSpace(res.ExternalID) != code.ExternalNukiID.String {
@@ -230,7 +230,6 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 		_ = s.finishRun(ctx, propertyID, runID, "failure", &msg, stats)
 		return err
 	}
-	accountUserID := s.discoverAccountUserID(ctx, propertyID)
 	keypadCodes, _ := s.Store.ListNukiKeypadCodes(ctx, propertyID)
 
 	// Process only the explicitly selected stay. No bulk generation or
@@ -252,6 +251,13 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 		if pinName != nil && onlyStayID != nil && stay.NamedStayID == *onlyStayID {
 			label = buildGuestCodeLabelFromName(*pinName)
 		}
+		if len([]rune(label)) > 32 {
+			err := errors.New("nuki_authorization_name_too_long")
+			stats.failedN++
+			selectedErr = err
+			_ = s.upsertFailure(ctx, propertyID, stay.NamedStayID, runID, label, from, until, nil, err)
+			continue
+		}
 		code, err := s.Store.GetNukiCodeByNamedStayID(ctx, propertyID, stay.NamedStayID)
 		if err != nil {
 			stats.failedN++
@@ -261,6 +267,15 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 		}
 		stats.processed++
 		if code == nil {
+			pending, pendingErr := s.Store.HasPendingNukiManagedCredentialForStay(ctx, propertyID, stay.NamedStayID)
+			if pendingErr != nil {
+				return pendingErr
+			}
+			if pending {
+				selectedErr = errors.New("nuki_creation_pending_reconciliation")
+				stats.failedN++
+				continue
+			}
 			if ext, masked := findMatchingKeypadEntry(label, from, until, keypadCodes); ext != "" {
 				linked := &store.NukiAccessCode{
 					PropertyID:       propertyID,
@@ -281,19 +296,39 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 			}
 			// new
 			req := UpsertAccessRequest{
-				Label:         label,
-				ValidFrom:     from,
-				ValidUntil:    until,
-				AccountUserID: accountUserID,
-				AccessCode:    randomNumericCode(6),
+				Label:      label,
+				ValidFrom:  from,
+				ValidUntil: until,
+				AccessCode: randomNumericCode(6),
+			}
+			managedID, err := s.Store.CreateNukiManagedCredential(ctx, &store.NukiManagedCredential{
+				PropertyID:          propertyID,
+				NamedStayID:         sql.NullInt64{Int64: stay.NamedStayID, Valid: true},
+				SmartlockID:         cred.SmartLockID,
+				Provenance:          "correlated_creation_intent",
+				ProvenanceReference: sql.NullString{String: fmt.Sprintf("sync-run:%d", runID), Valid: true},
+				DesiredLabel:        label, DesiredValidFrom: from, DesiredValidUntil: until,
+				DesiredEnabled: true, OperationState: "create_pending", OperationRevision: 1,
+				PendingPIN: sql.NullString{String: req.AccessCode, Valid: true},
+			})
+			if err != nil {
+				stats.failedN++
+				selectedErr = err
+				continue
 			}
 			res, err := s.Client.CreateAccess(ctx, cred, req)
 			if err != nil {
+				_ = s.Store.UpdateNukiManagedOperation(ctx, managedID, "create_pending", 1, "", truncateErr(err.Error()), time.Now().UTC().Add(time.Minute), false, false)
 				stats.failedN++
 				selectedErr = err
 				_ = s.upsertFailure(ctx, propertyID, stay.NamedStayID, runID, label, from, until, nil, err)
 				continue
 			}
+			state := "create_pending"
+			if strings.TrimSpace(res.ExternalID) != "" {
+				state = "active"
+			}
+			_ = s.Store.UpdateNukiManagedOperation(ctx, managedID, state, 2, strings.TrimSpace(res.ExternalID), "", time.Time{}, true, state == "active")
 			pinForMask := strings.TrimSpace(res.AccessCode)
 			if pinForMask == "" {
 				pinForMask = req.AccessCode
@@ -310,9 +345,21 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 				Status:            "generated",
 				LastSyncRunID:     sql.NullInt64{Int64: runID, Valid: true},
 			}
+			if strings.TrimSpace(res.ExternalID) == "" {
+				newCode.Status = "not_generated"
+				newCode.AccessCodeMasked = sql.NullString{}
+				newCode.GeneratedPINPlain = sql.NullString{}
+				newCode.ErrorMessage = sql.NullString{String: "nuki_creation_pending_reconciliation", Valid: true}
+			}
 			if err := s.Store.UpsertNukiCode(ctx, newCode); err != nil {
 				stats.failedN++
 				selectedErr = err
+				continue
+			}
+			if strings.TrimSpace(res.ExternalID) == "" {
+				selectedErr = errors.New("nuki_creation_pending_reconciliation")
+				stats.failedN++
+				_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationError, selectedErr.Error())
 				continue
 			}
 			_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stay.NamedStayID, store.NukiGenerationGenerated, "")
@@ -336,12 +383,7 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 				}
 			}
 		}
-		if len(keypadCodes) > 0 && code.ExternalNukiID.Valid && strings.TrimSpace(code.ExternalNukiID.String) != "" {
-			if !isExternalLinkUsable(code.ExternalNukiID.String, label, from, until, keypadCodes) {
-				// stale/ambiguous link (typically name-only match) must not block fresh PIN creation
-				code.ExternalNukiID = sql.NullString{}
-			}
-		}
+		// A retained identity remains owned even when provider metadata changes.
 		needsUpdate := code.ValidFrom.UTC().Format(time.RFC3339) != from.UTC().Format(time.RFC3339) ||
 			code.ValidUntil.UTC().Format(time.RFC3339) != until.UTC().Format(time.RFC3339) ||
 			code.Status != "generated" ||
@@ -356,12 +398,23 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 			continue
 		}
 
-		req := UpsertAccessRequest{Label: label, ValidFrom: from, ValidUntil: until, AccountUserID: accountUserID}
+		req := UpsertAccessRequest{Label: label, ValidFrom: from, ValidUntil: until}
 		if !code.ExternalNukiID.Valid || strings.TrimSpace(code.ExternalNukiID.String) == "" || code.Status == "revoked" {
 			req.AccessCode = randomNumericCode(6)
 		}
-		var res *UpsertAccessResponse
 		updating := code.ExternalNukiID.Valid && strings.TrimSpace(code.ExternalNukiID.String) != "" && code.Status != "revoked"
+		var res *UpsertAccessResponse
+		if !updating {
+			pending, pendingErr := s.Store.HasPendingNukiManagedCredentialForStay(ctx, propertyID, stay.NamedStayID)
+			if pendingErr != nil {
+				return pendingErr
+			}
+			if pending {
+				selectedErr = errors.New("nuki_creation_pending_reconciliation")
+				stats.failedN++
+				continue
+			}
+		}
 		if updating {
 			res, err = s.Client.UpdateAccess(ctx, cred, code.ExternalNukiID.String, req)
 		} else {
@@ -420,33 +473,6 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 		return selectedErr
 	}
 	return finishErr
-}
-
-func (s *Service) discoverAccountUserID(ctx context.Context, propertyID int64) string {
-	rows, err := s.Store.ListNukiKeypadCodes(ctx, propertyID)
-	if err != nil {
-		return ""
-	}
-	for _, row := range rows {
-		if !row.RawJSON.Valid || strings.TrimSpace(row.RawJSON.String) == "" {
-			continue
-		}
-		var m map[string]interface{}
-		if err := json.Unmarshal([]byte(row.RawJSON.String), &m); err != nil {
-			continue
-		}
-		if v, ok := m["accountUserId"]; ok && v != nil {
-			switch vv := v.(type) {
-			case string:
-				if strings.TrimSpace(vv) != "" {
-					return strings.TrimSpace(vv)
-				}
-			case float64:
-				return strconv.FormatInt(int64(vv), 10)
-			}
-		}
-	}
-	return ""
 }
 
 func (s *Service) loadNukiSyncContext(ctx context.Context, propertyID int64, includeProfile bool) (*store.Property, *store.PropertyProfile, Credentials, *time.Location, int, int, int, int, error) {
@@ -508,23 +534,67 @@ func (s *Service) CleanupExpiredCodes(ctx context.Context, propertyID int64) err
 	if err != nil {
 		return err
 	}
+	var firstErr error
 	for i := range codes {
 		code := &codes[i]
 		if code.ExternalNukiID.Valid && strings.TrimSpace(code.ExternalNukiID.String) != "" {
-			_ = s.Client.RevokeAccess(ctx, cred, code.ExternalNukiID.String)
+			if err := s.Store.StartNukiManagedDeletion(ctx, &store.NukiManagedCredential{
+				PropertyID: propertyID, NamedStayID: code.NamedStayID,
+				NukiAccessCodeID: sql.NullInt64{Int64: code.ID, Valid: true}, SmartlockID: cred.SmartLockID,
+				RemoteID: code.ExternalNukiID, Provenance: "direct_provider_identity", DesiredLabel: code.CodeLabel,
+				DesiredValidFrom: code.ValidFrom, DesiredValidUntil: code.ValidUntil, DesiredEnabled: true,
+			}); err != nil && firstErr == nil {
+				firstErr = err
+				continue
+			}
+			if err := s.Client.RevokeAccess(ctx, cred, code.ExternalNukiID.String); err != nil {
+				code.ErrorMessage = sql.NullString{String: truncateErr(err.Error()), Valid: true}
+				if saveErr := s.Store.UpsertNukiCode(ctx, code); saveErr != nil && firstErr == nil {
+					firstErr = saveErr
+				}
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			rows, listErr := s.Client.ListKeypadCodes(ctx, cred)
+			if listErr != nil {
+				if firstErr == nil {
+					firstErr = listErr
+				}
+				continue
+			}
+			present := false
+			for _, row := range rows {
+				if strings.TrimSpace(row.ExternalID) == strings.TrimSpace(code.ExternalNukiID.String) {
+					present = true
+					break
+				}
+			}
+			if !present {
+				if err := s.Store.MarkNukiManagedDeleted(ctx, propertyID, cred.SmartLockID, code.ExternalNukiID.String); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
 		}
 		code.Status = "revoked"
 		code.AccessCodeMasked = sql.NullString{}
 		code.GeneratedPINPlain = sql.NullString{}
-		code.ExternalNukiID = sql.NullString{}
 		code.ErrorMessage = sql.NullString{}
 		now := time.Now().UTC()
 		code.RevokedAt = sql.NullTime{Time: now, Valid: true}
-		_ = s.Store.UpsertNukiCode(ctx, code)
+		if err := s.Store.UpsertNukiCode(ctx, code); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 		cid := code.ID
-		_ = s.Store.InsertNukiEventLog(ctx, propertyID, &cid, nil, "cleanup_expired", "expired code moved to historical", "")
+		if err := s.Store.InsertNukiEventLog(ctx, propertyID, &cid, nil, "cleanup_expired", "expired code deletion accepted; confirmation pending", ""); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	return firstErr
 }
 
 func (s *Service) ReconcileCleanerDailyLogs(ctx context.Context, propertyID int64) (*ReconcileStats, error) {
@@ -814,13 +884,43 @@ func (s *Service) DeleteKeypadCode(ctx context.Context, propertyID int64, extern
 	if strings.TrimSpace(externalID) == "" {
 		return fmt.Errorf("external_id_required")
 	}
+	owned, err := s.Store.IsNukiExternalIDOwned(ctx, propertyID, externalID)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		return fmt.Errorf("nuki_external_code_not_owned")
+	}
+	code, err := s.Store.GetNukiCodeByExternalID(ctx, propertyID, externalID)
+	if err != nil {
+		return err
+	}
+	if err := s.Store.StartNukiManagedDeletion(ctx, &store.NukiManagedCredential{
+		PropertyID: propertyID, NamedStayID: code.NamedStayID,
+		NukiAccessCodeID: sql.NullInt64{Int64: code.ID, Valid: true}, SmartlockID: cred.SmartLockID,
+		RemoteID: sql.NullString{String: externalID, Valid: true}, Provenance: "direct_provider_identity",
+		DesiredLabel: code.CodeLabel, DesiredValidFrom: code.ValidFrom, DesiredValidUntil: code.ValidUntil,
+		DesiredEnabled: true,
+	}); err != nil {
+		return err
+	}
 	if err := s.Client.RevokeAccess(ctx, cred, externalID); err != nil {
 		return err
 	}
-	if err := s.Store.DeleteNukiKeypadCodeByExternalID(ctx, propertyID, externalID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	rows, err := s.Client.ListKeypadCodes(ctx, cred)
+	if err != nil {
 		return err
 	}
-	// Keep generated PIN state in sync with manual deletions.
+	for _, row := range rows {
+		if strings.TrimSpace(row.ExternalID) == strings.TrimSpace(externalID) {
+			return nil
+		}
+	}
+	if err := s.Store.MarkNukiManagedDeleted(ctx, propertyID, cred.SmartLockID, externalID); err != nil {
+		return err
+	}
+	// Keep the cached identity and ownership visible until remote absence is
+	// confirmed; only secret material is cleared by the projection update.
 	if err := s.Store.MarkNukiAccessCodesDeletedByExternalID(ctx, propertyID, externalID); err != nil {
 		return err
 	}
@@ -840,14 +940,27 @@ func (s *Service) SetKeypadCodeEnabled(ctx context.Context, propertyID int64, ex
 	if strings.TrimSpace(externalID) == "" {
 		return fmt.Errorf("external_id_required")
 	}
+	owned, err := s.Store.IsNukiExternalIDOwned(ctx, propertyID, externalID)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		return fmt.Errorf("nuki_external_code_not_owned")
+	}
 	payload := map[string]interface{}{
 		"enabled": enabled,
 	}
 	localRow, rowErr := s.Store.GetNukiKeypadCodeByExternalID(ctx, propertyID, externalID)
+	if rowErr == nil && localRow != nil && localRow.Name.Valid && strings.TrimSpace(localRow.Name.String) != "" {
+		payload["name"] = strings.TrimSpace(localRow.Name.String)
+	}
 	if rowErr == nil && localRow != nil && localRow.RawJSON.Valid && strings.TrimSpace(localRow.RawJSON.String) != "" {
 		if p := buildTogglePayloadFromRaw(localRow.RawJSON.String, enabled); len(p) > 0 {
 			payload = p
 		}
+	}
+	if _, ok := payload["name"]; !ok {
+		return fmt.Errorf("nuki_toggle_requires_current_name")
 	}
 	if err := s.Client.SetAccessEnabled(ctx, cred, externalID, payload); err != nil {
 		return err
@@ -893,23 +1006,53 @@ func buildTogglePayloadFromRaw(raw string, enabled bool) map[string]interface{} 
 	copyIfExists("remoteAllowed")
 	copyIfExists("smartActionsEnabled")
 	copyIfExists("type")
-	copyIfExists("accountUserId")
+	if raw, ok := src["accountUserId"]; ok {
+		switch v := raw.(type) {
+		case float64:
+			out["accountUserId"] = int64(v)
+		case string:
+			if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+				out["accountUserId"] = n
+			}
+		}
+	}
 	return out
 }
 
 func (s *Service) revokeCode(ctx context.Context, cred Credentials, runID int64, code *store.NukiAccessCode, reason string) error {
-	if code.ExternalNukiID.Valid && strings.TrimSpace(code.ExternalNukiID.String) != "" {
-		if err := s.Client.RevokeAccess(ctx, cred, code.ExternalNukiID.String); err != nil {
-			code.Status = "generated"
-			code.ErrorMessage = sql.NullString{String: truncateErr(err.Error()), Valid: true}
-			if runID > 0 {
-				code.LastSyncRunID = sql.NullInt64{Int64: runID, Valid: true}
-			}
-			_ = s.Store.UpsertNukiCode(ctx, code)
-			cid := code.ID
-			_ = s.Store.InsertNukiEventLog(ctx, code.PropertyID, &cid, nil, "revoke_failed", code.ErrorMessage.String, "")
-			return err
+	if !code.ExternalNukiID.Valid || strings.TrimSpace(code.ExternalNukiID.String) == "" {
+		return errors.New("nuki_remote_identity_unresolved")
+	}
+	if err := s.Store.StartNukiManagedDeletion(ctx, &store.NukiManagedCredential{
+		PropertyID: code.PropertyID, NamedStayID: code.NamedStayID,
+		NukiAccessCodeID: sql.NullInt64{Int64: code.ID, Valid: true}, SmartlockID: cred.SmartLockID,
+		RemoteID: code.ExternalNukiID, Provenance: "direct_provider_identity", DesiredLabel: code.CodeLabel,
+		DesiredValidFrom: code.ValidFrom, DesiredValidUntil: code.ValidUntil, DesiredEnabled: true,
+	}); err != nil {
+		return err
+	}
+	if err := s.Client.RevokeAccess(ctx, cred, code.ExternalNukiID.String); err != nil {
+		code.Status = "generated"
+		code.ErrorMessage = sql.NullString{String: truncateErr(err.Error()), Valid: true}
+		if runID > 0 {
+			code.LastSyncRunID = sql.NullInt64{Int64: runID, Valid: true}
 		}
+		_ = s.Store.UpsertNukiCode(ctx, code)
+		cid := code.ID
+		_ = s.Store.InsertNukiEventLog(ctx, code.PropertyID, &cid, nil, "revoke_failed", code.ErrorMessage.String, "")
+		return err
+	}
+	rows, err := s.Client.ListKeypadCodes(ctx, cred)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if strings.TrimSpace(row.ExternalID) == strings.TrimSpace(code.ExternalNukiID.String) {
+			return errors.New("nuki_deletion_pending_confirmation")
+		}
+	}
+	if err := s.Store.MarkNukiManagedDeleted(ctx, code.PropertyID, cred.SmartLockID, code.ExternalNukiID.String); err != nil {
+		return err
 	}
 	code.Status = "revoked"
 	code.ErrorMessage = sql.NullString{}
@@ -959,27 +1102,8 @@ func (s *Service) bindAccessCodesToKeypadRows(ctx context.Context, propertyID, r
 	updated := 0
 	for _, row := range codes {
 		code := row.Code
-		if code.Status == "revoked" {
+		if code.ExternalNukiID.Valid && strings.TrimSpace(code.ExternalNukiID.String) != "" {
 			continue
-		}
-		if code.ExternalNukiID.Valid && strings.TrimSpace(code.ExternalNukiID.String) != "" &&
-			isExternalLinkUsable(code.ExternalNukiID.String, code.CodeLabel, code.ValidFrom, code.ValidUntil, rows) {
-			continue
-		}
-		ext, masked := findMatchingKeypadEntry(code.CodeLabel, code.ValidFrom, code.ValidUntil, rows)
-		if ext == "" {
-			continue
-		}
-		code.ExternalNukiID = sql.NullString{String: ext, Valid: true}
-		if !code.AccessCodeMasked.Valid || strings.TrimSpace(code.AccessCodeMasked.String) == "" {
-			code.AccessCodeMasked = maskCode(masked)
-		}
-		code.Status = "generated"
-		code.ErrorMessage = sql.NullString{}
-		code.LastSyncRunID = sql.NullInt64{Int64: runID, Valid: true}
-		code.RevokedAt = sql.NullTime{}
-		if err := s.Store.UpsertNukiCode(ctx, &code); err == nil {
-			updated++
 		}
 	}
 	return updated
@@ -1069,61 +1193,10 @@ func randomNumericCode(n int) string {
 	return string(buf)
 }
 
-func findMatchingKeypadEntry(label string, from, until time.Time, rows []store.NukiKeypadCode) (externalID, masked string) {
-	l := labelKey(label)
-	nameOnlyMatches := 0
-	var nameOnly store.NukiKeypadCode
-	for _, row := range rows {
-		if strings.TrimSpace(row.ExternalNukiID) == "" {
-			continue
-		}
-		if !row.Name.Valid || labelKey(row.Name.String) != l {
-			continue
-		}
-		if !row.ValidFrom.Valid || !row.ValidUntil.Valid {
-			if strings.HasPrefix(l, "booking-") {
-				nameOnlyMatches++
-				nameOnly = row
-			}
-			continue
-		}
-		if !windowsLikelySame(from, until, row.ValidFrom.Time.UTC(), row.ValidUntil.Time.UTC()) {
-			continue
-		}
-		m := ""
-		if row.AccessCodeMasked.Valid {
-			m = row.AccessCodeMasked.String
-		}
-		return row.ExternalNukiID, m
-	}
-	if strings.HasPrefix(l, "booking-") && nameOnlyMatches == 1 {
-		m := ""
-		if nameOnly.AccessCodeMasked.Valid {
-			m = nameOnly.AccessCodeMasked.String
-		}
-		return nameOnly.ExternalNukiID, m
-	}
+func findMatchingKeypadEntry(label string, from, until time.Time, rows []store.NukiKeypadCode) (string, string) {
+	// Provider metadata is not ownership evidence. Durable identities are the
+	// only link accepted by lifecycle mutations.
 	return "", ""
-}
-
-func isExternalLinkUsable(externalID, label string, from, until time.Time, rows []store.NukiKeypadCode) bool {
-	if strings.TrimSpace(externalID) == "" {
-		return false
-	}
-	l := labelKey(label)
-	for _, row := range rows {
-		if strings.TrimSpace(row.ExternalNukiID) != strings.TrimSpace(externalID) {
-			continue
-		}
-		if !row.Name.Valid || labelKey(row.Name.String) != l {
-			return false
-		}
-		if !row.ValidFrom.Valid || !row.ValidUntil.Valid {
-			return strings.HasPrefix(l, "booking-")
-		}
-		return windowsLikelySame(from, until, row.ValidFrom.Time.UTC(), row.ValidUntil.Time.UTC())
-	}
-	return false
 }
 
 func windowsLikelySame(aFrom, aUntil, bFrom, bUntil time.Time) bool {

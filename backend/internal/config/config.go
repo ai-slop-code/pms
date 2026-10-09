@@ -94,7 +94,7 @@ func Load() (*Config, error) {
 			nukiTimeout = n
 		}
 	}
-	nukiLogFetchLimit := 500
+	nukiLogFetchLimit := 50
 	if v := os.Getenv("NUKI_LOG_FETCH_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			nukiLogFetchLimit = n

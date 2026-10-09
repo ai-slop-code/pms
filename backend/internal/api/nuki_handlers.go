@@ -35,22 +35,24 @@ type nukiCodesResponse struct {
 }
 
 type nukiUpcomingStayRow struct {
-	StayID              int64   `json:"stay_id"`
-	SourceEventUID      string  `json:"source_event_uid"`
-	Summary             *string `json:"summary"`
-	SavedPinName        *string `json:"saved_pin_name"`
-	StayType            string  `json:"stay_type"`
-	StartAt             string  `json:"start_at"`
-	EndAt               string  `json:"end_at"`
-	StayStatus          string  `json:"stay_status"`
-	GeneratedCodeID     *int64  `json:"generated_code_id"`
-	GeneratedLabel      *string `json:"generated_label"`
-	GeneratedStatus     *string `json:"generated_status"`
-	GeneratedMasked     *string `json:"generated_masked"`
-	GeneratedValidFrom  *string `json:"generated_valid_from"`
-	GeneratedValidUntil *string `json:"generated_valid_until"`
-	GeneratedError      *string `json:"generated_error"`
-	GeneratedUpdatedAt  *string `json:"generated_updated_at"`
+	StayID                  int64   `json:"stay_id"`
+	SourceEventUID          string  `json:"source_event_uid"`
+	Summary                 *string `json:"summary"`
+	SavedPinName            *string `json:"saved_pin_name"`
+	StayType                string  `json:"stay_type"`
+	StartAt                 string  `json:"start_at"`
+	EndAt                   string  `json:"end_at"`
+	StayStatus              string  `json:"stay_status"`
+	GeneratedCodeID         *int64  `json:"generated_code_id"`
+	GeneratedLabel          *string `json:"generated_label"`
+	GeneratedStatus         *string `json:"generated_status"`
+	GeneratedMasked         *string `json:"generated_masked"`
+	GeneratedValidFrom      *string `json:"generated_valid_from"`
+	GeneratedValidUntil     *string `json:"generated_valid_until"`
+	GeneratedError          *string `json:"generated_error"`
+	GeneratedUpdatedAt      *string `json:"generated_updated_at"`
+	GeneratedOperationState *string `json:"operation_state"`
+	GeneratedOperationError *string `json:"operation_error"`
 }
 
 type nukiUpcomingStaysResponse struct {
@@ -266,22 +268,24 @@ func (s *Server) listNukiUpcomingStays(w http.ResponseWriter, r *http.Request) {
 			summary = nullStringPtr(row.RawSummary)
 		}
 		out = append(out, nukiUpcomingStayRow{
-			StayID:              row.StayID,
-			SourceEventUID:      row.SourceEventUID,
-			Summary:             summary,
-			SavedPinName:        nullStringPtr(row.GuestDisplayName),
-			StayType:            row.StayType,
-			StartAt:             row.StartAt.UTC().Format(time.RFC3339),
-			EndAt:               row.EndAt.UTC().Format(time.RFC3339),
-			StayStatus:          row.StayStatus,
-			GeneratedCodeID:     nullInt64Ptr(row.GeneratedCodeID),
-			GeneratedLabel:      nullStringPtr(row.GeneratedLabel),
-			GeneratedStatus:     nullStringPtr(row.GeneratedStatus),
-			GeneratedMasked:     nullStringPtr(row.GeneratedMasked),
-			GeneratedValidFrom:  nullTimePtr(row.GeneratedValidFrom),
-			GeneratedValidUntil: nullTimePtr(row.GeneratedValidUntil),
-			GeneratedError:      nullStringPtr(row.GeneratedError),
-			GeneratedUpdatedAt:  nullTimePtr(row.GeneratedUpdated),
+			StayID:                  row.StayID,
+			SourceEventUID:          row.SourceEventUID,
+			Summary:                 summary,
+			SavedPinName:            nullStringPtr(row.GuestDisplayName),
+			StayType:                row.StayType,
+			StartAt:                 row.StartAt.UTC().Format(time.RFC3339),
+			EndAt:                   row.EndAt.UTC().Format(time.RFC3339),
+			StayStatus:              row.StayStatus,
+			GeneratedCodeID:         nullInt64Ptr(row.GeneratedCodeID),
+			GeneratedLabel:          nullStringPtr(row.GeneratedLabel),
+			GeneratedStatus:         nullStringPtr(row.GeneratedStatus),
+			GeneratedMasked:         nullStringPtr(row.GeneratedMasked),
+			GeneratedValidFrom:      nullTimePtr(row.GeneratedValidFrom),
+			GeneratedValidUntil:     nullTimePtr(row.GeneratedValidUntil),
+			GeneratedError:          nullStringPtr(row.GeneratedError),
+			GeneratedUpdatedAt:      nullTimePtr(row.GeneratedUpdated),
+			GeneratedOperationState: nullStringPtr(row.GeneratedOperationState),
+			GeneratedOperationError: nullStringPtr(row.GeneratedOperationError),
 		})
 	}
 	WriteJSON(w, http.StatusOK, nukiUpcomingStaysResponse{Stays: out})
@@ -430,6 +434,10 @@ func (s *Server) deleteNukiKeypadCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Nuki.DeleteKeypadCode(r.Context(), pid, externalID, "manual_delete"); err != nil {
+		if err.Error() == "nuki_external_code_not_owned" {
+			WriteError(w, http.StatusForbidden, "external code is not PMS-owned")
+			return
+		}
 		if s.Store.IsNotFound(err) {
 			WriteError(w, http.StatusNotFound, "not found")
 			return
@@ -474,6 +482,10 @@ func (s *Server) patchNukiKeypadCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Nuki.SetKeypadCodeEnabled(r.Context(), pid, externalID, *body.Enabled, "manual_toggle"); err != nil {
+		if err.Error() == "nuki_external_code_not_owned" {
+			WriteError(w, http.StatusForbidden, "external code is not PMS-owned")
+			return
+		}
 		if s.Store.IsNotFound(err) {
 			WriteError(w, http.StatusNotFound, "not found")
 			return

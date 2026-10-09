@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,22 @@ type UpsertAccessRequest struct {
 	AccountUserID string
 	AccessCode    string
 }
+
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	RetryAfter time.Duration
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	if e.Body == "" {
+		return fmt.Sprintf("nuki http status %d", e.StatusCode)
+	}
+	return fmt.Sprintf("nuki http status %d: %s", e.StatusCode, e.Body)
+}
+
+func (e *HTTPError) Accepted() bool { return e.StatusCode == http.StatusNoContent }
 
 type UpsertAccessResponse struct {
 	ExternalID string
@@ -83,7 +101,7 @@ func NewClient(cfg Config) Client {
 	return &httpClient{
 		baseURL:       strings.TrimRight(cfg.BaseURL, "/"),
 		http:          &http.Client{Timeout: cfg.Timeout, Transport: otelx.HTTPTransport(nil)},
-		logFetchLimit: positiveOrDefault(cfg.LogFetchLimit, 500),
+		logFetchLimit: positiveOrDefault(cfg.LogFetchLimit, 50),
 		logMaxPages:   positiveOrDefault(cfg.LogMaxPages, 10),
 	}
 }
@@ -143,163 +161,84 @@ type httpClient struct {
 }
 
 func (c *httpClient) ListKeypadCodes(ctx context.Context, cred Credentials) ([]KeypadAccessCode, error) {
-	paths := []string{
-		"/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth",
-		"/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth?enabled=true",
-		"/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth?enabled=false",
-		"/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth/advanced",
+	path := "/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth"
+	var out []map[string]interface{}
+	if err := c.do(ctx, http.MethodGet, path, cred.APIToken, nil, &out); err != nil {
+		return nil, err
 	}
-	seen := map[string]KeypadAccessCode{}
-	var lastErr error
-	for _, path := range paths {
-		var out []map[string]interface{}
-		err := c.do(ctx, http.MethodGet, path, cred.APIToken, nil, &out)
-		if err != nil {
-			lastErr = err
-			// Optional path variants can fail on different Nuki deployments.
-			// Keep collecting from other variants and only fail if all fail.
-			continue
+	rows := make([]KeypadAccessCode, 0, len(out))
+	for _, row := range out {
+		code := rowToKeypadAccessCode(row)
+		if strings.TrimSpace(code.ExternalID) == "" {
+			return nil, errors.New("nuki authorization missing id")
 		}
-		for _, row := range out {
-			code := rowToKeypadAccessCode(row)
-			code.ExternalID = strings.TrimSpace(code.ExternalID)
-			if code.ExternalID == "" {
-				continue
-			}
-			existing, ok := seen[code.ExternalID]
-			if !ok {
-				seen[code.ExternalID] = code
-				continue
-			}
-			seen[code.ExternalID] = mergeKeypadAccessCode(existing, code)
-		}
+		rows = append(rows, code)
 	}
-	if len(seen) == 0 && lastErr != nil {
-		return nil, lastErr
-	}
-	events := make([]KeypadAccessCode, 0, len(seen))
-	for _, code := range seen {
-		events = append(events, code)
-	}
-	return events, nil
+	return rows, nil
 }
 
 func (c *httpClient) ListSmartlockEvents(ctx context.Context, cred Credentials, since time.Time, authID string) ([]SmartlockEvent, error) {
 	path := "/smartlock/" + url.PathEscape(cred.SmartLockID) + "/log"
-	sinceUnix := since.UTC().Unix()
 	authID = strings.TrimSpace(authID)
-	limit := positiveOrDefault(c.logFetchLimit, 500)
+	limit := positiveOrDefault(c.logFetchLimit, 50)
+	if limit > 50 {
+		limit = 50
+	}
 	maxPages := positiveOrDefault(c.logMaxPages, 10)
-	withParams := func(base string, extra map[string]string) string {
-		q := url.Values{}
-		for k, v := range extra {
-			if strings.TrimSpace(v) != "" {
-				q.Set(k, strings.TrimSpace(v))
-			}
-		}
-		return base + "?" + q.Encode()
-	}
-	baseParams := map[string]string{
-		"limit": strconv.Itoa(limit),
-	}
-	if authID != "" {
-		baseParams["authId"] = authID
-	}
-	paramVariants := []map[string]string{
-		{
-			"fromDate": strconv.FormatInt(sinceUnix, 10),
-			"limit":    baseParams["limit"],
-			"authId":   baseParams["authId"],
-		},
-		{
-			"dateSince": strconv.FormatInt(sinceUnix, 10),
-			"limit":     baseParams["limit"],
-			"authId":    baseParams["authId"],
-		},
-		{
-			"limit":  baseParams["limit"],
-			"authId": baseParams["authId"],
-		},
-	}
+	from := since.UTC().Format(time.RFC3339Nano)
+	to := time.Now().UTC().Format(time.RFC3339Nano)
 	seen := map[string]SmartlockEvent{}
-	seenKeys := map[string]struct{}{}
-	var sawSuccess bool
-	var lastErr error
-	for _, variant := range paramVariants {
-		for page := 0; page < maxPages; page++ {
-			params := map[string]string{}
-			for k, v := range variant {
-				if strings.TrimSpace(v) != "" {
-					params[k] = v
-				}
-			}
-			if page > 0 {
-				params["offset"] = strconv.Itoa(page * limit)
-			}
-			p := withParams(path, params)
-			var out []map[string]interface{}
-			if err := c.do(ctx, http.MethodGet, p, cred.APIToken, nil, &out); err != nil {
-				if page == 0 {
-					lastErr = err
-				}
-				break
-			}
-			sawSuccess = true
-			pageNew := 0
-			for _, row := range out {
-				ev, ok := rowToSmartlockEvent(row)
-				if !ok {
-					continue
-				}
-				if ev.OccurredAt.Before(since.UTC()) {
-					continue
-				}
-				key := strings.TrimSpace(ev.ExternalID) + "|" + ev.OccurredAt.UTC().Format(time.RFC3339Nano) + "|" + strings.TrimSpace(ev.AuthID)
-				if strings.TrimSpace(ev.ExternalID) == "" {
-					key = ev.OccurredAt.UTC().Format(time.RFC3339Nano) + "|" + strings.TrimSpace(ev.AuthID)
-				}
-				if _, ok := seenKeys[key]; ok {
-					continue
-				}
-				seenKeys[key] = struct{}{}
-				seen[key] = ev
-				pageNew++
-			}
-			// Stop paging when source exhausted or does not support offset.
-			if len(out) < limit || (page > 0 && pageNew == 0) {
-				break
-			}
+	cursor := ""
+	for page := 0; page < maxPages; page++ {
+		q := url.Values{"fromDate": {from}, "toDate": {to}, "limit": {strconv.Itoa(limit)}}
+		if authID != "" {
+			q.Set("authId", authID)
 		}
-	}
-	if !sawSuccess {
-		// Final compatibility fallback for deployments that reject query params.
+		if cursor != "" {
+			q.Set("id", cursor)
+		}
 		var out []map[string]interface{}
-		if err := c.do(ctx, http.MethodGet, path, cred.APIToken, nil, &out); err == nil {
-			sawSuccess = true
-			for _, row := range out {
-				ev, ok := rowToSmartlockEvent(row)
-				if !ok {
-					continue
-				}
-				if ev.OccurredAt.Before(since.UTC()) {
-					continue
-				}
-				key := strings.TrimSpace(ev.ExternalID) + "|" + ev.OccurredAt.UTC().Format(time.RFC3339Nano) + "|" + strings.TrimSpace(ev.AuthID)
-				if strings.TrimSpace(ev.ExternalID) == "" {
-					key = ev.OccurredAt.UTC().Format(time.RFC3339Nano) + "|" + strings.TrimSpace(ev.AuthID)
-				}
-				seen[key] = ev
+		if err := c.do(ctx, http.MethodGet, path+"?"+q.Encode(), cred.APIToken, nil, &out); err != nil {
+			return nil, err
+		}
+		if len(out) == 0 {
+			return eventsFromMap(seen), nil
+		}
+		lastID := ""
+		for _, row := range out {
+			id := strings.TrimSpace(pickString(row, "id", "logId", "eventId"))
+			if id == "" {
+				return nil, errors.New("nuki log row missing id")
+			}
+			lastID = id
+			ev, ok := rowToSmartlockEvent(row)
+			if !ok {
+				return nil, errors.New("nuki log row has unreadable timestamp")
+			}
+			if !ev.OccurredAt.Before(since.UTC()) {
+				seen[id] = ev
 			}
 		}
+		if lastID == cursor {
+			return nil, errors.New("nuki log cursor did not advance")
+		}
+		cursor = lastID
 	}
-	if !sawSuccess && lastErr != nil {
-		return nil, lastErr
+	return nil, errors.New("nuki log page budget exhausted")
+}
+
+func eventsFromMap(m map[string]SmartlockEvent) []SmartlockEvent {
+	out := make([]SmartlockEvent, 0, len(m))
+	for _, ev := range m {
+		out = append(out, ev)
 	}
-	events := make([]SmartlockEvent, 0, len(seen))
-	for _, ev := range seen {
-		events = append(events, ev)
-	}
-	return events, nil
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].OccurredAt.Equal(out[j].OccurredAt) {
+			return out[i].ExternalID < out[j].ExternalID
+		}
+		return out[i].OccurredAt.Before(out[j].OccurredAt)
+	})
+	return out
 }
 
 func rowToKeypadAccessCode(row map[string]interface{}) KeypadAccessCode {
@@ -416,20 +355,18 @@ func (c *httpClient) CreateAccess(ctx context.Context, cred Credentials, req Ups
 		"remoteAllowed":       false,
 		"smartActionsEnabled": false,
 	}
-	if strings.TrimSpace(req.AccountUserID) != "" {
-		body["accountUserId"] = strings.TrimSpace(req.AccountUserID)
+	if v, err := numericField(req.AccountUserID); err != nil {
+		return nil, err
+	} else if v != nil {
+		body["accountUserId"] = *v
 	}
 	if strings.TrimSpace(req.AccessCode) != "" {
 		body["code"] = strings.TrimSpace(req.AccessCode)
 	}
-	var out map[string]interface{}
-	if err := c.do(ctx, http.MethodPut, "/smartlock/"+url.PathEscape(cred.SmartLockID)+"/auth", cred.APIToken, body, &out); err != nil {
+	if err := c.do(ctx, http.MethodPut, "/smartlock/"+url.PathEscape(cred.SmartLockID)+"/auth", cred.APIToken, body, nil); err != nil {
 		return nil, err
 	}
-	return &UpsertAccessResponse{
-		ExternalID: pickString(out, "id", "authId", "smartlockAuthId"),
-		AccessCode: pickString(out, "code", "smartlockCode", "accessCode"),
-	}, nil
+	return &UpsertAccessResponse{AccessCode: req.AccessCode}, nil
 }
 
 func (c *httpClient) UpdateAccess(ctx context.Context, cred Credentials, externalID string, req UpsertAccessRequest) (*UpsertAccessResponse, error) {
@@ -445,25 +382,19 @@ func (c *httpClient) UpdateAccess(ctx context.Context, cred Credentials, externa
 		"remoteAllowed":       false,
 		"smartActionsEnabled": false,
 	}
-	if strings.TrimSpace(req.AccountUserID) != "" {
-		body["accountUserId"] = strings.TrimSpace(req.AccountUserID)
+	if v, err := numericField(req.AccountUserID); err != nil {
+		return nil, err
+	} else if v != nil {
+		body["accountUserId"] = *v
 	}
 	if strings.TrimSpace(req.AccessCode) != "" {
 		body["code"] = strings.TrimSpace(req.AccessCode)
 	}
-	var out map[string]interface{}
 	path := "/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth/" + url.PathEscape(externalID)
-	if err := c.do(ctx, http.MethodPut, path, cred.APIToken, body, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, path, cred.APIToken, body, nil); err != nil {
 		return nil, err
 	}
-	id := pickString(out, "id", "authId", "smartlockAuthId")
-	if id == "" {
-		id = externalID
-	}
-	return &UpsertAccessResponse{
-		ExternalID: id,
-		AccessCode: pickString(out, "code", "smartlockCode", "accessCode"),
-	}, nil
+	return &UpsertAccessResponse{ExternalID: externalID}, nil
 }
 
 func (c *httpClient) RevokeAccess(ctx context.Context, cred Credentials, externalID string) error {
@@ -473,15 +404,7 @@ func (c *httpClient) RevokeAccess(ctx context.Context, cred Credentials, externa
 
 func (c *httpClient) SetAccessEnabled(ctx context.Context, cred Credentials, externalID string, payload map[string]interface{}) error {
 	path := "/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth/" + url.PathEscape(externalID)
-	err := c.do(ctx, http.MethodPut, path, cred.APIToken, payload, nil)
-	if !isMethodNotAllowed(err) {
-		return err
-	}
-	err = c.do(ctx, http.MethodPost, path, cred.APIToken, payload, nil)
-	if !isMethodNotAllowed(err) {
-		return err
-	}
-	return c.do(ctx, http.MethodPatch, path, cred.APIToken, payload, nil)
+	return c.do(ctx, http.MethodPost, path, cred.APIToken, payload, nil)
 }
 
 func (c *httpClient) do(ctx context.Context, method, path, token string, body interface{}, out interface{}) error {
@@ -507,9 +430,19 @@ func (c *httpClient) do(ctx context.Context, method, path, token string, body in
 		return err
 	}
 	defer res.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	respBody, err := io.ReadAll(io.LimitReader(res.Body, 1<<20+1))
+	if err != nil {
+		return err
+	}
+	if len(respBody) > 1<<20 {
+		return errors.New("nuki response exceeds 1 MiB")
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("nuki http_%d: %s", res.StatusCode, strings.TrimSpace(string(respBody)))
+		he := &HTTPError{StatusCode: res.StatusCode, Status: res.Status, Body: truncateHTTPBody(string(respBody))}
+		if seconds, parseErr := strconv.Atoi(strings.TrimSpace(res.Header.Get("Retry-After"))); parseErr == nil && seconds >= 0 {
+			he.RetryAfter = time.Duration(seconds) * time.Second
+		}
+		return he
 	}
 	if out != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
@@ -517,6 +450,25 @@ func (c *httpClient) do(ctx context.Context, method, path, token string, body in
 		}
 	}
 	return nil
+}
+
+func numericField(raw string) (*int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("nuki numeric field: %w", err)
+	}
+	return &v, nil
+}
+
+func truncateHTTPBody(raw string) string {
+	if len(raw) > 900 {
+		return raw[:900]
+	}
+	return strings.TrimSpace(raw)
 }
 
 func pickString(m map[string]interface{}, keys ...string) string {

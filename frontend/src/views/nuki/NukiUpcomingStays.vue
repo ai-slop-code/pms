@@ -85,13 +85,13 @@ function displayEnd(stay: UpcomingStay) {
         </td>
         <td>
           <UiBadge :tone="statusTone(s.generated_status || 'not_generated')" dot>
-            {{ displayStatus(s.generated_status || 'not_generated') }}
+             {{ displayStatus(s.operation_state || s.generated_status || 'not_generated') }}
           </UiBadge>
         </td>
-        <td class="error-cell">{{ s.generated_error || '—' }}</td>
+         <td class="error-cell">{{ s.operation_error || s.generated_error || '—' }}</td>
         <td class="row-actions">
           <UiButton
-            v-if="canGenerate(s.generated_status)"
+             v-if="canGenerate(s.generated_status) && !s.operation_state?.endsWith('_pending') && s.operation_state !== 'needs_review'"
             variant="primary"
             size="sm"
             :loading="generatingStayId === s.stay_id"

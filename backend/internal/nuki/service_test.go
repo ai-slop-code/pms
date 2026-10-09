@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -417,29 +418,11 @@ func TestGenerateCodes_StatusTransition_NotGeneratedToGeneratedToRevoked(t *test
 	}
 
 	fc.failCreate = false
-	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-transition"); err != nil {
-		t.Fatal(err)
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "manual", "uid-transition"); err == nil || !strings.Contains(err.Error(), "creation_pending") {
+		t.Fatalf("error=%v want pending creation", err)
 	}
-	code, err = st.GetNukiCodeByNamedStayID(context.Background(), pid, stayID)
-	if err != nil || code == nil {
-		t.Fatalf("code err=%v nil=%v", err, code == nil)
-	}
-	if code.Status != "generated" {
-		t.Fatalf("status=%s want generated", code.Status)
-	}
-	if !code.ExternalNukiID.Valid || code.ExternalNukiID.String == "" {
-		t.Fatalf("external id missing after generation")
-	}
-
-	if err := svc.DeleteKeypadCode(context.Background(), pid, code.ExternalNukiID.String, "test"); err != nil {
-		t.Fatal(err)
-	}
-	code, err = st.GetNukiCodeByNamedStayID(context.Background(), pid, stayID)
-	if err != nil || code == nil {
-		t.Fatalf("code err=%v nil=%v", err, code == nil)
-	}
-	if code.Status != "revoked" {
-		t.Fatalf("status=%s want revoked", code.Status)
+	if fc.createCalls != 1 {
+		t.Fatalf("createCalls=%d want 1", fc.createCalls)
 	}
 }
 
@@ -506,6 +489,11 @@ func TestDeleteKeypadCode_RemovesRemoteAndLocalEntry(t *testing.T) {
 	pid := setupPropertyForNuki(t, st)
 	fc := &fakeClient{}
 	svc := &Service{Store: st, Client: fc}
+	stayID := upsertNukiStay(t, st, pid, "uid-delete", "active", time.Now().UTC().Add(48*time.Hour), time.Now().UTC().Add(72*time.Hour))
+	fc.createID = "to-delete"
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "test", "Delete me"); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.UpsertNukiKeypadCode(context.Background(), &store.NukiKeypadCode{
 		PropertyID:       pid,
 		ExternalNukiID:   "to-delete",
@@ -525,8 +513,8 @@ func TestDeleteKeypadCode_RemovesRemoteAndLocalEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 0 {
-		t.Fatalf("remaining=%d want 0", len(list))
+	if len(list) != 1 {
+		t.Fatalf("remaining=%d want 1 while deletion is unconfirmed", len(list))
 	}
 }
 
@@ -535,6 +523,11 @@ func TestSetKeypadCodeEnabled_UpdatesRemoteAndLocalState(t *testing.T) {
 	pid := setupPropertyForNuki(t, st)
 	fc := &fakeClient{}
 	svc := &Service{Store: st, Client: fc}
+	stayID := upsertNukiStay(t, st, pid, "uid-toggle", "active", time.Now().UTC().Add(48*time.Hour), time.Now().UTC().Add(72*time.Hour))
+	fc.createID = "toggle-me"
+	if err := svc.GenerateCodeForNamedStay(context.Background(), pid, stayID, "test", "Toggle me"); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.UpsertNukiKeypadCode(context.Background(), &store.NukiKeypadCode{
 		PropertyID:       pid,
 		ExternalNukiID:   "toggle-me",
@@ -636,8 +629,8 @@ func TestSyncProperty_PMSLinkSurvivesExternalIDDiff(t *testing.T) {
 	if err != nil || updatedCode == nil {
 		t.Fatalf("updated code err=%v nil=%v", err, updatedCode == nil)
 	}
-	if !updatedCode.ExternalNukiID.Valid || updatedCode.ExternalNukiID.String != "listed-id" {
-		t.Fatalf("external=%v want listed-id", updatedCode.ExternalNukiID)
+	if !updatedCode.ExternalNukiID.Valid || updatedCode.ExternalNukiID.String != "created-id" {
+		t.Fatalf("external=%v want retained created-id", updatedCode.ExternalNukiID)
 	}
 	rows, err := st.ListNukiKeypadCodes(context.Background(), pid)
 	if err != nil {
@@ -646,8 +639,8 @@ func TestSyncProperty_PMSLinkSurvivesExternalIDDiff(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("rows=%d want 1", len(rows))
 	}
-	if !rows[0].PMSLinked {
-		t.Fatalf("expected keypad row to be PMS-linked")
+	if rows[0].PMSLinked {
+		t.Fatalf("unrelated listed identity must remain external")
 	}
 }
 
