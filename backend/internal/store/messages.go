@@ -483,7 +483,10 @@ func (s *Store) BuildPlaceholderValuesForNamedStay(ctx context.Context, property
 	nukiCode := "—"
 	code, err := s.GetNukiCodeByNamedStayID(ctx, propertyID, stayID)
 	if err == nil && code != nil && code.Status == "generated" && code.GeneratedPINPlain.Valid && code.GeneratedPINPlain.String != "" {
-		nukiCode = code.GeneratedPINPlain.String
+		usable, usableErr := s.NukiCodeUsable(ctx, propertyID, code.ID, time.Now().UTC())
+		if usableErr == nil && usable {
+			nukiCode = code.GeneratedPINPlain.String
+		}
 	}
 
 	wifiName := ""

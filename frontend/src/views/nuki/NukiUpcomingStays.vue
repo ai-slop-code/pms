@@ -20,6 +20,7 @@ const emit = defineEmits<{
   savePinName: [stayId: number]
   generate: [stayId: number]
   reveal: [stay: UpcomingStay]
+  'check-status': [stayId: number]
 }>()
 
 function onInput(stayId: number, event: Event) {
@@ -96,7 +97,13 @@ function displayEnd(stay: UpcomingStay) {
             size="sm"
             :loading="generatingStayId === s.stay_id"
             @click="emit('generate', s.stay_id)"
-          >Generate PIN</UiButton>
+           >Generate PIN</UiButton>
+           <UiButton
+             v-if="s.operation_state === 'create_pending'"
+             variant="secondary"
+             size="sm"
+             @click="emit('check-status', s.stay_id)"
+           >Check status</UiButton>
         </td>
       </tr>
     </UiTable>

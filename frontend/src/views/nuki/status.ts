@@ -14,7 +14,7 @@ export function displayStatus(status?: string | null): string {
     case 'after_generate_refresh': return 'Post-generate refresh'
     case 'generate_all': return 'Generate all'
     case 'generate_one': return 'Generate one'
-    case 'create_pending': return 'Creation pending'
+    case 'create_pending': return 'Creation pending - waiting for Nuki confirmation'
     case 'update_pending': return 'Update pending'
     case 'delete_pending': return 'Deletion pending'
     case 'needs_review': return 'Needs review'

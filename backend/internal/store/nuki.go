@@ -219,6 +219,35 @@ func (s *Store) GetNukiCodeByExternalID(ctx context.Context, propertyID int64, e
 	return &rows[0], nil
 }
 
+// NukiCodeUsable is the server-side access predicate. Legacy rows without a
+// managed history remain readable for compatibility, but any explicit managed
+// pending/review/deleted state blocks access until a confirmed transition.
+func (s *Store) NukiCodeUsable(ctx context.Context, propertyID, codeID int64, now time.Time) (bool, error) {
+	_ = now
+	var status string
+	var managed sql.NullString
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT nac.status, (
+			SELECT mc.operation_state FROM nuki_managed_credentials mc
+			WHERE mc.property_id = nac.property_id AND mc.nuki_access_code_id = nac.id
+			ORDER BY mc.id DESC LIMIT 1)
+		FROM nuki_access_codes nac
+		WHERE nac.property_id = ? AND nac.id = ?`, propertyID, codeID).Scan(&status, &managed)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	if status != "generated" {
+		return false, nil
+	}
+	if managed.Valid && managed.String != "active" {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (s *Store) UpsertNukiCode(ctx context.Context, c *NukiAccessCode) error {
 	if !c.NamedStayID.Valid || c.NamedStayID.Int64 <= 0 {
 		return errors.New("nuki code requires named_stay_id")
@@ -540,6 +569,73 @@ func (s *Store) UpsertNukiKeypadCode(ctx context.Context, row *NukiKeypadCode) e
 	return err
 }
 
+// ReplaceNukiKeypadSnapshot applies a complete provider snapshot atomically.
+// A failed row write cannot be mistaken for a successful empty inventory.
+func (s *Store) ReplaceNukiKeypadSnapshot(ctx context.Context, propertyID int64, rows []NukiKeypadCode, destructive bool) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	rollback := func(e error) error { _ = tx.Rollback(); return e }
+	now := time.Now().UTC().Format(time.RFC3339)
+	keep := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if strings.TrimSpace(row.ExternalNukiID) == "" {
+			return rollback(errors.New("nuki snapshot row missing external id"))
+		}
+		keep = append(keep, row.ExternalNukiID)
+		var name, masked, from, until, raw interface{}
+		if row.Name.Valid {
+			name = row.Name.String
+		}
+		if row.AccessCodeMasked.Valid {
+			masked = row.AccessCodeMasked.String
+		}
+		if row.ValidFrom.Valid {
+			from = row.ValidFrom.Time.UTC().Format(time.RFC3339)
+		}
+		if row.ValidUntil.Valid {
+			until = row.ValidUntil.Time.UTC().Format(time.RFC3339)
+		}
+		if row.RawJSON.Valid {
+			raw = row.RawJSON.String
+		}
+		seen := now
+		if !row.LastSeenAt.IsZero() {
+			seen = row.LastSeenAt.UTC().Format(time.RFC3339)
+		}
+		enabled := 0
+		if row.Enabled {
+			enabled = 1
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO nuki_keypad_codes (property_id,external_nuki_id,name,access_code_masked,valid_from,valid_until,enabled,raw_json,last_seen_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(property_id,external_nuki_id) DO UPDATE SET name=excluded.name,access_code_masked=excluded.access_code_masked,valid_from=excluded.valid_from,valid_until=excluded.valid_until,enabled=excluded.enabled,raw_json=excluded.raw_json,last_seen_at=excluded.last_seen_at,updated_at=excluded.updated_at`, propertyID, row.ExternalNukiID, name, masked, from, until, enabled, raw, seen, now, now); err != nil {
+			return rollback(err)
+		}
+	}
+	if destructive {
+		if len(keep) == 0 {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM nuki_keypad_codes WHERE property_id=?`, propertyID); err != nil {
+				return rollback(err)
+			}
+		} else {
+			ph := make([]string, len(keep))
+			args := []interface{}{propertyID}
+			for i, id := range keep {
+				ph[i] = "?"
+				args = append(args, id)
+			}
+			query := `DELETE FROM nuki_keypad_codes WHERE property_id=? AND external_nuki_id NOT IN (` + strings.Join(ph, ",") + ")"
+			if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+				return rollback(err)
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE nuki_keypad_codes SET valid_from=NULL, valid_until=NULL, updated_at=? WHERE property_id=? AND ((valid_until IS NOT NULL AND strftime('%s',valid_until)<=0) OR (valid_from IS NOT NULL AND strftime('%s',valid_from)<=0) OR (valid_from IS NOT NULL AND valid_until IS NOT NULL AND strftime('%s',valid_until)<strftime('%s',valid_from)))`, now, propertyID); err != nil {
+		return rollback(err)
+	}
+	return tx.Commit()
+}
+
 func (s *Store) NormalizeNukiKeypadWindows(ctx context.Context, propertyID int64) error {
 	// Repair pathological cached rows from older API parsing variants
 	// (e.g. unix epoch 0 shown as 1970, or until earlier than from).
@@ -587,10 +683,11 @@ func (s *Store) ListNukiKeypadCodes(ctx context.Context, propertyID int64) ([]Nu
 	query := `
 		SELECT kc.id, kc.property_id, kc.external_nuki_id, kc.name, kc.access_code_masked, kc.valid_from, kc.valid_until, kc.enabled,
 		       EXISTS(
-		           SELECT 1 FROM nuki_access_codes nac
-		           WHERE nac.property_id = kc.property_id
-		             AND nac.external_nuki_id = kc.external_nuki_id
-		       ) AS pms_linked,
+		           SELECT 1 FROM nuki_managed_credentials mc
+		           WHERE mc.property_id = kc.property_id
+		             AND mc.remote_id = kc.external_nuki_id
+		             AND mc.operation_state <> 'deleted'
+	       ) AS pms_linked,
 		       kc.raw_json, kc.last_seen_at, kc.created_at, kc.updated_at
 		FROM nuki_keypad_codes kc
 		WHERE kc.property_id = ?
@@ -761,8 +858,8 @@ func (s *Store) IsNukiExternalIDOwned(ctx context.Context, propertyID int64, ext
 	var owned int
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT EXISTS(
-			SELECT 1 FROM nuki_access_codes
-			WHERE property_id = ? AND external_nuki_id = ?
+			SELECT 1 FROM nuki_managed_credentials
+			WHERE property_id = ? AND remote_id = ? AND operation_state = 'active'
 		)`, propertyID, strings.TrimSpace(externalID)).Scan(&owned)
 	return owned == 1, err
 }

@@ -34,6 +34,15 @@ type nukiCodesResponse struct {
 	Codes []nukiKeypadCodeRow `json:"codes"`
 }
 
+type nukiGenerationResponse struct {
+	OK          bool   `json:"ok"`
+	OperationID int64  `json:"operation_id,omitempty"`
+	State       string `json:"state,omitempty"`
+	Accepted    bool   `json:"accepted,omitempty"`
+	Confirmed   bool   `json:"confirmed,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
 type nukiUpcomingStayRow struct {
 	StayID                  int64   `json:"stay_id"`
 	SourceEventUID          string  `json:"source_event_uid"`
@@ -221,15 +230,47 @@ func (s *Server) generateNukiCodes(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusBadRequest, actionResponse{OK: false, Error: "pin_name required"})
 		return
 	}
-	genErr := s.Nuki.GenerateCodeForNamedStay(r.Context(), pid, *b.StayID, "generate_one", strings.TrimSpace(*b.PinName))
+	operation, genErr := s.Nuki.GenerateCodeForNamedStayOperation(r.Context(), pid, *b.StayID, "generate_one", strings.TrimSpace(*b.PinName))
 	if genErr != nil {
-		WriteJSON(w, http.StatusOK, actionResponse{OK: false, Error: genErr.Error()})
+		WriteJSON(w, http.StatusBadGateway, actionResponse{OK: false, Error: genErr.Error()})
 		return
 	}
-	// Refresh keypad cache so generated PIN value can be surfaced if provider returns it only in listing.
-	_ = s.Nuki.SyncProperty(r.Context(), pid, "after_generate_refresh")
-	s.audit(r, actor, "nuki_generate", "named_stay", strconv.FormatInt(*b.StayID, 10), "success")
-	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
+	status := http.StatusOK
+	if !operation.Confirmed {
+		status = http.StatusAccepted
+	}
+	auditOutcome := "accepted"
+	if operation.Confirmed {
+		auditOutcome = "confirmed"
+	}
+	s.audit(r, actor, "nuki_generate", "named_stay", strconv.FormatInt(*b.StayID, 10), auditOutcome)
+	WriteJSON(w, status, nukiGenerationResponse{OK: operation.Confirmed, OperationID: operation.ID, State: operation.State, Accepted: operation.Accepted, Confirmed: operation.Confirmed})
+}
+
+func (s *Server) checkNukiGeneration(w http.ResponseWriter, r *http.Request) {
+	_, pid, ok := s.requirePropertyModuleAccess(w, r, permissions.NukiAccess, permissions.LevelWrite)
+	if !ok || s.Nuki == nil {
+		return
+	}
+	stayID, err := strconv.ParseInt(chi.URLParam(r, "stayId"), 10, 64)
+	if err != nil || stayID <= 0 {
+		WriteError(w, http.StatusBadRequest, "invalid stay id")
+		return
+	}
+	if _, err := s.Nuki.ReconcilePendingNukiCreations(r.Context(), pid); err != nil {
+		WriteJSON(w, http.StatusBadGateway, actionResponse{OK: false, Error: "reconciliation unavailable"})
+		return
+	}
+	op, err := s.Nuki.GenerationOperation(r.Context(), pid, stayID)
+	if err != nil || op == nil {
+		WriteError(w, http.StatusNotFound, "operation not found")
+		return
+	}
+	status := http.StatusOK
+	if !op.Confirmed {
+		status = http.StatusAccepted
+	}
+	WriteJSON(w, status, nukiGenerationResponse{OK: op.Confirmed, OperationID: op.ID, State: op.State, Accepted: op.Accepted, Confirmed: op.Confirmed})
 }
 
 func (s *Server) runNukiSync(w http.ResponseWriter, r *http.Request) {
@@ -247,6 +288,37 @@ func (s *Server) runNukiSync(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, actor, "nuki_sync", "property", strconv.FormatInt(pid, 10), "success")
 	WriteJSON(w, http.StatusOK, actionResponse{OK: true})
+}
+
+func (s *Server) previewAmarildoRecovery(w http.ResponseWriter, r *http.Request) {
+	_, _, ok := s.requirePropertyModuleAccess(w, r, permissions.NukiAccess, permissions.LevelWrite)
+	if !ok || s.Nuki == nil {
+		return
+	}
+	result, err := s.Nuki.PreviewAmarildoRecovery(r.Context())
+	if err != nil {
+		WriteJSON(w, http.StatusUnprocessableEntity, struct {
+			Error string `json:"error"`
+		}{Error: err.Error()})
+		return
+	}
+	WriteJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) applyAmarildoRecovery(w http.ResponseWriter, r *http.Request) {
+	actor, _, ok := s.requirePropertyModuleAccess(w, r, permissions.NukiAccess, permissions.LevelWrite)
+	if !ok || s.Nuki == nil {
+		return
+	}
+	result, err := s.Nuki.RecoverAmarildo(r.Context())
+	if err != nil {
+		WriteJSON(w, http.StatusUnprocessableEntity, struct {
+			Error string `json:"error"`
+		}{Error: err.Error()})
+		return
+	}
+	s.audit(r, actor, "nuki_amarildo_recovery", "nuki_access_code", "238", result.Message)
+	WriteJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) listNukiUpcomingStays(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +400,20 @@ func (s *Server) saveNukiStayName(w http.ResponseWriter, r *http.Request) {
 	if s.Nuki != nil {
 		if err := s.Nuki.MaintainNamedStay(r.Context(), pid, stayID, "nuki_save_stay_name"); err != nil {
 			_ = s.Store.MarkNamedStayNukiGeneration(r.Context(), pid, stayID, store.NukiGenerationError, err.Error())
+			if err.Error() == "nuki_update_pending_confirmation" {
+				op, _ := s.Nuki.GenerationOperation(r.Context(), pid, stayID)
+				operationID := int64(0)
+				if op != nil {
+					operationID = op.ID
+				}
+				WriteJSON(w, http.StatusAccepted, struct {
+					OK           bool    `json:"ok"`
+					SavedPinName *string `json:"saved_pin_name,omitempty"`
+					OperationID  int64   `json:"operation_id"`
+					State        string  `json:"state"`
+				}{OK: false, SavedPinName: saved, OperationID: operationID, State: "update_pending"})
+				return
+			}
 		}
 	}
 	s.audit(r, actor, "nuki_save_stay_name", "named_stay", strconv.FormatInt(stayID, 10), "success")
@@ -359,6 +445,13 @@ func (s *Server) revokeNukiCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Nuki.RevokeCode(r.Context(), pid, codeID, "manual_revoke"); err != nil {
+		if err.Error() == "nuki_deletion_pending_confirmation" {
+			WriteJSON(w, http.StatusAccepted, struct {
+				OK    bool   `json:"ok"`
+				State string `json:"state"`
+			}{OK: false, State: "delete_pending"})
+			return
+		}
 		if s.Store.IsNotFound(err) {
 			WriteError(w, http.StatusNotFound, "not found")
 			return
@@ -406,6 +499,12 @@ func (s *Server) revealNukiCodePIN(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, "pin not available")
 		return
 	}
+	usable, err := s.Store.NukiCodeUsable(r.Context(), pid, codeID, time.Now().UTC())
+	if err != nil || !usable {
+		s.audit(r, actor, "nuki_reveal_pin", "nuki_access_code", strconv.FormatInt(codeID, 10), "unavailable")
+		WriteError(w, http.StatusConflict, "pin not confirmed or currently eligible")
+		return
+	}
 	s.audit(r, actor, "nuki_reveal_pin", "nuki_access_code", strconv.FormatInt(codeID, 10), "success")
 	WriteJSON(w, http.StatusOK, struct {
 		PIN string `json:"pin"`
@@ -434,6 +533,13 @@ func (s *Server) deleteNukiKeypadCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Nuki.DeleteKeypadCode(r.Context(), pid, externalID, "manual_delete"); err != nil {
+		if err.Error() == "nuki_deletion_pending_confirmation" {
+			WriteJSON(w, http.StatusAccepted, struct {
+				OK    bool   `json:"ok"`
+				State string `json:"state"`
+			}{OK: false, State: "delete_pending"})
+			return
+		}
 		if err.Error() == "nuki_external_code_not_owned" {
 			WriteError(w, http.StatusForbidden, "external code is not PMS-owned")
 			return

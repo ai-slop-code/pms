@@ -235,6 +235,15 @@ func main() {
 			return
 		}
 		for _, id := range ids {
+			if _, err := nukiSvc.ReconcilePendingNukiCreations(bg, id); err != nil {
+				log.Printf("nuki pending reconciliation property %d: %v", id, err)
+			}
+			if _, err := nukiSvc.ReconcilePendingNukiDeletions(bg, id); err != nil {
+				log.Printf("nuki pending deletion reconciliation property %d: %v", id, err)
+			}
+			if _, err := nukiSvc.ReconcilePendingNukiUpdates(bg, id); err != nil {
+				log.Printf("nuki pending update reconciliation property %d: %v", id, err)
+			}
 			if err := nukiSvc.CleanupExpiredCodes(bg, id); err != nil {
 				log.Printf("nuki cleanup property %d: %v", id, err)
 			}

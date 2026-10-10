@@ -34,6 +34,15 @@ export interface NukiUpcomingStay {
   operation_error: string | null
 }
 
+export interface NukiGenerationOperation {
+  ok: boolean
+  operation_id: number
+  state: string
+  accepted: boolean
+  confirmed: boolean
+  error?: string
+}
+
 export interface NukiRun {
   id: number
   started_at: string

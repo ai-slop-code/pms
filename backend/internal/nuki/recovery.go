@@ -2,14 +2,11 @@ package nuki
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
-
-	"pms/backend/internal/store"
 )
 
 var amarildoRecoveryManifest = struct {
@@ -62,34 +59,14 @@ func (s *Service) RecoverAmarildo(ctx context.Context) (*AmarildoRecoveryResult,
 	if err != nil || code == nil {
 		return result, fmt.Errorf("amarildo local code unavailable")
 	}
-	code.ExternalNukiID = sql.NullString{String: amarildoRecoveryManifest.RemoteID, Valid: true}
-	code.Status = "revoked"
-	code.AccessCodeMasked = sql.NullString{}
-	code.GeneratedPINPlain = sql.NullString{}
-	if err := s.Store.UpsertNukiCode(ctx, code); err != nil {
+	if err := s.Store.ApplyNukiIncidentRecovery(ctx, amarildoRecoveryManifest.PropertyID, amarildoRecoveryManifest.StayID, amarildoRecoveryManifest.CodeID, amarildoRecoveryManifest.SmartlockID, amarildoRecoveryManifest.RemoteID, amarildoRecoveryManifest.Label, amarildoRecoveryManifest.ValidFrom, amarildoRecoveryManifest.ValidUntil, result.RemotePresent); err != nil {
 		return result, err
 	}
-	if _, err := s.Store.CreateNukiManagedCredential(ctx, &store.NukiManagedCredential{
-		PropertyID:          amarildoRecoveryManifest.PropertyID,
-		NamedStayID:         sql.NullInt64{Int64: amarildoRecoveryManifest.StayID, Valid: true},
-		NukiAccessCodeID:    sql.NullInt64{Int64: amarildoRecoveryManifest.CodeID, Valid: true},
-		SmartlockID:         amarildoRecoveryManifest.SmartlockID,
-		RemoteID:            sql.NullString{String: amarildoRecoveryManifest.RemoteID, Valid: true},
-		Provenance:          "evidence_backed_incident_recovery",
-		ProvenanceReference: sql.NullString{String: "PMS-34 Amarildo manifest", Valid: true},
-		DesiredLabel:        amarildoRecoveryManifest.Label,
-		DesiredValidFrom:    amarildoRecoveryManifest.ValidFrom,
-		DesiredValidUntil:   amarildoRecoveryManifest.ValidUntil,
-		DesiredEnabled:      true,
-		OperationState:      "delete_pending", OperationRevision: 1,
-	}); err != nil {
-		return result, err
+	if result.RemotePresent {
+		result.Message = "ownership restored; deletion pending"
+	} else {
+		result.Message = "ownership restored; confirmed remote absence"
 	}
-	codeID := amarildoRecoveryManifest.CodeID
-	if err := s.Store.InsertNukiEventLog(ctx, amarildoRecoveryManifest.PropertyID, &codeID, nil, "incident_recovery", "evidence-backed PMS ownership restored; expiry deletion pending", ""); err != nil {
-		return result, err
-	}
-	result.Message = "ownership restored; deletion pending"
 	return result, nil
 }
 
@@ -105,11 +82,11 @@ func (s *Service) validateAmarildoRecovery(ctx context.Context) (*AmarildoRecove
 	if code.ValidFrom.UTC() != amarildoRecoveryManifest.ValidFrom || code.ValidUntil.UTC() != amarildoRecoveryManifest.ValidUntil {
 		return result, errors.New("amarildo recovery manifest validity mismatch")
 	}
-	owned, err := s.Store.IsNukiExternalIDOwned(ctx, amarildoRecoveryManifest.PropertyID, amarildoRecoveryManifest.RemoteID)
+	managed, err := s.Store.ManagedNukiCredentialForRemote(ctx, amarildoRecoveryManifest.PropertyID, amarildoRecoveryManifest.SmartlockID, amarildoRecoveryManifest.RemoteID)
 	if err != nil {
 		return result, err
 	}
-	if owned {
+	if managed != nil && managed.NamedStayID.Valid && managed.NamedStayID.Int64 == amarildoRecoveryManifest.StayID && managed.NukiAccessCodeID.Valid && managed.NukiAccessCodeID.Int64 == amarildoRecoveryManifest.CodeID && managed.Provenance == "evidence_backed_incident_recovery" {
 		result.Applicable, result.AlreadyRecovered = true, true
 		result.Message = "manifest ownership already restored"
 		return result, nil
@@ -117,6 +94,9 @@ func (s *Service) validateAmarildoRecovery(ctx context.Context) (*AmarildoRecove
 	_, _, cred, _, _, _, _, _, err := s.loadNukiSyncContext(ctx, amarildoRecoveryManifest.PropertyID, false)
 	if err != nil {
 		return result, err
+	}
+	if cred.SmartLockID != amarildoRecoveryManifest.SmartlockID {
+		return result, errors.New("amarildo configured smartlock mismatch")
 	}
 	rows, err := s.Client.ListKeypadCodes(ctx, cred)
 	if err != nil {
@@ -126,7 +106,7 @@ func (s *Service) validateAmarildoRecovery(ctx context.Context) (*AmarildoRecove
 		if strings.TrimSpace(row.ExternalID) != amarildoRecoveryManifest.RemoteID {
 			continue
 		}
-		if row.Name != amarildoRecoveryManifest.Label || row.ValidFrom == nil || row.ValidUntil == nil || !row.ValidFrom.UTC().Equal(amarildoRecoveryManifest.ValidFrom) || !row.ValidUntil.UTC().Equal(amarildoRecoveryManifest.ValidUntil) {
+		if row.SmartlockID != amarildoRecoveryManifest.SmartlockID || row.Type != amarildoRecoveryManifest.Type || row.Name != amarildoRecoveryManifest.Label || row.ValidFrom == nil || row.ValidUntil == nil || !row.ValidFrom.UTC().Equal(amarildoRecoveryManifest.ValidFrom) || !row.ValidUntil.UTC().Equal(amarildoRecoveryManifest.ValidUntil) {
 			return result, errors.New("amarildo remote tuple mismatch")
 		}
 		var payload map[string]interface{}

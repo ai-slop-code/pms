@@ -19,6 +19,7 @@ import type {
   NukiUpcomingStay as UpcomingStay,
   NukiRun,
   NukiPinReveal as PinReveal,
+  NukiGenerationOperation,
 } from '@/api/types/nuki'
 
 const { pid } = useCurrentProperty()
@@ -132,16 +133,18 @@ async function saveStayName(stayId: number) {
   savingStayName.value[stayId] = true
   error.value = ''
   try {
-    const r = await api<{ ok: boolean; saved_pin_name?: string }>(
+    const r = await api<{ ok: boolean; saved_pin_name?: string; state?: string }>(
       `/api/properties/${pid.value}/nuki/upcoming-stays/${stayId}`,
       { method: 'PATCH', json: { pin_name: pinName } },
     )
-    if (!r.ok) {
+    if (!r.ok && r.state !== 'update_pending') {
       error.value = 'Failed to save stay name.'
       return
     }
     pinNames.value[stayId] = r.saved_pin_name || ''
-    success.value = 'Stay name saved.'
+    success.value = r.state === 'update_pending'
+      ? 'Stay name saved - Nuki update pending confirmation.'
+      : 'Stay name saved.'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to save stay name.'
   } finally {
@@ -247,27 +250,37 @@ async function generateForStay(stayId: number) {
   error.value = ''
   success.value = ''
   try {
-    const r = await api<{ ok: boolean; error?: string }>(`/api/properties/${pid.value}/nuki/codes/generate`, {
+    const r = await api<NukiGenerationOperation>(`/api/properties/${pid.value}/nuki/codes/generate`, {
       method: 'POST',
       json: { stay_id: stayId, pin_name: pinName },
     })
-    if (!r.ok) error.value = r.error || 'PIN generation failed.'
+    if (!r.ok && r.state !== 'create_pending') error.value = r.error || 'PIN generation failed.'
     else {
       const settled = await refreshAfterGenerate(stayId)
       if (!settled) await loadAll()
       const row = upcomingStays.value.find((s) => s.stay_id === stayId)
-      if (row && row.generated_code_id) {
+      if (r.confirmed && row && row.generated_code_id) {
         await revealPin(row.generated_code_id, {
           stayName: row.summary || pinNames.value[row.stay_id] || row.source_event_uid,
           label: row.generated_label ?? undefined,
         })
       }
-      success.value = 'Guest PIN generated.'
+      success.value = r.confirmed ? 'Guest PIN generated.' : 'Creation pending - waiting for Nuki confirmation.'
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to generate guest PIN.'
   } finally {
     generatingStayId.value = null
+  }
+}
+
+async function checkGenerationStatus(stayId: number) {
+  if (!pid.value) return
+  try {
+    await api(`/api/properties/${pid.value}/nuki/codes/${stayId}/check-status`, { method: 'POST' })
+    await loadAll()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to check Nuki creation status.'
   }
 }
 
@@ -283,12 +296,14 @@ async function deleteKeypadCode(externalId: string) {
   error.value = ''
   success.value = ''
   try {
-    await api(`/api/properties/${pid.value}/nuki/keypad-codes/${encodeURIComponent(externalId)}`, {
+    const result = await api<{ state?: string }>(`/api/properties/${pid.value}/nuki/keypad-codes/${encodeURIComponent(externalId)}`, {
       method: 'DELETE',
     })
     await syncCodesQuietly()
     await loadAll()
-    success.value = 'Access code deleted.'
+    success.value = result?.state === 'delete_pending'
+      ? 'Deletion pending - waiting for Nuki confirmation.'
+      : 'Access code deleted.'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to delete access code.'
   }
@@ -342,6 +357,7 @@ watch(
         @update:pin-name="onUpdatePinName"
         @save-pin-name="saveStayName"
         @generate="generateForStay"
+        @check-status="checkGenerationStatus"
         @reveal="revealStayPin"
       />
 

@@ -26,6 +26,7 @@ type fakeClient struct {
 	logEvents   []SmartlockEvent
 	createID    string
 	createCode  string
+	acceptNoID  bool
 }
 
 func (f *fakeClient) ListKeypadCodes(ctx context.Context, cred Credentials) ([]KeypadAccessCode, error) {
@@ -52,6 +53,10 @@ func (f *fakeClient) CreateAccess(ctx context.Context, cred Credentials, req Ups
 	if code == "" {
 		code = "123456"
 	}
+	if f.acceptNoID {
+		f.listCodes = []KeypadAccessCode{{ExternalID: "async-id", SmartlockID: cred.SmartLockID, Type: 13, Name: req.Label, AccessCode: req.AccessCode, ValidFrom: timePtr(req.ValidFrom), ValidUntil: timePtr(req.ValidUntil), Enabled: true}}
+		return &UpsertAccessResponse{AccessCode: req.AccessCode}, nil
+	}
 	return &UpsertAccessResponse{ExternalID: externalID, AccessCode: code}, nil
 }
 
@@ -65,6 +70,7 @@ func (f *fakeClient) UpdateAccess(ctx context.Context, cred Credentials, externa
 	if f.failUpdate {
 		return nil, sql.ErrConnDone
 	}
+	f.listCodes = []KeypadAccessCode{{ExternalID: externalID, SmartlockID: cred.SmartLockID, Type: 13, Name: req.Label, ValidFrom: timePtr(req.ValidFrom), ValidUntil: timePtr(req.ValidUntil), Enabled: true}}
 	return &UpsertAccessResponse{ExternalID: externalID, AccessCode: "654321"}, nil
 }
 
@@ -78,6 +84,13 @@ func (f *fakeClient) RevokeAccess(ctx context.Context, cred Credentials, externa
 	if f.failRevoke {
 		return sql.ErrConnDone
 	}
+	filtered := f.listCodes[:0]
+	for _, row := range f.listCodes {
+		if row.ExternalID != externalID {
+			filtered = append(filtered, row)
+		}
+	}
+	f.listCodes = filtered
 	return nil
 }
 
@@ -190,6 +203,35 @@ func TestGenerateCodes_CreatesAndUpdatesWithoutDuplicates(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Fatalf("codes=%d want 1", len(rows))
+	}
+}
+
+func TestGenerateCodes_AcceptedCreationReconcilesWithoutDuplicate(t *testing.T) {
+	st := newTestStore(t)
+	pid := setupPropertyForNuki(t, st)
+	fc := &fakeClient{acceptNoID: true}
+	svc := &Service{Store: st, Client: fc}
+	now := time.Now().UTC().Add(48 * time.Hour)
+	stayID := upsertNukiStay(t, st, pid, "uid-async", "active", now, now.Add(24*time.Hour))
+	op, err := svc.GenerateCodeForNamedStayOperation(context.Background(), pid, stayID, "manual", "Async Guest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op == nil || !op.Confirmed || op.State != "active" {
+		t.Fatalf("operation=%+v want confirmed active", op)
+	}
+	if fc.createCalls != 1 {
+		t.Fatalf("createCalls=%d want 1", fc.createCalls)
+	}
+	code, err := st.GetNukiCodeByNamedStayID(context.Background(), pid, stayID)
+	if err != nil || code == nil || code.Status != "generated" || code.ExternalNukiID.String != "async-id" {
+		t.Fatalf("code=%+v err=%v", code, err)
+	}
+	if _, err := svc.ReconcilePendingNukiCreations(context.Background(), pid); err != nil {
+		t.Fatal(err)
+	}
+	if fc.createCalls != 1 {
+		t.Fatalf("reconciliation issued duplicate create: %d", fc.createCalls)
 	}
 }
 

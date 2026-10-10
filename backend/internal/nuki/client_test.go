@@ -86,3 +86,41 @@ func TestListSmartlockEvents_UsesRFC3339AndIDCursor(t *testing.T) {
 		t.Fatalf("events=%d requests=%d", len(events), requests)
 	}
 }
+
+func TestCreateAccess_UsesIntegerPINAndAccepts204(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/smartlock/1/auth" {
+			t.Fatalf("unexpected create request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := body["code"].(float64); !ok {
+			t.Fatalf("code payload=%#v want JSON number", body["code"])
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &httpClient{baseURL: srv.URL, http: srv.Client()}
+	res, err := c.CreateAccess(context.Background(), Credentials{APIToken: "x", SmartLockID: "1"}, UpsertAccessRequest{
+		Label: "Booking-Test", ValidFrom: time.Now().UTC(), ValidUntil: time.Now().UTC().Add(time.Hour), AccessCode: "123456",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == nil || res.ExternalID != "" {
+		t.Fatalf("response=%+v want accepted without identity", res)
+	}
+}
+
+func TestListKeypadCodes_RejectsEmptyBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	c := &httpClient{baseURL: srv.URL, http: srv.Client()}
+	if _, err := c.ListKeypadCodes(context.Background(), Credentials{APIToken: "x", SmartLockID: "1"}); err == nil {
+		t.Fatal("expected incomplete inventory error")
+	}
+}

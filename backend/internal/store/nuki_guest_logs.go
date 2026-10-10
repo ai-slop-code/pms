@@ -98,10 +98,15 @@ type NukiAccessCodeIdentity struct {
 
 func (s *Store) ListGeneratedNukiAccessCodesByExternalID(ctx context.Context, propertyID int64) (map[string]NukiAccessCodeIdentity, error) {
 	rows, err := s.DB.QueryContext(ctx, `
+		SELECT remote_id, named_stay_id
+		FROM nuki_managed_credentials
+		WHERE property_id = ? AND remote_id IS NOT NULL AND remote_id <> '' AND named_stay_id IS NOT NULL
+		UNION ALL
 		SELECT external_nuki_id, named_stay_id
-		FROM nuki_access_codes
-		WHERE property_id = ? AND external_nuki_id IS NOT NULL AND external_nuki_id <> '' AND named_stay_id IS NOT NULL`,
-		propertyID)
+		FROM nuki_access_codes nac
+		WHERE nac.property_id = ? AND nac.external_nuki_id IS NOT NULL AND nac.external_nuki_id <> '' AND nac.named_stay_id IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM nuki_managed_credentials mc WHERE mc.property_id=nac.property_id AND mc.remote_id=nac.external_nuki_id)`,
+		propertyID, propertyID)
 	if err != nil {
 		return nil, err
 	}

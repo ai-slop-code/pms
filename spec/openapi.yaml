@@ -623,6 +623,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/NukiStayNamePatchResponse" }
+        "202":
+          description: Stay saved; Nuki update confirmation is pending.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiStayNamePatchResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -640,10 +645,15 @@ paths:
             schema: { $ref: "#/components/schemas/NukiGenerateRequest" }
       responses:
         "200":
-          description: Generation result.
+          description: Confirmed generation result.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ActionResponse" }
+              schema: { $ref: "#/components/schemas/NukiGenerationResponse" }
+        "202":
+          description: Creation accepted and awaiting authoritative Nuki confirmation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiGenerationResponse" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
   /properties/{id}/nuki/codes/{codeId}/reveal-pin:
@@ -666,6 +676,30 @@ paths:
                 required: [pin]
                 properties:
                   pin: { type: string }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /properties/{id}/nuki/codes/{stayId}/check-status:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - in: path
+        name: stayId
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      tags: [Nuki]
+      summary: Reconcile a persisted Nuki creation without creating another authorization.
+      responses:
+        "200":
+          description: Confirmed operation state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiGenerationResponse" }
+        "202":
+          description: Operation remains unresolved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiGenerationResponse" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -984,6 +1018,16 @@ paths:
       summary: Delete a PMS-linked Nuki keypad code.
       responses:
         "204": { description: Keypad code deleted. }
+        "202":
+          description: Deletion accepted and awaiting authoritative absence confirmation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, state]
+                properties:
+                  ok: { type: boolean }
+                  state: { type: string, enum: [delete_pending] }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -999,6 +1043,16 @@ paths:
       summary: Revoke a generated Nuki access code.
       responses:
         "204": { description: Access code revoked. }
+        "202":
+          description: Deletion accepted and awaiting authoritative absence confirmation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, state]
+                properties:
+                  ok: { type: boolean }
+                  state: { type: string, enum: [delete_pending] }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1019,6 +1073,32 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ActionResponse" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /properties/{id}/nuki/recovery/amarildo/preview:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    get:
+      tags: [Nuki]
+      summary: Preview the evidence-backed Amarildo recovery without mutation.
+      responses:
+        "200":
+          description: Read-only recovery assessment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiRecoveryResult" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Error" }
+  /properties/{id}/nuki/recovery/amarildo/apply:
+    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    post:
+      tags: [Nuki]
+      summary: Apply the validated Amarildo recovery without creating or deleting remotely.
+      responses:
+        "200":
+          description: Recovery result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NukiRecoveryResult" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Error" }
   /properties/{id}/nuki/runs:
     parameters: [{ $ref: "#/components/parameters/IdPath" }]
     get:
@@ -2853,6 +2933,8 @@ components:
       properties:
         ok: { type: boolean }
         saved_pin_name: { type: string }
+        operation_id: { type: integer, format: int64 }
+        state: { type: string }
 
     NukiGenerateRequest:
       type: object
@@ -2865,6 +2947,26 @@ components:
           minimum: 1
           description: Named stay identity for single-stay generation.
         pin_name: { type: string, minLength: 1 }
+
+    NukiGenerationResponse:
+      type: object
+      required: [ok, operation_id, state, accepted, confirmed]
+      properties:
+        ok: { type: boolean }
+        operation_id: { type: integer, format: int64 }
+        state: { type: string }
+        accepted: { type: boolean }
+        confirmed: { type: boolean }
+        error: { type: string }
+
+    NukiRecoveryResult:
+      type: object
+      required: [applicable, already_recovered, remote_present, message]
+      properties:
+        applicable: { type: boolean }
+        already_recovered: { type: boolean }
+        remote_present: { type: boolean }
+        message: { type: string }
 
     NukiCodesResponse:
       type: object

@@ -48,10 +48,7 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	if e.Body == "" {
-		return fmt.Sprintf("nuki http status %d", e.StatusCode)
-	}
-	return fmt.Sprintf("nuki http status %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("nuki http status %d", e.StatusCode)
 }
 
 func (e *HTTPError) Accepted() bool { return e.StatusCode == http.StatusNoContent }
@@ -63,7 +60,10 @@ type UpsertAccessResponse struct {
 
 type KeypadAccessCode struct {
 	ExternalID       string
+	SmartlockID      string
+	Type             int64
 	Name             string
+	AccessCode       string
 	AccessCodeMasked string
 	ValidFrom        *time.Time
 	ValidUntil       *time.Time
@@ -162,8 +162,8 @@ type httpClient struct {
 
 func (c *httpClient) ListKeypadCodes(ctx context.Context, cred Credentials) ([]KeypadAccessCode, error) {
 	path := "/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth"
-	var out []map[string]interface{}
-	if err := c.do(ctx, http.MethodGet, path, cred.APIToken, nil, &out); err != nil {
+	out, err := c.doArray(ctx, http.MethodGet, path, cred.APIToken)
+	if err != nil {
 		return nil, err
 	}
 	rows := make([]KeypadAccessCode, 0, len(out))
@@ -188,8 +188,13 @@ func (c *httpClient) ListSmartlockEvents(ctx context.Context, cred Credentials, 
 	from := since.UTC().Format(time.RFC3339Nano)
 	to := time.Now().UTC().Format(time.RFC3339Nano)
 	seen := map[string]SmartlockEvent{}
+	visitedCursors := map[string]struct{}{}
 	cursor := ""
 	for page := 0; page < maxPages; page++ {
+		if _, exists := visitedCursors[cursor]; exists && cursor != "" {
+			return nil, errors.New("nuki log cursor cycle detected")
+		}
+		visitedCursors[cursor] = struct{}{}
 		q := url.Values{"fromDate": {from}, "toDate": {to}, "limit": {strconv.Itoa(limit)}}
 		if authID != "" {
 			q.Set("authId", authID)
@@ -197,8 +202,8 @@ func (c *httpClient) ListSmartlockEvents(ctx context.Context, cred Credentials, 
 		if cursor != "" {
 			q.Set("id", cursor)
 		}
-		var out []map[string]interface{}
-		if err := c.do(ctx, http.MethodGet, path+"?"+q.Encode(), cred.APIToken, nil, &out); err != nil {
+		out, err := c.doArray(ctx, http.MethodGet, path+"?"+q.Encode(), cred.APIToken)
+		if err != nil {
 			return nil, err
 		}
 		if len(out) == 0 {
@@ -242,7 +247,16 @@ func eventsFromMap(m map[string]SmartlockEvent) []SmartlockEvent {
 }
 
 func rowToKeypadAccessCode(row map[string]interface{}) KeypadAccessCode {
-	b, _ := json.Marshal(row)
+	// Keep only non-secret provider metadata in the cache snapshot. The full
+	// PIN is retained on the in-memory value solely for correlation.
+	safe := make(map[string]interface{}, len(row))
+	for k, v := range row {
+		if strings.EqualFold(k, "code") || strings.EqualFold(k, "smartlockCode") || strings.EqualFold(k, "accessCode") {
+			continue
+		}
+		safe[k] = v
+	}
+	b, _ := json.Marshal(safe)
 	var vf *time.Time
 	var vu *time.Time
 	if t := parseAnyTime(pickAny(row, "allowedFromDate", "allowedFromDateTime", "allowedFromTime")); t != nil {
@@ -258,9 +272,12 @@ func rowToKeypadAccessCode(row map[string]interface{}) KeypadAccessCode {
 		}
 	}
 	return KeypadAccessCode{
-		ExternalID:       pickString(row, "id", "authId", "smartlockAuthId"),
+		ExternalID:       pickString(row, "id"),
+		SmartlockID:      pickString(row, "smartlockId", "smartLockId", "smartlock_id"),
+		Type:             pickInt(row, "type"),
 		Name:             pickString(row, "name"),
-		AccessCodeMasked: pickString(row, "code", "smartlockCode", "accessCode"),
+		AccessCode:       pickString(row, "code", "smartlockCode", "accessCode"),
+		AccessCodeMasked: maskClientCode(pickString(row, "code", "smartlockCode", "accessCode")),
 		ValidFrom:        vf,
 		ValidUntil:       vu,
 		Enabled:          enabled,
@@ -361,7 +378,11 @@ func (c *httpClient) CreateAccess(ctx context.Context, cred Credentials, req Ups
 		body["accountUserId"] = *v
 	}
 	if strings.TrimSpace(req.AccessCode) != "" {
-		body["code"] = strings.TrimSpace(req.AccessCode)
+		code, err := strconv.Atoi(strings.TrimSpace(req.AccessCode))
+		if err != nil || code < 0 {
+			return nil, fmt.Errorf("nuki access code must be numeric")
+		}
+		body["code"] = code
 	}
 	if err := c.do(ctx, http.MethodPut, "/smartlock/"+url.PathEscape(cred.SmartLockID)+"/auth", cred.APIToken, body, nil); err != nil {
 		return nil, err
@@ -388,7 +409,11 @@ func (c *httpClient) UpdateAccess(ctx context.Context, cred Credentials, externa
 		body["accountUserId"] = *v
 	}
 	if strings.TrimSpace(req.AccessCode) != "" {
-		body["code"] = strings.TrimSpace(req.AccessCode)
+		code, err := strconv.Atoi(strings.TrimSpace(req.AccessCode))
+		if err != nil || code < 0 {
+			return nil, fmt.Errorf("nuki access code must be numeric")
+		}
+		body["code"] = code
 	}
 	path := "/smartlock/" + url.PathEscape(cred.SmartLockID) + "/auth/" + url.PathEscape(externalID)
 	if err := c.do(ctx, http.MethodPost, path, cred.APIToken, body, nil); err != nil {
@@ -438,9 +463,15 @@ func (c *httpClient) do(ctx context.Context, method, path, token string, body in
 		return errors.New("nuki response exceeds 1 MiB")
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		he := &HTTPError{StatusCode: res.StatusCode, Status: res.Status, Body: truncateHTTPBody(string(respBody))}
-		if seconds, parseErr := strconv.Atoi(strings.TrimSpace(res.Header.Get("Retry-After"))); parseErr == nil && seconds >= 0 {
+		he := &HTTPError{StatusCode: res.StatusCode, Status: res.Status, Body: "provider request rejected"}
+		retryAfter := strings.TrimSpace(res.Header.Get("Retry-After"))
+		if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil && seconds >= 0 {
 			he.RetryAfter = time.Duration(seconds) * time.Second
+		} else if retryAt, parseErr := http.ParseTime(retryAfter); parseErr == nil {
+			he.RetryAfter = time.Until(retryAt)
+			if he.RetryAfter < 0 {
+				he.RetryAfter = 0
+			}
 		}
 		return he
 	}
@@ -450,6 +481,21 @@ func (c *httpClient) do(ctx context.Context, method, path, token string, body in
 		}
 	}
 	return nil
+}
+
+func (c *httpClient) doArray(ctx context.Context, method, path, token string) ([]map[string]interface{}, error) {
+	var raw json.RawMessage
+	if err := c.do(ctx, method, path, token, nil, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, errors.New("nuki authorization inventory is not a complete array")
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(raw, &rows); err != nil || rows == nil {
+		return nil, errors.New("nuki authorization inventory is not a complete array")
+	}
+	return rows, nil
 }
 
 func numericField(raw string) (*int64, error) {
@@ -462,13 +508,6 @@ func numericField(raw string) (*int64, error) {
 		return nil, fmt.Errorf("nuki numeric field: %w", err)
 	}
 	return &v, nil
-}
-
-func truncateHTTPBody(raw string) string {
-	if len(raw) > 900 {
-		return raw[:900]
-	}
-	return strings.TrimSpace(raw)
 }
 
 func pickString(m map[string]interface{}, keys ...string) string {
@@ -487,6 +526,34 @@ func pickString(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func pickInt(m map[string]interface{}, keys ...string) int64 {
+	for _, k := range keys {
+		switch v := m[k].(type) {
+		case float64:
+			return int64(v)
+		case int64:
+			return v
+		case int:
+			return int64(v)
+		case string:
+			n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			return n
+		}
+	}
+	return 0
+}
+
+func maskClientCode(raw string) string {
+	r := []rune(strings.TrimSpace(raw))
+	if len(r) == 0 {
+		return ""
+	}
+	if len(r) <= 2 {
+		return "***"
+	}
+	return strings.Repeat("*", len(r)-2) + string(r[len(r)-2:])
 }
 
 func parseAnyTime(v interface{}) *time.Time {
