@@ -1,6 +1,6 @@
 module pms/backend
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/arran4/golang-ical v0.3.5
