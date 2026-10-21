@@ -80,3 +80,45 @@ func TestInvoiceFinanceLinkMustMatchPropertyAndStay(t *testing.T) {
 		t.Fatalf("created=%+v", created)
 	}
 }
+
+func TestProformaAndInvoiceCanShareStayWithIndependentSeries(t *testing.T) {
+	ctx := context.Background()
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	pid := setupFinanceProperty(t, st)
+	stay := createFinanceNamedStay(t, st, pid, "PF-REF", "2026-06-01", "2026-06-03")
+	proforma := testInvoice(pid, stay.ID)
+	proforma.DocumentType = "proforma"
+	proforma.BookingReference = sql.NullString{String: "6429185079", Valid: true}
+	proforma.GuestName = sql.NullString{String: "Guest Example", Valid: true}
+	proforma.PriceDetails = sql.NullString{String: "Accommodation only", Valid: true}
+	proforma.TaxableSupplyDate = time.Time{}
+	proforma.DueDate = time.Time{}
+	proforma.PaymentStatus = "not_applicable"
+	proforma.PaymentNote = ""
+	proforma.SupplierSnapshotJSON = `{"name":"Individual Owner","address_line_1":"Main 1","dic":"1234567890","vat_status":"non_vat_payer"}`
+	proforma.AmountTotalCents = 123456
+	created, err := st.CreateInvoice(ctx, proforma)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.InvoiceNumber != "PF/P001/2026/0001" || created.PaymentStatus != "not_applicable" {
+		t.Fatalf("created pro forma=%+v", created)
+	}
+	final := testInvoice(pid, stay.ID)
+	final.SupplierSnapshotJSON = `{"name":"Owner"}`
+	final.CustomerSnapshotJSON = `{"company_name":"Company"}`
+	finalCreated, err := st.CreateInvoice(ctx, final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalCreated.InvoiceNumber != "P001/2026/0001" {
+		t.Fatalf("final number=%q", finalCreated.InvoiceNumber)
+	}
+	var count int
+	if err := st.DB.QueryRow(`SELECT count(*) FROM invoices WHERE property_id = ? AND named_stay_id = ?`, pid, stay.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("shared-stay invoice count=%d want 2", count)
+	}
+}

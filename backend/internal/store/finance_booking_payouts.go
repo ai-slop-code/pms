@@ -568,8 +568,8 @@ func (s *Store) ListBookingPayouts(ctx context.Context, propertyID int64, month 
 			fbp.payment_service_fee_cents, fbp.net_cents, fbp.payout_date, fbp.transaction_id, fbp.named_stay_id, fbp.raw_payout_row_json,
 			fbp.outcome_override, fbp.outcome_override_marked_at, fbp.created_at, fbp.updated_at,
 			(
-				SELECT i.id FROM invoices i
-				WHERE i.property_id = fbp.property_id AND i.finance_booking_payout_id = fbp.id
+			SELECT i.id FROM invoices i
+				WHERE i.property_id = fbp.property_id AND i.document_type = 'invoice' AND i.finance_booking_payout_id = fbp.id
 				LIMIT 1
 			) AS linked_invoice_id,
 			ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date,

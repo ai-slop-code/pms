@@ -1299,6 +1299,15 @@ export interface paths {
                         "application/json": components["schemas"]["NukiStayNamePatchResponse"];
                     };
                 };
+                /** @description Stay saved; Nuki update confirmation is pending. */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NukiStayNamePatchResponse"];
+                    };
+                };
                 400: components["responses"]["BadRequest"];
                 403: components["responses"]["Forbidden"];
                 404: components["responses"]["NotFound"];
@@ -1333,13 +1342,22 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Generation result. */
+                /** @description Confirmed generation result. */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["ActionResponse"];
+                        "application/json": components["schemas"]["NukiGenerationResponse"];
+                    };
+                };
+                /** @description Creation accepted and awaiting authoritative Nuki confirmation. */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NukiGenerationResponse"];
                     };
                 };
                 403: components["responses"]["Forbidden"];
@@ -1391,6 +1409,59 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/nuki/codes/{stayId}/check-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+                stayId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconcile a persisted Nuki creation without creating another authorization. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                    stayId: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Confirmed operation state. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NukiGenerationResponse"];
+                    };
+                };
+                /** @description Operation remains unresolved. */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NukiGenerationResponse"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -2297,6 +2368,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
+                /** @description Deletion accepted and awaiting authoritative absence confirmation. */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            /** @enum {string} */
+                            state: "delete_pending";
+                        };
+                    };
+                };
                 /** @description Keypad code deleted. */
                 204: {
                     headers: {
@@ -2387,6 +2471,19 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
+                /** @description Deletion accepted and awaiting authoritative absence confirmation. */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            /** @enum {string} */
+                            state: "delete_pending";
+                        };
+                    };
+                };
                 /** @description Access code revoked. */
                 204: {
                     headers: {
@@ -2447,6 +2544,90 @@ export interface paths {
                     };
                 };
                 403: components["responses"]["Forbidden"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/nuki/recovery/amarildo/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        /** Preview the evidence-backed Amarildo recovery without mutation. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Read-only recovery assessment. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NukiRecoveryResult"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                422: components["responses"]["BadRequest"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/properties/{id}/nuki/recovery/amarildo/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply the validated Amarildo recovery without creating or deleting remotely. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["IdPath"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Recovery result. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NukiRecoveryResult"];
+                    };
+                };
+                403: components["responses"]["Forbidden"];
+                422: components["responses"]["BadRequest"];
             };
         };
         delete?: never;
@@ -4149,7 +4330,10 @@ export interface paths {
     };
     "/properties/{id}/invoice-sequence/next-preview": {
         parameters: {
-            query?: never;
+            query?: {
+                year?: number;
+                document_type?: "invoice" | "proforma";
+            };
             header?: never;
             path: {
                 id: components["parameters"]["IdPath"];
@@ -4159,7 +4343,10 @@ export interface paths {
         /** Registered backend read operation; response schema remains module-specific. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    year?: number;
+                    document_type?: "invoice" | "proforma";
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["IdPath"];
@@ -5518,6 +5705,8 @@ export interface components {
             ico?: string;
             dic?: string;
             vat_id?: string;
+            /** @enum {string} */
+            vat_status?: "non_vat_payer";
         };
         InvoicePartyRequest: {
             name?: string;
@@ -5533,9 +5722,16 @@ export interface components {
         InvoiceRequestFields: {
             /** Format: int64 */
             named_stay_id?: number;
+            /** @enum {string} */
+            document_type?: "invoice" | "proforma";
             /** Format: int64 */
             booking_payout_id?: number;
             booking_payout_reference?: string;
+            booking_reference?: string;
+            guest_name?: string;
+            price_details?: string;
+            /** @enum {string} */
+            supplier_vat_status?: "non_vat_payer";
             /** @enum {string} */
             language?: "sk" | "en";
             issue_date?: string;
@@ -5564,8 +5760,12 @@ export interface components {
             id: number;
             /** Format: int64 */
             named_stay_id: number | null;
+            /** @enum {string} */
+            document_type: "invoice" | "proforma";
             /** Format: int64 */
             booking_payout_id: number | null;
+            booking_reference: string | null;
+            guest_name: string | null;
             invoice_number: string;
             sequence_year: number;
             sequence_value: number;
@@ -5574,9 +5774,9 @@ export interface components {
             /** Format: date-time */
             issue_date: string;
             /** Format: date-time */
-            taxable_supply_date: string;
+            taxable_supply_date: string | null;
             /** Format: date-time */
-            due_date: string;
+            due_date: string | null;
             /** Format: date-time */
             stay_start_date: string;
             /** Format: date-time */
@@ -5587,6 +5787,7 @@ export interface components {
             currency: string;
             payment_status: string;
             payment_note: string;
+            price_details: string | null;
             version: number;
             latest_file_path?: string;
             /** Format: int64 */
@@ -5649,6 +5850,9 @@ export interface components {
         NukiStayNamePatchResponse: {
             ok: boolean;
             saved_pin_name?: string;
+            /** Format: int64 */
+            operation_id?: number;
+            state?: string;
         };
         NukiGenerateRequest: {
             /**
@@ -5657,6 +5861,21 @@ export interface components {
              */
             stay_id: number;
             pin_name: string;
+        };
+        NukiGenerationResponse: {
+            ok: boolean;
+            /** Format: int64 */
+            operation_id: number;
+            state: string;
+            accepted: boolean;
+            confirmed: boolean;
+            error?: string;
+        };
+        NukiRecoveryResult: {
+            applicable: boolean;
+            already_recovered: boolean;
+            remote_present: boolean;
+            message: string;
         };
         NukiCodesResponse: {
             codes: components["schemas"]["NukiKeypadCode"][];

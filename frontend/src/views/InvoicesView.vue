@@ -31,8 +31,10 @@ const saving = ref(false)
 const regenerating = ref(false)
 const error = ref('')
 const success = ref('')
+let previewRequest = 0
 
 const form = ref({
+  document_type: 'invoice' as 'invoice' | 'proforma',
   named_stay_id: '',
   booking_payout_id: '',
   language: 'sk' as 'sk' | 'en',
@@ -43,6 +45,9 @@ const form = ref({
   stay_end_date: today(),
   amount_eur: 0,
   payment_note: 'Already paid via Booking.com.',
+  booking_reference: '',
+  guest_name: '',
+  price_details: '',
   customer: {
     name: '',
     company_name: '',
@@ -50,6 +55,8 @@ const form = ref({
     city: '',
     postal_code: '',
     country: '',
+    ico: '',
+    dic: '',
     vat_id: '',
   },
 })
@@ -59,6 +66,7 @@ const isEditing = computed(() => selectedId.value !== null)
 function resetForm() {
   const defaultLanguage = currentProperty.value?.default_language === 'en' ? 'en' : 'sk'
   form.value = {
+    document_type: 'invoice',
     named_stay_id: '',
     booking_payout_id: '',
     language: defaultLanguage,
@@ -69,6 +77,9 @@ function resetForm() {
     stay_end_date: today(),
     amount_eur: 0,
     payment_note: 'Already paid via Booking.com.',
+    booking_reference: '',
+    guest_name: '',
+    price_details: '',
     customer: {
       name: '',
       company_name: '',
@@ -76,6 +87,8 @@ function resetForm() {
       city: '',
       postal_code: '',
       country: '',
+      ico: '',
+      dic: '',
       vat_id: '',
     },
   }
@@ -83,16 +96,20 @@ function resetForm() {
 
 function applyInvoiceToForm(invoice: Invoice) {
   form.value = {
+    document_type: invoice.document_type || 'invoice',
     named_stay_id: String(invoice.named_stay_id),
     booking_payout_id: invoice.booking_payout_id ? String(invoice.booking_payout_id) : '',
     language: invoice.language,
     issue_date: invoice.issue_date.slice(0, 10),
-    taxable_supply_date: invoice.taxable_supply_date.slice(0, 10),
-    due_date: invoice.due_date.slice(0, 10),
+    taxable_supply_date: invoice.taxable_supply_date?.slice(0, 10) || '',
+    due_date: invoice.due_date?.slice(0, 10) || '',
     stay_start_date: invoice.stay_start_date.slice(0, 10),
     stay_end_date: invoice.stay_end_date.slice(0, 10),
     amount_eur: invoice.amount_total_cents / 100,
     payment_note: invoice.payment_note,
+    booking_reference: invoice.booking_reference || '',
+    guest_name: invoice.guest_name || '',
+    price_details: invoice.price_details || '',
     customer: {
       name: invoice.customer.name || '',
       company_name: invoice.customer.company_name || '',
@@ -101,6 +118,8 @@ function applyInvoiceToForm(invoice: Invoice) {
       postal_code: invoice.customer.postal_code || '',
       country: invoice.customer.country || '',
       vat_id: invoice.customer.vat_id || '',
+      ico: invoice.customer.ico || '',
+      dic: invoice.customer.dic || '',
     },
   }
 }
@@ -120,7 +139,7 @@ async function loadList() {
     const [list, nextPreview, stayRes, payRes] = await Promise.all([
       api<{ invoices: Invoice[] }>(`/api/properties/${pid.value}/invoices`),
       api<InvoicePreview>(
-        `/api/properties/${pid.value}/invoice-sequence/next-preview?year=${form.value.issue_date.slice(0, 4)}`,
+        `/api/properties/${pid.value}/invoice-sequence/next-preview?year=${form.value.issue_date.slice(0, 4)}&document_type=${form.value.document_type}`,
       ),
       api<{ stays: StayOption[] }>(`/api/properties/${pid.value}/invoices/stay-candidates?limit=120`).catch(
         () => ({ stays: [] as StayOption[] }),
@@ -160,12 +179,17 @@ async function refreshPreview() {
     preview.value = null
     return
   }
+  const request = ++previewRequest
+  const propertyId = pid.value
+  const year = form.value.issue_date.slice(0, 4)
+  const documentType = form.value.document_type
   try {
-    preview.value = await api<InvoicePreview>(
-      `/api/properties/${pid.value}/invoice-sequence/next-preview?year=${form.value.issue_date.slice(0, 4)}`,
+    const next = await api<InvoicePreview>(
+      `/api/properties/${propertyId}/invoice-sequence/next-preview?year=${year}&document_type=${documentType}`,
     )
+    if (request === previewRequest && propertyId === pid.value && year === form.value.issue_date.slice(0, 4) && documentType === form.value.document_type) preview.value = next
   } catch {
-    preview.value = null
+    if (request === previewRequest) preview.value = null
   }
 }
 
@@ -182,6 +206,10 @@ function onStaySelect(value: string) {
   const stay = stayOptions.value.find((candidate) => String(candidate.id) === value)
   if (!stay) return
   form.value.named_stay_id = String(stay.id)
+	if (!selectedId.value && form.value.document_type === 'proforma') {
+		form.value.stay_start_date = stay.check_in_date
+		form.value.stay_end_date = stay.check_out_date
+	}
 }
 
 function onPayoutSelect(value: string) {
@@ -213,14 +241,15 @@ function startNewInvoice() {
 
 function invoicePayload() {
   const p: Record<string, unknown> = {
+    document_type: form.value.document_type,
     language: form.value.language,
     issue_date: form.value.issue_date,
-    taxable_supply_date: form.value.taxable_supply_date,
-    due_date: form.value.due_date,
     stay_start_date: form.value.stay_start_date,
     stay_end_date: form.value.stay_end_date,
     amount_total_cents: Math.round((form.value.amount_eur || 0) * 100),
-    payment_note: form.value.payment_note,
+    booking_reference: form.value.booking_reference.trim(),
+    guest_name: form.value.guest_name.trim(),
+    price_details: form.value.price_details.trim(),
     customer: {
       name: form.value.customer.name.trim(),
       company_name: form.value.customer.company_name.trim(),
@@ -228,8 +257,17 @@ function invoicePayload() {
       city: form.value.customer.city.trim(),
       postal_code: form.value.customer.postal_code.trim(),
       country: form.value.customer.country.trim(),
+      ico: form.value.customer.ico.trim(),
+      dic: form.value.customer.dic.trim(),
       vat_id: form.value.customer.vat_id.trim(),
     },
+  }
+  if (form.value.document_type === 'invoice') {
+    p.taxable_supply_date = form.value.taxable_supply_date
+    p.due_date = form.value.due_date
+    p.payment_note = form.value.payment_note
+  } else {
+    p.supplier_vat_status = 'non_vat_payer'
   }
   p.named_stay_id = Number(form.value.named_stay_id)
   const bid = form.value.booking_payout_id.trim()
@@ -307,6 +345,24 @@ watch(
 watch(
   () => form.value.issue_date,
   () => {
+    if (!selectedId.value) void refreshPreview()
+  },
+)
+
+watch(
+  () => form.value.document_type,
+  (type, previous) => {
+    if (type === previous) return
+    if (type === 'proforma') {
+      form.value.booking_payout_id = ''
+      form.value.taxable_supply_date = ''
+      form.value.due_date = ''
+      form.value.payment_note = ''
+    } else {
+      form.value.taxable_supply_date = form.value.issue_date
+      form.value.due_date = form.value.issue_date
+      form.value.payment_note = 'Already paid via Booking.com.'
+    }
     if (!selectedId.value) void refreshPreview()
   },
 )

@@ -19,7 +19,7 @@ const emit = defineEmits<{ select: [invoice: Invoice] }>()
 <template>
   <UiCard class="invoice-list-card">
     <div class="card-head">
-      <h2 class="card-head__title">Invoices</h2>
+      <h2 class="card-head__title">Documents</h2>
       <UiBadge tone="neutral">{{ invoices.length }} total</UiBadge>
     </div>
     <p v-if="preview && !isEditing" class="muted">
@@ -49,6 +49,9 @@ const emit = defineEmits<{ select: [invoice: Invoice] }>()
           <span>{{ invoice.customer.company_name || invoice.customer.name || 'Customer' }}</span>
           <span class="ili-tags">
             <UiBadge v-if="invoice.language" tone="neutral" size="sm">{{ invoice.language.toUpperCase() }}</UiBadge>
+            <UiBadge :tone="invoice.document_type === 'proforma' ? 'info' : 'neutral'" size="sm">
+              {{ invoice.document_type === 'proforma' ? 'Pro forma' : 'Invoice' }}
+            </UiBadge>
             <UiBadge tone="neutral" size="sm">v{{ invoice.version }}</UiBadge>
           </span>
         </div>

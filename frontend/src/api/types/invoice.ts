@@ -10,6 +10,7 @@ export interface InvoiceParty {
   ico?: string
   dic?: string
   vat_id?: string
+  vat_status?: 'non_vat_payer'
 }
 
 export interface InvoiceFile {
@@ -23,14 +24,17 @@ export interface InvoiceFile {
 export interface Invoice {
   id: number
   named_stay_id: number
+  document_type: 'invoice' | 'proforma'
   booking_payout_id?: number
+  booking_reference?: string | null
+  guest_name?: string | null
   invoice_number: string
   sequence_year: number
   sequence_value: number
   language: 'sk' | 'en'
   issue_date: string
-  taxable_supply_date: string
-  due_date: string
+  taxable_supply_date: string | null
+  due_date: string | null
   stay_start_date: string
   stay_end_date: string
   supplier: InvoiceParty
@@ -39,6 +43,7 @@ export interface Invoice {
   currency: string
   payment_status: string
   payment_note: string
+  price_details?: string | null
   version: number
   latest_file_path?: string
   latest_file_size_bytes?: number
@@ -53,6 +58,7 @@ export interface InvoicePreview {
   year: number
   sequence_value: number
   invoice_number: string
+  document_type: 'invoice' | 'proforma'
 }
 
 export interface InvoiceNamedStayOption {

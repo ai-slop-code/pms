@@ -1029,6 +1029,9 @@ func (s *Server) getDashboardSummary(w http.ResponseWriter, r *http.Request) {
 		if rows, err := s.Store.ListInvoices(r.Context(), pid); err == nil {
 			out := make([]dashboardInvoiceRow, 0, 3)
 			for _, row := range rows {
+				if row.DocumentType != "invoice" {
+					continue
+				}
 				if len(out) >= 3 {
 					break
 				}

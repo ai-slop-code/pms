@@ -14,6 +14,7 @@ import type {
 } from '@/api/types/invoice'
 
 export interface InvoiceFormState {
+  document_type: 'invoice' | 'proforma'
   named_stay_id: string
   booking_payout_id: string
   language: 'sk' | 'en'
@@ -24,6 +25,9 @@ export interface InvoiceFormState {
   stay_end_date: string
   amount_eur: number
   payment_note: string
+  booking_reference: string
+  guest_name: string
+  price_details: string
   customer: {
     name: string
     company_name: string
@@ -31,6 +35,8 @@ export interface InvoiceFormState {
     city: string
     postal_code: string
     country: string
+    ico: string
+    dic: string
     vat_id: string
   }
 }
@@ -57,7 +63,7 @@ const emit = defineEmits<{
 
 <template>
   <UiCard class="invoice-editor-card">
-    <div class="card-head">
+      <div class="card-head">
       <h2 class="card-head__title">{{ isEditing ? 'Edit invoice' : 'Create invoice' }}</h2>
       <div class="card-head__actions">
         <UiButton
@@ -79,6 +85,10 @@ const emit = defineEmits<{
           >Regenerate PDF</UiButton
         >
       </div>
+
+      <p v-if="form.document_type === 'proforma'" class="proforma-help">
+        For a non-VAT supplier. Booking.com handles payment; this document does not request a separate payment.
+      </p>
     </div>
 
     <form @submit.prevent="emit('submit')">
@@ -96,6 +106,7 @@ const emit = defineEmits<{
           </option>
         </UiSelect>
         <UiSelect
+          v-if="form.document_type === 'invoice'"
           :model-value="form.booking_payout_id"
           label="Mapped Booking.com payout (optional)"
           class="form-grid__full"
@@ -111,13 +122,20 @@ const emit = defineEmits<{
             {{ payoutOptionLabel(p) }}
           </option>
         </UiSelect>
+        <UiSelect v-if="!isEditing" v-model="form.document_type" label="Document type">
+          <option value="invoice">Invoice</option>
+          <option value="proforma">Pro forma</option>
+        </UiSelect>
+        <p v-else class="document-type-readonly">
+          Document type: <strong>{{ form.document_type === 'proforma' ? 'Pro forma' : 'Invoice' }}</strong>
+        </p>
         <UiSelect v-model="form.language" label="Language">
           <option value="sk">Slovak</option>
           <option value="en">English</option>
         </UiSelect>
         <UiInput v-model="form.issue_date" type="date" label="Issue date" />
-        <UiInput v-model="form.taxable_supply_date" type="date" label="Taxable supply date" />
-        <UiInput v-model="form.due_date" type="date" label="Due date" />
+        <UiInput v-if="form.document_type === 'invoice'" v-model="form.taxable_supply_date" type="date" label="Taxable supply date" />
+        <UiInput v-if="form.document_type === 'invoice'" v-model="form.due_date" type="date" label="Due date" />
         <UiInput
           v-model.number="form.amount_eur"
           type="number"
@@ -128,9 +146,22 @@ const emit = defineEmits<{
         />
         <UiInput v-model="form.stay_start_date" type="date" label="Stay start" />
         <UiInput v-model="form.stay_end_date" type="date" label="Stay end" />
-        <label class="textarea-field form-grid__full">
+        <UiInput
+          v-if="form.document_type === 'proforma'"
+          v-model="form.booking_reference"
+          label="Booking.com reservation number"
+          placeholder="6429185079"
+          required
+          class="form-grid__full"
+        />
+        <UiInput v-if="form.document_type === 'proforma'" v-model="form.guest_name" label="Guest name" required />
+        <label v-if="form.document_type === 'invoice'" class="textarea-field form-grid__full">
           <span class="textarea-field__label">Payment note</span>
           <textarea v-model="form.payment_note" rows="3" />
+        </label>
+        <label v-else class="textarea-field form-grid__full">
+          <span class="textarea-field__label">Price details</span>
+          <textarea v-model="form.price_details" rows="3" maxlength="1000" />
         </label>
       </div>
 
@@ -142,6 +173,8 @@ const emit = defineEmits<{
           <UiInput v-model="form.customer.city" label="City" />
           <UiInput v-model="form.customer.postal_code" label="Postal code" />
           <UiInput v-model="form.customer.country" label="Country" />
+          <UiInput v-model="form.customer.ico" label="Registration number" />
+          <UiInput v-model="form.customer.dic" label="Tax ID" />
           <UiInput v-model="form.customer.vat_id" label="VAT number" />
         </div>
       </UiSection>

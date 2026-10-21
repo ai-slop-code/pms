@@ -1,6 +1,7 @@
 package invoicepdf
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +64,32 @@ func TestRender_smoke(t *testing.T) {
 	}
 	if len(b) < 2500 {
 		t.Fatalf("unexpectedly small PDF (%d bytes)", len(b))
+	}
+}
+
+func TestProformaDocumentUsesNonPaymentWording(t *testing.T) {
+	for _, lang := range []string{"en", "sk"} {
+		doc := Document{
+			Language:         lang,
+			DocumentType:     "proforma",
+			InvoiceNumber:    "PF/P001/2026/0001",
+			BookingReference: "6429185079",
+			GuestName:        "Guest Example",
+			IssueDate:        time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC),
+			StayStartDate:    time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+			StayEndDate:      time.Date(2026, 5, 3, 0, 0, 0, 0, time.UTC),
+			AmountTotalCents: 123456,
+			Currency:         "EUR",
+		}
+		if isPaid(doc) || !strings.Contains(payNote(doc), "Booking.com") {
+			t.Fatalf("language=%s pro forma has payment assertion", lang)
+		}
+		if docTitle(doc) != map[string]string{"en": "Pro forma invoice", "sk": "Proforma faktúra"}[lang] {
+			t.Fatalf("language=%s title=%q", lang, docTitle(doc))
+		}
+		if _, err := Render(doc); err != nil {
+			t.Fatalf("language=%s render: %v", lang, err)
+		}
 	}
 }
 

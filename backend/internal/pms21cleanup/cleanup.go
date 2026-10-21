@@ -1104,7 +1104,8 @@ func criticalAggregates(ctx context.Context, db *sql.DB, r *Report, phase string
 	sort.Strings(tables)
 	result := make(map[string]string, len(tables))
 	for _, table := range tables {
-		digest, err := aggregateTable(ctx, db, table, criticalTables[table])
+		columns := criticalTables[table]
+		digest, err := aggregateTable(ctx, db, table, columns)
 		if err != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("%s aggregate %s: %v", phase, table, err))
 			continue
@@ -1160,8 +1161,16 @@ func writeHashValue(w io.Writer, value string) {
 }
 
 func runReadinessChecks(ctx context.Context, db *sql.DB) []Check {
-	checks := make([]Check, 0, len(readinessChecks))
-	for _, definition := range readinessChecks {
+	definitions := append([]readinessCheck(nil), readinessChecks...)
+	if tableHasColumn(ctx, db, "invoices", "document_type") {
+		for i := range definitions {
+			if definitions[i].id == "stable.invoice_named_stay_uniqueness" {
+				definitions[i].query = `SELECT count(*) FROM (SELECT 1 FROM invoices WHERE named_stay_id IS NOT NULL GROUP BY property_id, named_stay_id, document_type HAVING count(*) > 1)`
+			}
+		}
+	}
+	checks := make([]Check, 0, len(definitions))
+	for _, definition := range definitions {
 		var count int64
 		err := db.QueryRowContext(ctx, definition.query).Scan(&count)
 		check := Check{ID: definition.id, Count: count, Passed: err == nil && count == 0}
@@ -1172,6 +1181,24 @@ func runReadinessChecks(ctx context.Context, db *sql.DB) []Check {
 		checks = append(checks, check)
 	}
 	return checks
+}
+
+func tableHasColumn(ctx context.Context, db *sql.DB, table, column string) bool {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+quoteIdentifier(table)+`)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue interface{}
+		if rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk) == nil && name == column {
+			return true
+		}
+	}
+	return false
 }
 
 func runPostChecks(ctx context.Context, db *sql.DB) []Check {

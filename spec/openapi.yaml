@@ -1085,7 +1085,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/NukiRecoveryResult" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "422": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/BadRequest" }
   /properties/{id}/nuki/recovery/amarildo/apply:
     parameters: [{ $ref: "#/components/parameters/IdPath" }]
     post:
@@ -1098,7 +1098,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/NukiRecoveryResult" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "422": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/BadRequest" }
   /properties/{id}/nuki/runs:
     parameters: [{ $ref: "#/components/parameters/IdPath" }]
     get:
@@ -1499,7 +1499,14 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
   /properties/{id}/invoice-sequence/next-preview:
-    parameters: [{ $ref: "#/components/parameters/IdPath" }]
+    parameters:
+      - { $ref: "#/components/parameters/IdPath" }
+      - in: query
+        name: year
+        schema: { type: integer, minimum: 2000, maximum: 3000 }
+      - in: query
+        name: document_type
+        schema: { type: string, enum: [invoice, proforma], default: invoice }
     get: *route-read
 
   /properties/{id}/message-templates:
@@ -2761,6 +2768,7 @@ components:
         ico: { type: string }
         dic: { type: string }
         vat_id: { type: string }
+        vat_status: { type: string, enum: [non_vat_payer] }
 
     InvoicePartyRequest:
       type: object
@@ -2781,8 +2789,13 @@ components:
       additionalProperties: false
       properties:
         named_stay_id: { type: integer, format: int64 }
+        document_type: { type: string, enum: [invoice, proforma] }
         booking_payout_id: { type: integer, format: int64, minimum: 0 }
         booking_payout_reference: { type: string }
+        booking_reference: { type: string, maxLength: 100 }
+        guest_name: { type: string, maxLength: 200 }
+        price_details: { type: string, maxLength: 1000 }
+        supplier_vat_status: { type: string, enum: [non_vat_payer] }
         language: { type: string, enum: [sk, en] }
         issue_date: { type: string }
         taxable_supply_date: { type: string }
@@ -2815,18 +2828,21 @@ components:
     Invoice:
       type: object
       required:
-        [id, named_stay_id, booking_payout_id, invoice_number, sequence_year, sequence_value, language, issue_date, taxable_supply_date, due_date, stay_start_date, stay_end_date, supplier, customer, amount_total_cents, currency, payment_status, payment_note, version, download_url, created_at, updated_at]
+        [id, named_stay_id, document_type, booking_payout_id, booking_reference, guest_name, invoice_number, sequence_year, sequence_value, language, issue_date, taxable_supply_date, due_date, stay_start_date, stay_end_date, supplier, customer, amount_total_cents, currency, payment_status, payment_note, price_details, version, download_url, created_at, updated_at]
       properties:
         id: { type: integer, format: int64 }
         named_stay_id: { type: integer, format: int64, nullable: true }
+        document_type: { type: string, enum: [invoice, proforma] }
         booking_payout_id: { type: integer, format: int64, nullable: true }
+        booking_reference: { type: string, nullable: true }
+        guest_name: { type: string, nullable: true }
         invoice_number: { type: string }
         sequence_year: { type: integer }
         sequence_value: { type: integer }
         language: { type: string, enum: [sk, en] }
         issue_date: { type: string, format: date-time }
-        taxable_supply_date: { type: string, format: date-time }
-        due_date: { type: string, format: date-time }
+        taxable_supply_date: { type: string, format: date-time, nullable: true }
+        due_date: { type: string, format: date-time, nullable: true }
         stay_start_date: { type: string, format: date-time }
         stay_end_date: { type: string, format: date-time }
         supplier: { $ref: "#/components/schemas/InvoiceParty" }
@@ -2835,6 +2851,7 @@ components:
         currency: { type: string }
         payment_status: { type: string }
         payment_note: { type: string }
+        price_details: { type: string, nullable: true }
         version: { type: integer, minimum: 1 }
         latest_file_path: { type: string }
         latest_file_size_bytes: { type: integer, format: int64 }

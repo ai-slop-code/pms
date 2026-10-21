@@ -12,6 +12,9 @@ type Invoice struct {
 	ID                     int64
 	PropertyID             int64
 	NamedStayID            sql.NullInt64
+	DocumentType           string
+	BookingReference       sql.NullString
+	GuestName              sql.NullString
 	InvoiceNumber          string
 	SequenceYear           int
 	SequenceValue          int
@@ -27,6 +30,7 @@ type Invoice struct {
 	Currency               string
 	PaymentStatus          string
 	PaymentNote            string
+	PriceDetails           sql.NullString
 	FinanceBookingPayoutID sql.NullInt64
 	Version                int
 	CreatedBy              sql.NullInt64
@@ -77,6 +81,13 @@ func FormatInvoiceNumber(code string, propertyID int64, year, sequence int) stri
 }
 
 func (s *Store) PreviewNextInvoiceNumber(ctx context.Context, propertyID int64, year int) (string, int, error) {
+	return s.PreviewNextInvoiceNumberForType(ctx, propertyID, year, "invoice")
+}
+
+func (s *Store) PreviewNextInvoiceNumberForType(ctx context.Context, propertyID int64, year int, documentType string) (string, int, error) {
+	if documentType != "invoice" && documentType != "proforma" {
+		return "", 0, fmt.Errorf("invalid document type")
+	}
 	prop, err := s.GetProperty(ctx, propertyID)
 	if err != nil {
 		return "", 0, err
@@ -84,21 +95,33 @@ func (s *Store) PreviewNextInvoiceNumber(ctx context.Context, propertyID int64, 
 	code := sanitizeInvoiceCodeFromNull(prop.InvoiceCode)
 	var current int
 	err = s.DB.QueryRowContext(ctx,
-		`SELECT current_value FROM invoice_sequences WHERE property_id = ? AND sequence_year = ?`,
-		propertyID, year,
+		`SELECT current_value FROM invoice_sequences WHERE property_id = ? AND document_type = ? AND sequence_year = ?`,
+		propertyID, documentType, year,
 	).Scan(&current)
 	if err != nil && err != sql.ErrNoRows {
 		return "", 0, err
 	}
 	next := current + 1
-	return FormatInvoiceNumber(code, propertyID, year, next), next, nil
+	number := FormatInvoiceNumber(code, propertyID, year, next)
+	if documentType == "proforma" {
+		number = "PF/" + number
+	}
+	return number, next, nil
+}
+
+func formatInvoiceNumberForType(code string, propertyID int64, year, sequence int, documentType string) string {
+	number := FormatInvoiceNumber(code, propertyID, year, sequence)
+	if documentType == "proforma" {
+		return "PF/" + number
+	}
+	return number
 }
 
 func (s *Store) ListInvoices(ctx context.Context, propertyID int64) ([]Invoice, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT i.id, i.property_id, i.named_stay_id, i.finance_booking_payout_id, i.invoice_number, i.sequence_year, i.sequence_value,
+		SELECT i.id, i.property_id, i.named_stay_id, i.finance_booking_payout_id, i.document_type, i.booking_reference, i.guest_name, i.invoice_number, i.sequence_year, i.sequence_value,
 			i.language, i.issue_date, i.taxable_supply_date, i.due_date, i.stay_start_date, i.stay_end_date,
-			i.supplier_snapshot_json, i.customer_snapshot_json, i.amount_total_cents, i.currency, i.payment_status,
+			i.supplier_snapshot_json, i.customer_snapshot_json, i.price_details, i.amount_total_cents, i.currency, i.payment_status,
 			i.payment_note, i.version, i.created_by, i.created_at, i.updated_at,
 			(
 				SELECT file_path
@@ -133,9 +156,9 @@ func (s *Store) ListInvoices(ctx context.Context, propertyID int64) ([]Invoice, 
 
 func (s *Store) GetInvoiceByID(ctx context.Context, propertyID, invoiceID int64) (*Invoice, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT i.id, i.property_id, i.named_stay_id, i.finance_booking_payout_id, i.invoice_number, i.sequence_year, i.sequence_value,
+		SELECT i.id, i.property_id, i.named_stay_id, i.finance_booking_payout_id, i.document_type, i.booking_reference, i.guest_name, i.invoice_number, i.sequence_year, i.sequence_value,
 			i.language, i.issue_date, i.taxable_supply_date, i.due_date, i.stay_start_date, i.stay_end_date,
-			i.supplier_snapshot_json, i.customer_snapshot_json, i.amount_total_cents, i.currency, i.payment_status,
+			i.supplier_snapshot_json, i.customer_snapshot_json, i.price_details, i.amount_total_cents, i.currency, i.payment_status,
 			i.payment_note, i.version, i.created_by, i.created_at, i.updated_at,
 			(
 				SELECT file_path
@@ -184,7 +207,18 @@ func (s *Store) CreateInvoice(ctx context.Context, row *Invoice) (*Invoice, erro
 	if err != nil {
 		return nil, err
 	}
-	current, err := currentInvoiceSequenceTx(ctx, tx, row.PropertyID, year)
+	if row.DocumentType == "" {
+		row.DocumentType = "invoice"
+	}
+	if row.DocumentType == "proforma" {
+		var timezone string
+		if err := tx.QueryRowContext(ctx, `SELECT timezone FROM properties WHERE id = ?`, row.PropertyID).Scan(&timezone); err == nil {
+			if loc, loadErr := time.LoadLocation(timezone); loadErr == nil {
+				year = row.IssueDate.In(loc).Year()
+			}
+		}
+	}
+	current, err := currentInvoiceSequenceTx(ctx, tx, row.PropertyID, row.DocumentType, year)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, err
@@ -201,28 +235,31 @@ func (s *Store) CreateInvoice(ctx context.Context, row *Invoice) (*Invoice, erro
 		_ = tx.Rollback()
 		return nil, err
 	}
-	row.InvoiceNumber = FormatInvoiceNumber(sanitizeInvoiceCodeFromNull(invCode), row.PropertyID, year, next)
+	row.InvoiceNumber = formatInvoiceNumberForType(sanitizeInvoiceCodeFromNull(invCode), row.PropertyID, year, next, row.DocumentType)
 	if row.Currency == "" {
 		row.Currency = "EUR"
 	}
-	if row.PaymentStatus == "" {
+	if row.DocumentType == "proforma" {
+		row.PaymentStatus = "not_applicable"
+		row.PaymentNote = ""
+	} else if row.PaymentStatus == "" {
 		row.PaymentStatus = "paid"
 	}
-	if row.PaymentNote == "" {
+	if row.DocumentType != "proforma" && row.PaymentNote == "" {
 		row.PaymentNote = "Already paid via Booking.com."
 	}
 	row.Version = 1
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO invoices (
-			property_id, named_stay_id, finance_booking_payout_id, invoice_number, sequence_year, sequence_value, language,
+			property_id, named_stay_id, finance_booking_payout_id, document_type, booking_reference, guest_name, invoice_number, sequence_year, sequence_value, language,
 			issue_date, taxable_supply_date, due_date, stay_start_date, stay_end_date,
-			supplier_snapshot_json, customer_snapshot_json, amount_total_cents, currency,
+			supplier_snapshot_json, customer_snapshot_json, price_details, amount_total_cents, currency,
 			payment_status, payment_note, version, created_by, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		row.PropertyID, row.NamedStayID.Int64, nullInt64Value(row.FinanceBookingPayoutID), row.InvoiceNumber, row.SequenceYear, row.SequenceValue, row.Language,
-		row.IssueDate.UTC().Format(time.RFC3339), row.TaxableSupplyDate.UTC().Format(time.RFC3339), row.DueDate.UTC().Format(time.RFC3339),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.PropertyID, row.NamedStayID.Int64, nullInt64Value(row.FinanceBookingPayoutID), row.DocumentType, nullStringValue(row.BookingReference), nullStringValue(row.GuestName), row.InvoiceNumber, row.SequenceYear, row.SequenceValue, row.Language,
+		row.IssueDate.UTC().Format(time.RFC3339), nullableTimeValue(row.TaxableSupplyDate), nullableTimeValue(row.DueDate),
 		row.StayStartDate.UTC().Format(time.RFC3339), row.StayEndDate.UTC().Format(time.RFC3339),
-		row.SupplierSnapshotJSON, row.CustomerSnapshotJSON, row.AmountTotalCents, row.Currency,
+		row.SupplierSnapshotJSON, row.CustomerSnapshotJSON, nullStringValue(row.PriceDetails), row.AmountTotalCents, row.Currency,
 		row.PaymentStatus, row.PaymentNote, row.Version, nullInt64Value(row.CreatedBy), now, now)
 	if err != nil {
 		_ = tx.Rollback()
@@ -230,11 +267,11 @@ func (s *Store) CreateInvoice(ctx context.Context, row *Invoice) (*Invoice, erro
 	}
 	id, _ := res.LastInsertId()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO invoice_sequences (property_id, sequence_year, current_value, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(property_id, sequence_year)
+		INSERT INTO invoice_sequences (property_id, document_type, sequence_year, current_value, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(property_id, document_type, sequence_year)
 		DO UPDATE SET current_value = excluded.current_value, updated_at = excluded.updated_at`,
-		row.PropertyID, row.SequenceYear, row.SequenceValue, now, now); err != nil {
+		row.PropertyID, row.DocumentType, row.SequenceYear, row.SequenceValue, now, now); err != nil {
 		_ = tx.Rollback()
 		return nil, err
 	}
@@ -259,14 +296,14 @@ func (s *Store) UpdateInvoice(ctx context.Context, row *Invoice) (*Invoice, erro
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = tx.ExecContext(ctx, `
 		UPDATE invoices
-		SET named_stay_id = ?, finance_booking_payout_id = ?, language = ?, issue_date = ?, taxable_supply_date = ?, due_date = ?,
+		SET named_stay_id = ?, finance_booking_payout_id = ?, booking_reference = ?, guest_name = ?, language = ?, issue_date = ?, taxable_supply_date = ?, due_date = ?,
 			stay_start_date = ?, stay_end_date = ?, supplier_snapshot_json = ?, customer_snapshot_json = ?,
-			amount_total_cents = ?, currency = ?, payment_status = ?, payment_note = ?, updated_at = ?
+			price_details = ?, amount_total_cents = ?, currency = ?, payment_status = ?, payment_note = ?, updated_at = ?
 		WHERE id = ? AND property_id = ?`,
-		row.NamedStayID.Int64, nullInt64Value(row.FinanceBookingPayoutID), row.Language, row.IssueDate.UTC().Format(time.RFC3339),
-		row.TaxableSupplyDate.UTC().Format(time.RFC3339), row.DueDate.UTC().Format(time.RFC3339),
+		row.NamedStayID.Int64, nullInt64Value(row.FinanceBookingPayoutID), nullStringValue(row.BookingReference), nullStringValue(row.GuestName), row.Language, row.IssueDate.UTC().Format(time.RFC3339),
+		nullableTimeValue(row.TaxableSupplyDate), nullableTimeValue(row.DueDate),
 		row.StayStartDate.UTC().Format(time.RFC3339), row.StayEndDate.UTC().Format(time.RFC3339),
-		row.SupplierSnapshotJSON, row.CustomerSnapshotJSON, row.AmountTotalCents, row.Currency,
+		row.SupplierSnapshotJSON, row.CustomerSnapshotJSON, nullStringValue(row.PriceDetails), row.AmountTotalCents, row.Currency,
 		row.PaymentStatus, row.PaymentNote, now, row.ID, row.PropertyID)
 	if err != nil {
 		return nil, err
@@ -371,6 +408,11 @@ func (s *Store) GetInvoiceFileByID(ctx context.Context, invoiceID, fileID int64)
 }
 
 func validateInvoiceLinks(ctx context.Context, tx *sql.Tx, row *Invoice) error {
+	if row.DocumentType == "proforma" {
+		if row.FinanceBookingPayoutID.Valid || !row.TaxableSupplyDate.IsZero() || !row.DueDate.IsZero() || row.PaymentStatus != "not_applicable" || row.PaymentNote != "" {
+			return fmt.Errorf("invalid pro forma payment or tax fields")
+		}
+	}
 	if !row.NamedStayID.Valid || row.NamedStayID.Int64 <= 0 {
 		return fmt.Errorf("named_stay_id is required")
 	}
@@ -394,11 +436,11 @@ func validateInvoiceLinks(ctx context.Context, tx *sql.Tx, row *Invoice) error {
 	return nil
 }
 
-func currentInvoiceSequenceTx(ctx context.Context, tx *sql.Tx, propertyID int64, year int) (int, error) {
+func currentInvoiceSequenceTx(ctx context.Context, tx *sql.Tx, propertyID int64, documentType string, year int) (int, error) {
 	var current int
 	err := tx.QueryRowContext(ctx,
-		`SELECT current_value FROM invoice_sequences WHERE property_id = ? AND sequence_year = ?`,
-		propertyID, year,
+		`SELECT current_value FROM invoice_sequences WHERE property_id = ? AND document_type = ? AND sequence_year = ?`,
+		propertyID, documentType, year,
 	).Scan(&current)
 	if err == sql.ErrNoRows {
 		return 0, nil
@@ -406,25 +448,37 @@ func currentInvoiceSequenceTx(ctx context.Context, tx *sql.Tx, propertyID int64,
 	return current, err
 }
 
+func nullableTimeValue(value time.Time) interface{} {
+	if value.IsZero() {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
 func scanInvoicesRows(rows *sql.Rows) ([]Invoice, error) {
 	out := make([]Invoice, 0)
 	for rows.Next() {
 		var row Invoice
-		var issueDate, taxableSupplyDate, dueDate, stayStartDate, stayEndDate string
+		var issueDate, stayStartDate, stayEndDate string
+		var taxableSupplyDateValue, dueDateValue sql.NullString
 		var createdAt, updatedAt string
 		var latestFileCreatedAt sql.NullString
 		if err := rows.Scan(
-			&row.ID, &row.PropertyID, &row.NamedStayID, &row.FinanceBookingPayoutID, &row.InvoiceNumber, &row.SequenceYear, &row.SequenceValue,
-			&row.Language, &issueDate, &taxableSupplyDate, &dueDate, &stayStartDate, &stayEndDate,
-			&row.SupplierSnapshotJSON, &row.CustomerSnapshotJSON, &row.AmountTotalCents, &row.Currency, &row.PaymentStatus,
+			&row.ID, &row.PropertyID, &row.NamedStayID, &row.FinanceBookingPayoutID, &row.DocumentType, &row.BookingReference, &row.GuestName, &row.InvoiceNumber, &row.SequenceYear, &row.SequenceValue,
+			&row.Language, &issueDate, &taxableSupplyDateValue, &dueDateValue, &stayStartDate, &stayEndDate,
+			&row.SupplierSnapshotJSON, &row.CustomerSnapshotJSON, &row.PriceDetails, &row.AmountTotalCents, &row.Currency, &row.PaymentStatus,
 			&row.PaymentNote, &row.Version, &row.CreatedBy, &createdAt, &updatedAt,
 			&row.LatestFilePath, &row.LatestFileSizeBytes, &latestFileCreatedAt,
 		); err != nil {
 			return nil, err
 		}
 		row.IssueDate, _ = time.Parse(time.RFC3339, issueDate)
-		row.TaxableSupplyDate, _ = time.Parse(time.RFC3339, taxableSupplyDate)
-		row.DueDate, _ = time.Parse(time.RFC3339, dueDate)
+		if taxableSupplyDateValue.Valid {
+			row.TaxableSupplyDate, _ = time.Parse(time.RFC3339, taxableSupplyDateValue.String)
+		}
+		if dueDateValue.Valid {
+			row.DueDate, _ = time.Parse(time.RFC3339, dueDateValue.String)
+		}
 		row.StayStartDate, _ = time.Parse(time.RFC3339, stayStartDate)
 		row.StayEndDate, _ = time.Parse(time.RFC3339, stayEndDate)
 		row.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)

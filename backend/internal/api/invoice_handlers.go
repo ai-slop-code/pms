@@ -30,6 +30,7 @@ type invoicePartySnapshot struct {
 	ICO          string `json:"ico,omitempty"`
 	DIC          string `json:"dic,omitempty"`
 	VATID        string `json:"vat_id,omitempty"`
+	VATStatus    string `json:"vat_status,omitempty"`
 }
 
 type invoiceFileRow struct {
@@ -43,14 +44,17 @@ type invoiceFileRow struct {
 type invoiceRow struct {
 	ID                  int64                `json:"id"`
 	NamedStayID         *int64               `json:"named_stay_id"`
+	DocumentType        string               `json:"document_type"`
+	BookingReference    *string              `json:"booking_reference"`
+	GuestName           *string              `json:"guest_name"`
 	BookingPayoutID     *int64               `json:"booking_payout_id"`
 	InvoiceNumber       string               `json:"invoice_number"`
 	SequenceYear        int                  `json:"sequence_year"`
 	SequenceValue       int                  `json:"sequence_value"`
 	Language            string               `json:"language"`
 	IssueDate           string               `json:"issue_date"`
-	TaxableSupplyDate   string               `json:"taxable_supply_date"`
-	DueDate             string               `json:"due_date"`
+	TaxableSupplyDate   *string              `json:"taxable_supply_date"`
+	DueDate             *string              `json:"due_date"`
 	StayStartDate       string               `json:"stay_start_date"`
 	StayEndDate         string               `json:"stay_end_date"`
 	Supplier            invoicePartySnapshot `json:"supplier"`
@@ -59,6 +63,7 @@ type invoiceRow struct {
 	Currency            string               `json:"currency"`
 	PaymentStatus       string               `json:"payment_status"`
 	PaymentNote         string               `json:"payment_note"`
+	PriceDetails        *string              `json:"price_details"`
 	Version             int                  `json:"version"`
 	LatestFilePath      *string              `json:"latest_file_path,omitempty"`
 	LatestFileSizeBytes *int64               `json:"latest_file_size_bytes,omitempty"`
@@ -81,10 +86,16 @@ type invoiceSequencePreviewResponse struct {
 	Year          int    `json:"year"`
 	SequenceValue int    `json:"sequence_value"`
 	InvoiceNumber string `json:"invoice_number"`
+	DocumentType  string `json:"document_type"`
 }
 
 type invoiceRequestBody struct {
 	NamedStayID            *int64                `json:"named_stay_id"`
+	DocumentType           *string               `json:"document_type"`
+	BookingReference       *string               `json:"booking_reference"`
+	GuestName              *string               `json:"guest_name"`
+	PriceDetails           *string               `json:"price_details"`
+	SupplierVATStatus      *string               `json:"supplier_vat_status"`
 	BookingPayoutID        *int64                `json:"booking_payout_id"`
 	BookingPayoutReference *string               `json:"booking_payout_reference"`
 	Language               string                `json:"language"`
@@ -269,7 +280,15 @@ func (s *Server) previewNextInvoiceSequence(w http.ResponseWriter, r *http.Reque
 		}
 		year = parsed
 	}
-	number, seq, err := s.Store.PreviewNextInvoiceNumber(r.Context(), pid, year)
+	documentType := strings.TrimSpace(r.URL.Query().Get("document_type"))
+	if documentType == "" {
+		documentType = "invoice"
+	}
+	if documentType != "invoice" && documentType != "proforma" {
+		WriteError(w, http.StatusBadRequest, "document_type must be invoice or proforma")
+		return
+	}
+	number, seq, err := s.Store.PreviewNextInvoiceNumberForType(r.Context(), pid, year, documentType)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "database error")
 		return
@@ -278,6 +297,7 @@ func (s *Server) previewNextInvoiceSequence(w http.ResponseWriter, r *http.Reque
 		Year:          year,
 		SequenceValue: seq,
 		InvoiceNumber: number,
+		DocumentType:  documentType,
 	})
 }
 
@@ -465,11 +485,15 @@ func (s *Server) parseInvoiceCreateRequest(r *http.Request, propertyID int64, bo
 	if err != nil {
 		loc = time.UTC
 	}
-	linkedPayout, err := s.resolveInvoiceBookingPayout(r.Context(), propertyID, body)
-	if err != nil {
-		return nil, err
+	documentType := invoiceDocumentType(body.DocumentType)
+	var linkedPayout *store.FinanceBookingPayout
+	if documentType == "invoice" {
+		linkedPayout, err = s.resolveInvoiceBookingPayout(r.Context(), propertyID, body)
+		if err != nil {
+			return nil, err
+		}
+		applyInvoicePayoutPrefill(body, linkedPayout)
 	}
-	applyInvoicePayoutPrefill(body, linkedPayout)
 	if body.AmountTotalCents == nil {
 		return nil, fmt.Errorf("amount_total_cents is required")
 	}
@@ -495,7 +519,7 @@ func (s *Server) parseInvoicePatchRequest(r *http.Request, current *store.Invoic
 		return nil, fmt.Errorf("invalid stored invoice snapshot")
 	}
 	var linkedPayout *store.FinanceBookingPayout
-	if !(body.BookingPayoutID != nil && *body.BookingPayoutID == 0) {
+	if current.DocumentType == "invoice" && !(body.BookingPayoutID != nil && *body.BookingPayoutID == 0) {
 		linkedPayout, err = s.resolveInvoiceBookingPayout(r.Context(), current.PropertyID, body)
 		if err != nil {
 			return nil, err
@@ -505,6 +529,9 @@ func (s *Server) parseInvoicePatchRequest(r *http.Request, current *store.Invoic
 }
 
 func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, current *store.Invoice, body *invoiceRequestBody, loc *time.Location, supplier, customer invoicePartySnapshot, actor *store.User, linkedPayout *store.FinanceBookingPayout) (*store.Invoice, error) {
+	if body.SupplierVATStatus != nil {
+		supplier.VATStatus = strings.TrimSpace(*body.SupplierVATStatus)
+	}
 	row := &store.Invoice{
 		PropertyID:    propertyID,
 		Language:      supplierLanguageDefault(current, body),
@@ -524,6 +551,30 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 			row.CreatedBy = sql.NullInt64{Int64: actor.ID, Valid: true}
 		}
 	}
+	if body.DocumentType != nil {
+		requested := strings.TrimSpace(strings.ToLower(*body.DocumentType))
+		if requested != "invoice" && requested != "proforma" {
+			return nil, fmt.Errorf("document_type must be invoice or proforma")
+		}
+		if current != nil && requested != current.DocumentType {
+			return nil, fmt.Errorf("document_type cannot be changed")
+		}
+		row.DocumentType = requested
+	} else if row.DocumentType == "" {
+		row.DocumentType = "invoice"
+	}
+	if row.DocumentType == "proforma" {
+		supplier.CompanyName = ""
+		if body.BookingPayoutID != nil && *body.BookingPayoutID != 0 {
+			return nil, fmt.Errorf("pro forma cannot link a booking payout")
+		}
+		if body.BookingPayoutReference != nil && strings.TrimSpace(*body.BookingPayoutReference) != "" {
+			return nil, fmt.Errorf("pro forma cannot link a booking payout")
+		}
+		row.FinanceBookingPayoutID = sql.NullInt64{}
+		row.PaymentStatus = "not_applicable"
+		row.PaymentNote = ""
+	}
 	if body.NamedStayID != nil {
 		if *body.NamedStayID <= 0 {
 			row.NamedStayID = sql.NullInt64{}
@@ -534,6 +585,9 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 			}
 			row.NamedStayID = sql.NullInt64{Int64: stay.ID, Valid: true}
 		}
+	}
+	if current != nil && current.DocumentType == "proforma" && row.NamedStayID != current.NamedStayID {
+		return nil, fmt.Errorf("pro forma named_stay_id cannot be changed")
 	}
 	if current != nil && body.BookingPayoutID != nil && *body.BookingPayoutID == 0 {
 		row.FinanceBookingPayoutID = sql.NullInt64{}
@@ -570,24 +624,27 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 	if row.IssueDate.IsZero() {
 		return nil, fmt.Errorf("issue_date is required")
 	}
-	if strings.TrimSpace(body.TaxableSupplyDate) != "" {
+	if row.DocumentType == "proforma" && (strings.TrimSpace(body.TaxableSupplyDate) != "" || strings.TrimSpace(body.DueDate) != "") {
+		return nil, fmt.Errorf("pro forma cannot have taxable_supply_date or due_date")
+	}
+	if row.DocumentType == "invoice" && strings.TrimSpace(body.TaxableSupplyDate) != "" {
 		t, err := parseFinanceDate(body.TaxableSupplyDate, loc)
 		if err != nil {
 			return nil, fmt.Errorf("taxable_supply_date must be RFC3339 or YYYY-MM-DD")
 		}
 		row.TaxableSupplyDate = t
 	}
-	if row.TaxableSupplyDate.IsZero() {
+	if row.DocumentType == "invoice" && row.TaxableSupplyDate.IsZero() {
 		row.TaxableSupplyDate = row.IssueDate
 	}
-	if strings.TrimSpace(body.DueDate) != "" {
+	if row.DocumentType == "invoice" && strings.TrimSpace(body.DueDate) != "" {
 		t, err := parseFinanceDate(body.DueDate, loc)
 		if err != nil {
 			return nil, fmt.Errorf("due_date must be RFC3339 or YYYY-MM-DD")
 		}
 		row.DueDate = t
 	}
-	if row.DueDate.IsZero() {
+	if row.DocumentType == "invoice" && row.DueDate.IsZero() {
 		row.DueDate = row.IssueDate
 	}
 	if strings.TrimSpace(body.StayStartDate) != "" {
@@ -610,7 +667,7 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 	if row.StayEndDate.IsZero() {
 		return nil, fmt.Errorf("stay_end_date is required")
 	}
-	if row.StayEndDate.Before(row.StayStartDate) {
+	if !row.StayEndDate.After(row.StayStartDate) {
 		return nil, fmt.Errorf("stay_end_date must be on or after stay_start_date")
 	}
 	if body.AmountTotalCents != nil {
@@ -620,7 +677,26 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 		return nil, fmt.Errorf("amount_total_cents must be >= 0")
 	}
 	if body.PaymentNote != nil {
+		if row.DocumentType == "proforma" && strings.TrimSpace(*body.PaymentNote) != "" {
+			return nil, fmt.Errorf("payment_note is not accepted for pro forma")
+		}
 		row.PaymentNote = strings.TrimSpace(*body.PaymentNote)
+	}
+	if body.BookingReference != nil {
+		row.BookingReference = sql.NullString{String: strings.TrimSpace(*body.BookingReference), Valid: strings.TrimSpace(*body.BookingReference) != ""}
+	}
+	if body.GuestName != nil {
+		row.GuestName = sql.NullString{String: strings.TrimSpace(*body.GuestName), Valid: strings.TrimSpace(*body.GuestName) != ""}
+	}
+	if body.PriceDetails != nil {
+		row.PriceDetails = sql.NullString{String: strings.TrimSpace(*body.PriceDetails), Valid: strings.TrimSpace(*body.PriceDetails) != ""}
+	}
+	if body.SupplierVATStatus != nil {
+		var snapshot invoicePartySnapshot
+		if err := json.Unmarshal([]byte(row.SupplierSnapshotJSON), &snapshot); err == nil {
+			snapshot.VATStatus = strings.TrimSpace(*body.SupplierVATStatus)
+			supplier = snapshot
+		}
 	}
 	if body.Customer != nil {
 		nextCustomer, err := normalizeInvoiceCustomer(body.Customer)
@@ -639,6 +715,21 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 	}
 	row.SupplierSnapshotJSON = string(supplierJSON)
 	row.CustomerSnapshotJSON = string(customerJSON)
+	if row.DocumentType == "proforma" {
+		if !row.NamedStayID.Valid || strings.TrimSpace(row.BookingReference.String) == "" || strings.TrimSpace(row.GuestName.String) == "" || row.AmountTotalCents <= 0 {
+			return nil, fmt.Errorf("pro forma requires guest_name, booking_reference and a positive amount")
+		}
+		if strings.TrimSpace(customer.CompanyName) == "" || strings.TrimSpace(customer.AddressLine1) == "" || strings.TrimSpace(customer.City) == "" || strings.TrimSpace(customer.PostalCode) == "" || strings.TrimSpace(customer.Country) == "" {
+			return nil, fmt.Errorf("pro forma requires complete company billing details")
+		}
+		if supplier.VATStatus != "non_vat_payer" || strings.TrimSpace(supplier.Name) == "" || strings.TrimSpace(supplier.AddressLine1) == "" || strings.TrimSpace(supplier.DIC) == "" {
+			return nil, fmt.Errorf("pro forma requires a valid non-VAT supplier profile")
+		}
+		stay, err := s.Store.GetNamedStay(r.Context(), propertyID, row.NamedStayID.Int64)
+		if err != nil || stay.StayType != "booking_com" || stay.Status != "active" {
+			return nil, fmt.Errorf("pro forma requires an active Booking.com named stay")
+		}
+	}
 	return row, nil
 }
 
@@ -653,7 +744,10 @@ func (s *Server) renderAndAttachInvoiceVersion(ctx context.Context, propertyID i
 	}
 	content, err := invoicepdf.Render(invoicepdf.Document{
 		Language:          invoice.Language,
+		DocumentType:      invoice.DocumentType,
 		InvoiceNumber:     invoice.InvoiceNumber,
+		BookingReference:  invoice.BookingReference.String,
+		GuestName:         invoice.GuestName.String,
 		IssueDate:         invoice.IssueDate,
 		TaxableSupplyDate: invoice.TaxableSupplyDate,
 		DueDate:           invoice.DueDate,
@@ -663,7 +757,9 @@ func (s *Server) renderAndAttachInvoiceVersion(ctx context.Context, propertyID i
 		Currency:          invoice.Currency,
 		PaymentStatus:     invoice.PaymentStatus,
 		PaymentNote:       invoice.PaymentNote,
+		PriceDetails:      invoice.PriceDetails.String,
 		PropertyName:      property.Name,
+		PropertyTimezone:  property.Timezone,
 		Supplier:          invoicePartyToPDF(supplier),
 		Customer:          invoicePartyToPDF(customer),
 	})
@@ -734,13 +830,16 @@ func invoiceToRow(propertyID int64, row store.Invoice, files []store.InvoiceFile
 		ID:                row.ID,
 		NamedStayID:       nullInt64Ptr(row.NamedStayID),
 		BookingPayoutID:   nullInt64Ptr(row.FinanceBookingPayoutID),
+		DocumentType:      row.DocumentType,
+		BookingReference:  nullStringPtr(row.BookingReference),
+		GuestName:         nullStringPtr(row.GuestName),
 		InvoiceNumber:     row.InvoiceNumber,
 		SequenceYear:      row.SequenceYear,
 		SequenceValue:     row.SequenceValue,
 		Language:          row.Language,
 		IssueDate:         row.IssueDate.UTC().Format(time.RFC3339),
-		TaxableSupplyDate: row.TaxableSupplyDate.UTC().Format(time.RFC3339),
-		DueDate:           row.DueDate.UTC().Format(time.RFC3339),
+		TaxableSupplyDate: nullableTimeString(row.TaxableSupplyDate),
+		DueDate:           nullableTimeString(row.DueDate),
 		StayStartDate:     row.StayStartDate.UTC().Format(time.RFC3339),
 		StayEndDate:       row.StayEndDate.UTC().Format(time.RFC3339),
 		Supplier:          supplier,
@@ -749,6 +848,7 @@ func invoiceToRow(propertyID int64, row store.Invoice, files []store.InvoiceFile
 		Currency:          row.Currency,
 		PaymentStatus:     row.PaymentStatus,
 		PaymentNote:       row.PaymentNote,
+		PriceDetails:      nullStringPtr(row.PriceDetails),
 		Version:           row.Version,
 		LatestFilePath:    nullStringPtr(row.LatestFilePath),
 		DownloadURL:       fmt.Sprintf("/api/properties/%d/invoices/%d/download", propertyID, row.ID),
@@ -805,6 +905,13 @@ func (s *Server) refreshInvoiceSupplierFromProperty(ctx context.Context, row *st
 		return err
 	}
 	supplier := defaultInvoiceSupplier(property, profile)
+	if row.DocumentType == "proforma" {
+		var previous invoicePartySnapshot
+		if err := json.Unmarshal([]byte(row.SupplierSnapshotJSON), &previous); err == nil {
+			supplier.VATStatus = previous.VATStatus
+		}
+		supplier.CompanyName = ""
+	}
 	supplierJSON, err := json.Marshal(supplier)
 	if err != nil {
 		return err
@@ -882,6 +989,21 @@ func defaultInvoiceSupplier(property *store.Property, profile *store.PropertyPro
 	}
 }
 
+func invoiceDocumentType(value *string) string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return "invoice"
+	}
+	return strings.ToLower(strings.TrimSpace(*value))
+}
+
+func nullableTimeString(value time.Time) *string {
+	if value.IsZero() {
+		return nil
+	}
+	formatted := value.UTC().Format(time.RFC3339)
+	return &formatted
+}
+
 func normalizeInvoiceCustomer(customer *invoicePartySnapshot) (invoicePartySnapshot, error) {
 	if customer == nil {
 		return invoicePartySnapshot{}, fmt.Errorf("customer is required")
@@ -893,6 +1015,8 @@ func normalizeInvoiceCustomer(customer *invoicePartySnapshot) (invoicePartySnaps
 		City:         strings.TrimSpace(customer.City),
 		PostalCode:   strings.TrimSpace(customer.PostalCode),
 		Country:      strings.TrimSpace(customer.Country),
+		ICO:          strings.TrimSpace(customer.ICO),
+		DIC:          strings.TrimSpace(customer.DIC),
 		VATID:        strings.TrimSpace(customer.VATID),
 	}
 	if out.Name == "" && out.CompanyName == "" {

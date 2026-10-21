@@ -61,7 +61,10 @@ type Party struct {
 
 type Document struct {
 	Language          string
+	DocumentType      string
 	InvoiceNumber     string
+	BookingReference  string
+	GuestName         string
 	IssueDate         time.Time
 	TaxableSupplyDate time.Time
 	DueDate           time.Time
@@ -71,7 +74,9 @@ type Document struct {
 	Currency          string
 	PaymentStatus     string
 	PaymentNote       string
+	PriceDetails      string
 	PropertyName      string
+	PropertyTimezone  string
 	Supplier          Party
 	Customer          Party
 }
@@ -83,7 +88,7 @@ func Render(doc Document) ([]byte, error) {
 	pdf.AddUTF8FontFromBytes(fontRoboto, "", robotoRegularTTF)
 	pdf.AddUTF8FontFromBytes(fontRoboto, "B", robotoBoldTTF)
 
-	pdf.SetTitle(docTitle(doc.Language), true)
+	pdf.SetTitle(docTitle(doc), true)
 	pdf.SetAuthor("PMS", true)
 	pdf.SetCreator("PMS", true)
 	pdf.AddPage()
@@ -132,10 +137,10 @@ func drawHeader(pdf *fpdf.Fpdf, doc Document, y float64) float64 {
 	pdf.SetXY(tx, y+0.5)
 	pdf.SetFont(fontRoboto, "B", 18)
 	pdf.SetTextColor(cNavyR, cNavyG, cNavyB)
-	pdf.CellFormat(100, 8, docTitle(doc.Language), "", 2, "L", false, 0, "")
+	pdf.CellFormat(100, 8, docTitle(doc), "", 2, "L", false, 0, "")
 	pdf.SetFont(fontRoboto, "", 9)
 	pdf.SetTextColor(cMutedR, cMutedG, cMutedB)
-	pdf.CellFormat(100, 4, docTitleSub(doc.Language), "", 1, "L", false, 0, "")
+	pdf.CellFormat(100, 4, docTitleSub(doc), "", 1, "L", false, 0, "")
 
 	titleBlockH := pdf.GetY() - y
 	if titleBlockH < iconS {
@@ -343,13 +348,13 @@ func partyLines(p Party) []string {
 // ---------------------------------------------------------------------------
 
 const (
-	detailPad      = 4.0
-	detailGutter   = 6.0
-	detailLabelW   = 100.0
-	detailValueW   = contentW - 2*detailPad - detailLabelW - detailGutter
-	detailTextPad  = 1.5
-	labelWrapSafe  = 0.84
-	valueWrapSafe  = 0.90
+	detailPad     = 4.0
+	detailGutter  = 6.0
+	detailLabelW  = 100.0
+	detailValueW  = contentW - 2*detailPad - detailLabelW - detailGutter
+	detailTextPad = 1.5
+	labelWrapSafe = 0.84
+	valueWrapSafe = 0.90
 )
 
 func drawDetailsCard(pdf *fpdf.Fpdf, doc Document, y float64) float64 {
@@ -365,14 +370,19 @@ func drawDetailsCard(pdf *fpdf.Fpdf, doc Document, y float64) float64 {
 	defer pdf.SetCellMargin(saved)
 
 	type row struct{ l, v string }
-	rows := []row{
-		{lbl(doc.Language, "invoice_number"), doc.InvoiceNumber},
-		{lbl(doc.Language, "issue_date"), fmtDate(doc.IssueDate)},
-		{lbl(doc.Language, "taxable_supply_date"), fmtDate(doc.TaxableSupplyDate)},
-		{lbl(doc.Language, "due_date"), fmtDate(doc.DueDate)},
-		{lbl(doc.Language, "stay_period"), fmtDate(doc.StayStartDate) + " \u2013 " + fmtDate(doc.StayEndDate)},
+	rows := []row{{lbl(doc.Language, "invoice_number"), doc.InvoiceNumber}, {lbl(doc.Language, "issue_date"), fmtDocDate(doc, doc.IssueDate)}}
+	if doc.DocumentType == "proforma" {
+		rows = append(rows, row{lbl(doc.Language, "booking_reference"), doc.BookingReference})
+		rows = append(rows, row{lbl(doc.Language, "guest_name"), doc.GuestName})
+	} else {
+		rows = append(rows, row{lbl(doc.Language, "taxable_supply_date"), fmtDocDate(doc, doc.TaxableSupplyDate)}, row{lbl(doc.Language, "due_date"), fmtDocDate(doc, doc.DueDate)})
 	}
-	totalRow := row{lbl(doc.Language, "amount_total"), fmtMoney(doc.Language, doc.AmountTotalCents, doc.Currency)}
+	rows = append(rows, row{lbl(doc.Language, "stay_period"), fmtDocDate(doc, doc.StayStartDate) + " \u2013 " + fmtDocDate(doc, doc.StayEndDate)})
+	totalKey := "amount_total"
+	if doc.DocumentType == "proforma" {
+		totalKey = "reservation_amount"
+	}
+	totalRow := row{lbl(doc.Language, totalKey), fmtMoney(doc.Language, doc.AmountTotalCents, doc.Currency)}
 
 	bodyH := 0.0
 	for i := range rows {
@@ -444,11 +454,15 @@ func drawRow(pdf *fpdf.Fpdf, x, y float64, label, value string, rowH, lineH floa
 	lw := detailLabelW - 2*detailTextPad
 	vw := detailValueW - 2*detailTextPad
 
-	labelFont := ""; labelSz := 10.0
-	valueFont := "B"; valueSz := 10.0
+	labelFont := ""
+	labelSz := 10.0
+	valueFont := "B"
+	valueSz := 10.0
 	if total {
-		labelFont = "B"; labelSz = 11
-		valueFont = "B"; valueSz = 13
+		labelFont = "B"
+		labelSz = 11
+		valueFont = "B"
+		valueSz = 13
 	}
 
 	pdf.SetFont(fontRoboto, labelFont, labelSz)
@@ -457,15 +471,23 @@ func drawRow(pdf *fpdf.Fpdf, x, y float64, label, value string, rowH, lineH floa
 	vLines := wrapLinesMeasuredSafe(pdf, value, vw, valueWrapSafe)
 
 	n := maxI(len(tLines), len(vLines))
-	if n < 1 { n = 1 }
-	for len(tLines) < n { tLines = append(tLines, "") }
-	for len(vLines) < n { vLines = append(vLines, "") }
+	if n < 1 {
+		n = 1
+	}
+	for len(tLines) < n {
+		tLines = append(tLines, "")
+	}
+	for len(vLines) < n {
+		vLines = append(vLines, "")
+	}
 
 	lx := x + detailTextPad
 	rx := x + detailLabelW + detailGutter + detailTextPad
 	blockH := float64(n) * lineH
 	yOff := (rowH - blockH) / 2
-	if yOff < 0 { yOff = 0 }
+	if yOff < 0 {
+		yOff = 0
+	}
 
 	for i := 0; i < n; i++ {
 		yl := y + yOff + float64(i)*lineH
@@ -520,7 +542,10 @@ func measureInfoH(pdf *fpdf.Fpdf, doc Document, cardW float64, svc bool) float64
 	if svc {
 		// Measure with bold since dates render bold (wider glyphs → more lines).
 		pdf.SetFont(fontRoboto, "B", 10)
-		txt = svcPlain(doc.Language, doc.StayStartDate, doc.StayEndDate)
+		txt = svcPlain(doc)
+		if doc.PriceDetails != "" {
+			txt += "\n" + doc.PriceDetails
+		}
 	} else {
 		pdf.SetFont(fontRoboto, "", 10)
 		txt = payNote(doc)
@@ -576,6 +601,13 @@ func writeSvcRich(pdf *fpdf.Fpdf, x, y, maxW float64, doc Document) {
 	pdf.SetXY(x, y)
 	pdf.SetFont(fontRoboto, "", 10)
 	pdf.SetTextColor(cBodyR, cBodyG, cBodyB)
+	if doc.DocumentType == "proforma" {
+		pdf.MultiCell(maxW, lh, svcPlain(doc), "", "L", false)
+		if doc.PriceDetails != "" {
+			pdf.MultiCell(maxW, lh, doc.PriceDetails, "", "L", false)
+		}
+		return
+	}
 	if doc.Language == "sk" {
 		pdf.Write(lh, "Ubytovanie za pobyt v term\u00edne ")
 	} else {
@@ -583,7 +615,7 @@ func writeSvcRich(pdf *fpdf.Fpdf, x, y, maxW float64, doc Document) {
 	}
 	pdf.SetFont(fontRoboto, "B", 10)
 	pdf.SetTextColor(cNavyR, cNavyG, cNavyB)
-	pdf.Write(lh, fmtDate(doc.StayStartDate))
+	pdf.Write(lh, fmtDocDate(doc, doc.StayStartDate))
 	pdf.SetFont(fontRoboto, "", 10)
 	pdf.SetTextColor(cBodyR, cBodyG, cBodyB)
 	if doc.Language == "sk" {
@@ -593,7 +625,7 @@ func writeSvcRich(pdf *fpdf.Fpdf, x, y, maxW float64, doc Document) {
 	}
 	pdf.SetFont(fontRoboto, "B", 10)
 	pdf.SetTextColor(cNavyR, cNavyG, cNavyB)
-	pdf.Write(lh, fmtDate(doc.StayEndDate))
+	pdf.Write(lh, fmtDocDate(doc, doc.StayEndDate))
 	pdf.SetFont(fontRoboto, "", 10)
 	pdf.SetTextColor(cBodyR, cBodyG, cBodyB)
 	pdf.Write(lh, ".")
@@ -713,42 +745,69 @@ func drawInvoiceDoodle(pdf *fpdf.Fpdf, x, y, h float64) {
 // Labels and formatters
 // ---------------------------------------------------------------------------
 
-func docTitle(lang string) string {
-	if lang == "sk" { return "Fakt\u00fara" }
+func docTitle(doc Document) string {
+	if doc.DocumentType == "proforma" {
+		if doc.Language == "sk" {
+			return "Proforma faktúra"
+		}
+		return "Pro forma invoice"
+	}
+	if doc.Language == "sk" {
+		return "Faktúra"
+	}
 	return "Invoice"
 }
 
-func docTitleSub(lang string) string {
-	if lang == "sk" { return "Invoice" }
-	return "Tax invoice"
+func docTitleSub(doc Document) string {
+	if doc.DocumentType == "proforma" {
+		if doc.Language == "sk" {
+			return "Proforma faktúra"
+		}
+		return "Pro forma invoice"
+	}
+	return "Accommodation invoice"
 }
 
 func isPaid(doc Document) bool {
-	return strings.EqualFold(strings.TrimSpace(doc.PaymentStatus), "paid")
+	return doc.DocumentType != "proforma" && strings.EqualFold(strings.TrimSpace(doc.PaymentStatus), "paid")
 }
 
 func paidLabel(lang string) string {
-	if lang == "sk" { return "ZAPLATEN\u00c1" }
+	if lang == "sk" {
+		return "ZAPLATEN\u00c1"
+	}
 	return "PAID"
 }
 
 func partyTitle(lang string, sup bool) string {
 	if lang == "sk" {
-		if sup { return "Dod\u00e1vate\u013e" }
+		if sup {
+			return "Dod\u00e1vate\u013e"
+		}
 		return "Odberate\u013e"
 	}
-	if sup { return "Supplier" }
+	if sup {
+		return "Supplier"
+	}
 	return "Customer"
 }
 
 func detailTitle(lang string) string {
-	if lang == "sk" { return "DETAILY FAKT\u00daRY" }
+	if lang == "sk" {
+		return "DETAILY FAKT\u00daRY"
+	}
 	return "INVOICE DETAILS"
 }
 
 func lbl(lang, key string) string {
 	if lang == "sk" {
 		switch key {
+		case "booking_reference":
+			return "Číslo rezervácie Booking.com"
+		case "guest_name":
+			return "Meno hosťa"
+		case "reservation_amount":
+			return "Cena rezervácie (EUR)"
 		case "invoice_number":
 			return "\u010c\u00edslo fakt\u00fary (variabiln\u00fd symbol)"
 		case "issue_date":
@@ -768,6 +827,12 @@ func lbl(lang, key string) string {
 		}
 	}
 	switch key {
+	case "booking_reference":
+		return "Booking.com reservation number"
+	case "guest_name":
+		return "Guest name"
+	case "reservation_amount":
+		return "Reservation amount (EUR)"
 	case "invoice_number":
 		return "Invoice number (variable symbol)"
 	case "issue_date":
@@ -789,14 +854,20 @@ func lbl(lang, key string) string {
 	}
 }
 
-func svcPlain(lang string, s, e time.Time) string {
-	if lang == "sk" {
-		return fmt.Sprintf("Ubytovanie za pobyt v term\u00edne %s \u2013 %s.", fmtDate(s), fmtDate(e))
+func svcPlain(doc Document) string {
+	if doc.Language == "sk" {
+		return fmt.Sprintf("Ubytovanie: %s. Pobyt v termíne %s – %s.", doc.PropertyName, fmtDocDate(doc, doc.StayStartDate), fmtDocDate(doc, doc.StayEndDate))
 	}
-	return fmt.Sprintf("Accommodation service for stay from %s to %s.", fmtDate(s), fmtDate(e))
+	return fmt.Sprintf("Accommodation: %s. Planned stay from %s to %s.", doc.PropertyName, fmtDocDate(doc, doc.StayStartDate), fmtDocDate(doc, doc.StayEndDate))
 }
 
 func payNote(doc Document) string {
+	if doc.DocumentType == "proforma" {
+		if doc.Language == "sk" {
+			return "Dodávateľ nie je platiteľom DPH.\n\nTáto proforma faktúra slúži na informačné účely a na schválenie nákladov spoločnosťou. Nie je daňovým dokladom ani potvrdením o úhrade. Platbu za túto rezerváciu spracúva Booking.com podľa platobných podmienok rezervácie. Na základe tohto dokladu neuhrádzajte samostatnú platbu poskytovateľovi ubytovania. Konečná faktúra bude vystavená po skončení pobytu."
+		}
+		return "The supplier is not registered for VAT.\n\nThis pro forma is issued for information and company approval. It is not a tax invoice or proof of payment. Payment for this reservation is handled by Booking.com under the reservation's payment terms. Do not make a separate payment to the accommodation provider based on this document. A final invoice will be issued after the stay."
+	}
 	if strings.TrimSpace(doc.PaymentNote) != "" {
 		return doc.PaymentNote
 	}
@@ -807,12 +878,16 @@ func payNote(doc Document) string {
 }
 
 func footerMain(lang string) string {
-	if lang == "sk" { return "\u010eakujeme za Va\u0161u d\u00f4veru." }
+	if lang == "sk" {
+		return "\u010eakujeme za Va\u0161u d\u00f4veru."
+	}
 	return "Thank you for your trust."
 }
 
 func footerSub(lang string) string {
-	if lang == "sk" { return "Thank you for your trust." }
+	if lang == "sk" {
+		return "Thank you for your trust."
+	}
 	return "Invoice document"
 }
 
@@ -826,23 +901,42 @@ func fmtMoney(lang string, cents int, cur string) string {
 
 func fmtDate(t time.Time) string { return t.UTC().Format("2006-01-02") }
 
+func fmtDocDate(doc Document, value time.Time) string {
+	if doc.PropertyTimezone != "" {
+		if loc, err := time.LoadLocation(doc.PropertyTimezone); err == nil {
+			return value.In(loc).Format("2006-01-02")
+		}
+	}
+	return fmtDate(value)
+}
+
 // ---------------------------------------------------------------------------
 // Text wrapping
 // ---------------------------------------------------------------------------
 
 func wrapLinesByRuneBudget(txt string, n int) []string {
-	if n < 8 { n = 8 }
+	if n < 8 {
+		n = 8
+	}
 	var out []string
 	for _, p := range strings.Split(txt, "\n") {
 		p = strings.TrimSpace(p)
-		if p == "" { out = append(out, ""); continue }
+		if p == "" {
+			out = append(out, "")
+			continue
+		}
 		r := []rune(p)
 		for i := 0; i < len(r); i += n {
-			j := i + n; if j > len(r) { j = len(r) }
+			j := i + n
+			if j > len(r) {
+				j = len(r)
+			}
 			out = append(out, string(r[i:j]))
 		}
 	}
-	if len(out) == 0 { return []string{""} }
+	if len(out) == 0 {
+		return []string{""}
+	}
 	return out
 }
 
@@ -851,27 +945,49 @@ func wrapLinesMeasured(pdf *fpdf.Fpdf, txt string, maxW float64) []string {
 }
 
 func wrapLinesMeasuredSafe(pdf *fpdf.Fpdf, txt string, maxW float64, safety float64) []string {
-	if safety <= 0 || safety > 1 { safety = 0.92 }
+	if safety <= 0 || safety > 1 {
+		safety = 0.92
+	}
 	maxW *= safety
-	if maxW < 1 { maxW = 1 }
+	if maxW < 1 {
+		maxW = 1
+	}
 	if pdf.GetStringWidth("x") < 0.0001 {
 		return wrapLinesByRuneBudget(txt, 40)
 	}
 	txt = strings.TrimSpace(txt)
-	if txt == "" { return []string{""} }
+	if txt == "" {
+		return []string{""}
+	}
 	var lines []string
 	for _, para := range strings.Split(txt, "\n") {
 		para = strings.TrimSpace(para)
-		if para == "" { lines = append(lines, ""); continue }
+		if para == "" {
+			lines = append(lines, "")
+			continue
+		}
 		words := strings.Fields(para)
 		var cur string
-		flush := func() { if cur != "" { lines = append(lines, cur); cur = "" } }
+		flush := func() {
+			if cur != "" {
+				lines = append(lines, cur)
+				cur = ""
+			}
+		}
 		for _, w := range words {
 			trial := w
-			if cur != "" { trial = cur + " " + w }
-			if pdf.GetStringWidth(trial) <= maxW { cur = trial; continue }
+			if cur != "" {
+				trial = cur + " " + w
+			}
+			if pdf.GetStringWidth(trial) <= maxW {
+				cur = trial
+				continue
+			}
 			flush()
-			if pdf.GetStringWidth(w) <= maxW { cur = w; continue }
+			if pdf.GetStringWidth(w) <= maxW {
+				cur = w
+				continue
+			}
 			var chunk strings.Builder
 			for _, r := range w {
 				next := chunk.String() + string(r)
@@ -881,11 +997,15 @@ func wrapLinesMeasuredSafe(pdf *fpdf.Fpdf, txt string, maxW float64, safety floa
 				}
 				chunk.WriteRune(r)
 			}
-			if chunk.Len() > 0 { cur = chunk.String() }
+			if chunk.Len() > 0 {
+				cur = chunk.String()
+			}
 		}
 		flush()
 	}
-	if len(lines) == 0 { return []string{""} }
+	if len(lines) == 0 {
+		return []string{""}
+	}
 	return lines
 }
 
@@ -893,8 +1013,18 @@ func wrapLinesMeasuredSafe(pdf *fpdf.Fpdf, txt string, maxW float64, safety floa
 // Helpers
 // ---------------------------------------------------------------------------
 
-func maxF(a, b float64) float64 { if a > b { return a }; return b }
-func maxI(a, b int) int         { if a > b { return a }; return b }
+func maxF(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+func maxI(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
 
 // suppress unused import
 var _ = math.Pi

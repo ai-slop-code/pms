@@ -253,6 +253,38 @@ describe('InvoicesView', () => {
     expect(createCall?.[1].json).toMatchObject({ amount_total_cents: 423423, booking_payout_id: 88 })
   })
 
+  it('enters a pro forma reservation reference without a payout', async () => {
+    seedProperty()
+    const created = { ...invoiceFixture(123456), document_type: 'proforma' as const, booking_reference: '6429185079' }
+    apiMock.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url.includes('/invoices/stay-candidates')) return Promise.resolve({ stays: [{ ...namedStay, stay_type: 'booking_com' }] })
+      if (url.includes('/invoices/payout-link-candidates')) return Promise.resolve({ payouts: [] })
+      if (url.endsWith('/invoices') && options?.method === 'POST') return Promise.resolve({ invoice: created })
+      if (url.endsWith('/invoices')) return Promise.resolve({ invoices: [] })
+      if (url.includes('/invoice-sequence/next-preview')) return Promise.resolve({ invoice_number: 'PF/P007/2026/0001', year: 2026, sequence_value: 1, document_type: 'proforma' })
+      return Promise.resolve({})
+    })
+    const w = mount(InvoicesView)
+    await flushPromises()
+    await w.findAll('select')[0]!.setValue('55')
+    await w.findAll('select')[2]!.setValue('proforma')
+    await w.find('input[placeholder="6429185079"]').setValue('6429185079')
+    await w.find('input[type="number"]').setValue('1234.56')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    const createCall = apiMock.mock.calls.find(
+      ([url, options]) => String(url).endsWith('/invoices') && options?.method === 'POST',
+    )
+    expect(createCall?.[1].json).toMatchObject({
+      document_type: 'proforma',
+      booking_reference: '6429185079',
+      amount_total_cents: 123456,
+    })
+    expect(createCall?.[1].json.booking_payout_id).toBeUndefined()
+    expect(createCall?.[1].json.taxable_supply_date).toBeUndefined()
+  })
+
   it('edits a fractional invoice through the form and preserves cents', async () => {
     seedProperty()
     const original = invoiceFixture(12399)
