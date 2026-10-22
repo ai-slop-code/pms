@@ -27,6 +27,7 @@ type Invoice struct {
 	SupplierSnapshotJSON   string
 	CustomerSnapshotJSON   string
 	AmountTotalCents       int
+	LineItemsJSON          sql.NullString
 	Currency               string
 	PaymentStatus          string
 	PaymentNote            string
@@ -122,7 +123,7 @@ func (s *Store) ListInvoices(ctx context.Context, propertyID int64) ([]Invoice, 
 		SELECT i.id, i.property_id, i.named_stay_id, i.finance_booking_payout_id, i.document_type, i.booking_reference, i.guest_name, i.invoice_number, i.sequence_year, i.sequence_value,
 			i.language, i.issue_date, i.taxable_supply_date, i.due_date, i.stay_start_date, i.stay_end_date,
 			i.supplier_snapshot_json, i.customer_snapshot_json, i.price_details, i.amount_total_cents, i.currency, i.payment_status,
-			i.payment_note, i.version, i.created_by, i.created_at, i.updated_at,
+			i.payment_note, i.version, i.created_by, i.created_at, i.updated_at, i.line_items_json,
 			(
 				SELECT file_path
 				FROM invoice_files f
@@ -159,7 +160,7 @@ func (s *Store) GetInvoiceByID(ctx context.Context, propertyID, invoiceID int64)
 		SELECT i.id, i.property_id, i.named_stay_id, i.finance_booking_payout_id, i.document_type, i.booking_reference, i.guest_name, i.invoice_number, i.sequence_year, i.sequence_value,
 			i.language, i.issue_date, i.taxable_supply_date, i.due_date, i.stay_start_date, i.stay_end_date,
 			i.supplier_snapshot_json, i.customer_snapshot_json, i.price_details, i.amount_total_cents, i.currency, i.payment_status,
-			i.payment_note, i.version, i.created_by, i.created_at, i.updated_at,
+			i.payment_note, i.version, i.created_by, i.created_at, i.updated_at, i.line_items_json,
 			(
 				SELECT file_path
 				FROM invoice_files f
@@ -254,13 +255,13 @@ func (s *Store) CreateInvoice(ctx context.Context, row *Invoice) (*Invoice, erro
 			property_id, named_stay_id, finance_booking_payout_id, document_type, booking_reference, guest_name, invoice_number, sequence_year, sequence_value, language,
 			issue_date, taxable_supply_date, due_date, stay_start_date, stay_end_date,
 			supplier_snapshot_json, customer_snapshot_json, price_details, amount_total_cents, currency,
-			payment_status, payment_note, version, created_by, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			payment_status, payment_note, version, created_by, created_at, updated_at, line_items_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.PropertyID, row.NamedStayID.Int64, nullInt64Value(row.FinanceBookingPayoutID), row.DocumentType, nullStringValue(row.BookingReference), nullStringValue(row.GuestName), row.InvoiceNumber, row.SequenceYear, row.SequenceValue, row.Language,
 		row.IssueDate.UTC().Format(time.RFC3339), nullableTimeValue(row.TaxableSupplyDate), nullableTimeValue(row.DueDate),
 		row.StayStartDate.UTC().Format(time.RFC3339), row.StayEndDate.UTC().Format(time.RFC3339),
 		row.SupplierSnapshotJSON, row.CustomerSnapshotJSON, nullStringValue(row.PriceDetails), row.AmountTotalCents, row.Currency,
-		row.PaymentStatus, row.PaymentNote, row.Version, nullInt64Value(row.CreatedBy), now, now)
+		row.PaymentStatus, row.PaymentNote, row.Version, nullInt64Value(row.CreatedBy), now, now, nullStringValue(row.LineItemsJSON))
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, err
@@ -298,13 +299,13 @@ func (s *Store) UpdateInvoice(ctx context.Context, row *Invoice) (*Invoice, erro
 		UPDATE invoices
 		SET named_stay_id = ?, finance_booking_payout_id = ?, booking_reference = ?, guest_name = ?, language = ?, issue_date = ?, taxable_supply_date = ?, due_date = ?,
 			stay_start_date = ?, stay_end_date = ?, supplier_snapshot_json = ?, customer_snapshot_json = ?,
-			price_details = ?, amount_total_cents = ?, currency = ?, payment_status = ?, payment_note = ?, updated_at = ?
+			price_details = ?, amount_total_cents = ?, currency = ?, payment_status = ?, payment_note = ?, updated_at = ?, line_items_json = ?
 		WHERE id = ? AND property_id = ?`,
 		row.NamedStayID.Int64, nullInt64Value(row.FinanceBookingPayoutID), nullStringValue(row.BookingReference), nullStringValue(row.GuestName), row.Language, row.IssueDate.UTC().Format(time.RFC3339),
 		nullableTimeValue(row.TaxableSupplyDate), nullableTimeValue(row.DueDate),
 		row.StayStartDate.UTC().Format(time.RFC3339), row.StayEndDate.UTC().Format(time.RFC3339),
 		row.SupplierSnapshotJSON, row.CustomerSnapshotJSON, nullStringValue(row.PriceDetails), row.AmountTotalCents, row.Currency,
-		row.PaymentStatus, row.PaymentNote, now, row.ID, row.PropertyID)
+		row.PaymentStatus, row.PaymentNote, now, nullStringValue(row.LineItemsJSON), row.ID, row.PropertyID)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +468,7 @@ func scanInvoicesRows(rows *sql.Rows) ([]Invoice, error) {
 			&row.ID, &row.PropertyID, &row.NamedStayID, &row.FinanceBookingPayoutID, &row.DocumentType, &row.BookingReference, &row.GuestName, &row.InvoiceNumber, &row.SequenceYear, &row.SequenceValue,
 			&row.Language, &issueDate, &taxableSupplyDateValue, &dueDateValue, &stayStartDate, &stayEndDate,
 			&row.SupplierSnapshotJSON, &row.CustomerSnapshotJSON, &row.PriceDetails, &row.AmountTotalCents, &row.Currency, &row.PaymentStatus,
-			&row.PaymentNote, &row.Version, &row.CreatedBy, &createdAt, &updatedAt,
+			&row.PaymentNote, &row.Version, &row.CreatedBy, &createdAt, &updatedAt, &row.LineItemsJSON,
 			&row.LatestFilePath, &row.LatestFileSizeBytes, &latestFileCreatedAt,
 		); err != nil {
 			return nil, err

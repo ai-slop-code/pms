@@ -11,6 +11,8 @@ import InvoiceList from '@/views/invoices/InvoiceList.vue'
 import InvoiceEditorForm from '@/views/invoices/InvoiceEditorForm.vue'
 import InvoiceFilesTable from '@/views/invoices/InvoiceFilesTable.vue'
 import { today, payoutBillableCents } from '@/views/invoices/format'
+import { accommodationItem, invoiceItemsPayload } from '@/views/invoices/items'
+import type { InvoiceFormState } from '@/views/invoices/InvoiceEditorForm.vue'
 import type {
   Invoice,
   InvoicePreview,
@@ -33,7 +35,7 @@ const error = ref('')
 const success = ref('')
 let previewRequest = 0
 
-const form = ref({
+const form = ref<InvoiceFormState>({
   document_type: 'invoice' as 'invoice' | 'proforma',
   named_stay_id: '',
   booking_payout_id: '',
@@ -43,7 +45,8 @@ const form = ref({
   due_date: today(),
   stay_start_date: today(),
   stay_end_date: today(),
-  amount_eur: 0,
+  items: [accommodationItem('sk')],
+  supplier_vat_status: '',
   payment_note: 'Already paid via Booking.com.',
   booking_reference: '',
   guest_name: '',
@@ -62,6 +65,13 @@ const form = ref({
 })
 
 const isEditing = computed(() => selectedId.value !== null)
+const existingFinalInvoice = computed(() =>
+  selectedInvoice.value?.document_type === 'proforma'
+    ? invoices.value.find(
+        (invoice) => invoice.document_type === 'invoice' && invoice.named_stay_id === selectedInvoice.value?.named_stay_id,
+      )
+    : undefined,
+)
 
 function resetForm() {
   const defaultLanguage = currentProperty.value?.default_language === 'en' ? 'en' : 'sk'
@@ -75,7 +85,8 @@ function resetForm() {
     due_date: today(),
     stay_start_date: today(),
     stay_end_date: today(),
-    amount_eur: 0,
+    items: [accommodationItem(defaultLanguage)],
+    supplier_vat_status: '',
     payment_note: 'Already paid via Booking.com.',
     booking_reference: '',
     guest_name: '',
@@ -95,17 +106,32 @@ function resetForm() {
 }
 
 function applyInvoiceToForm(invoice: Invoice) {
+  const date = (value: string | null) => {
+    if (!value) return ''
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: currentProperty.value?.timezone || 'UTC',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(value))
+    return ['year', 'month', 'day'].map((type) => parts.find((part) => part.type === type)?.value).join('-')
+  }
   form.value = {
     document_type: invoice.document_type || 'invoice',
     named_stay_id: String(invoice.named_stay_id),
     booking_payout_id: invoice.booking_payout_id ? String(invoice.booking_payout_id) : '',
     language: invoice.language,
-    issue_date: invoice.issue_date.slice(0, 10),
-    taxable_supply_date: invoice.taxable_supply_date?.slice(0, 10) || '',
-    due_date: invoice.due_date?.slice(0, 10) || '',
-    stay_start_date: invoice.stay_start_date.slice(0, 10),
-    stay_end_date: invoice.stay_end_date.slice(0, 10),
-    amount_eur: invoice.amount_total_cents / 100,
+    issue_date: date(invoice.issue_date),
+    taxable_supply_date: date(invoice.taxable_supply_date),
+    due_date: date(invoice.due_date),
+    stay_start_date: date(invoice.stay_start_date),
+    stay_end_date: date(invoice.stay_end_date),
+    items: invoice.items?.map((item) => ({
+      description: item.description,
+      quantity: item.quantity,
+      unit_price_eur: (item.unit_price_cents / 100).toFixed(2),
+    })) ?? [accommodationItem(invoice.language, invoice.amount_total_cents)],
+    supplier_vat_status: invoice.supplier.vat_status || '',
     payment_note: invoice.payment_note,
     booking_reference: invoice.booking_reference || '',
     guest_name: invoice.guest_name || '',
@@ -166,9 +192,10 @@ async function loadList() {
 
 async function loadInvoice(id: number) {
   if (!pid.value) return
+  const propertyId = pid.value
   try {
-    const response = await api<{ invoice: Invoice }>(`/api/properties/${pid.value}/invoices/${id}`)
-    selectedInvoice.value = response.invoice
+    const response = await api<{ invoice: Invoice }>(`/api/properties/${propertyId}/invoices/${id}`)
+    if (pid.value === propertyId && selectedId.value === id) selectedInvoice.value = response.invoice
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load invoice details'
   }
@@ -195,6 +222,7 @@ async function refreshPreview() {
 
 function selectInvoice(invoice: Invoice) {
   selectedId.value = invoice.id
+  selectedInvoice.value = invoice
   applyInvoiceToForm(invoice)
   void loadInvoice(invoice.id)
   success.value = ''
@@ -220,7 +248,11 @@ function onPayoutSelect(value: string) {
   const row = payoutOptions.value.find((x) => String(x.id) === value)
   if (!row) return
   form.value.booking_payout_id = String(row.id)
-  form.value.amount_eur = payoutBillableCents(row) / 100
+  const first = form.value.items[0]
+  if (first) {
+    first.quantity = '1'
+    first.unit_price_eur = (payoutBillableCents(row) / 100).toFixed(2)
+  }
   const cin = row.check_in_date?.slice(0, 10)
   const cout = row.check_out_date?.slice(0, 10)
   if (cin) form.value.stay_start_date = cin
@@ -239,14 +271,37 @@ function startNewInvoice() {
   void refreshPreview()
 }
 
+function createFinalInvoice() {
+  if (existingFinalInvoice.value) {
+    selectInvoice(existingFinalInvoice.value)
+    return
+  }
+  const source = selectedInvoice.value
+  if (!source || source.document_type !== 'proforma') return
+  applyInvoiceToForm(source)
+  selectedId.value = null
+  selectedInvoice.value = null
+  form.value.document_type = 'invoice'
+  form.value.booking_payout_id = ''
+  form.value.issue_date = today()
+  form.value.taxable_supply_date = today()
+  form.value.due_date = today()
+  form.value.payment_note = 'Already paid via Booking.com.'
+  success.value = `Final invoice draft copied from ${source.invoice_number}. Review and save to issue it.`
+  error.value = ''
+  void refreshPreview()
+}
+
 function invoicePayload() {
+  const items = invoiceItemsPayload(form.value.items)
   const p: Record<string, unknown> = {
     document_type: form.value.document_type,
     language: form.value.language,
     issue_date: form.value.issue_date,
     stay_start_date: form.value.stay_start_date,
     stay_end_date: form.value.stay_end_date,
-    amount_total_cents: Math.round((form.value.amount_eur || 0) * 100),
+    items,
+    amount_total_cents: items.reduce((sum, item) => sum + item.line_total_cents, 0),
     booking_reference: form.value.booking_reference.trim(),
     guest_name: form.value.guest_name.trim(),
     price_details: form.value.price_details.trim(),
@@ -266,6 +321,7 @@ function invoicePayload() {
     p.taxable_supply_date = form.value.taxable_supply_date
     p.due_date = form.value.due_date
     p.payment_note = form.value.payment_note
+    if (form.value.supplier_vat_status) p.supplier_vat_status = form.value.supplier_vat_status
   } else {
     p.supplier_vat_status = 'non_vat_payer'
   }
@@ -352,7 +408,7 @@ watch(
 watch(
   () => form.value.document_type,
   (type, previous) => {
-    if (type === previous) return
+    if (type === previous || selectedId.value) return
     if (type === 'proforma') {
       form.value.booking_payout_id = ''
       form.value.taxable_supply_date = ''
@@ -416,10 +472,12 @@ watch(
           :selected-invoice="selectedInvoice"
           :stay-options="stayOptions"
           :payout-options="payoutOptions"
+          :has-final-invoice="!!existingFinalInvoice"
           @submit="saveInvoice"
           @select-stay="onStaySelect"
           @select-payout="onPayoutSelect"
           @regenerate="regenerateSelectedInvoice"
+          @create-final="createFinalInvoice"
         />
       </div>
 

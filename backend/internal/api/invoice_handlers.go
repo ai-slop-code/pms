@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"pms/backend/internal/invoiceitems"
 	"pms/backend/internal/invoicepdf"
 	"pms/backend/internal/permissions"
 	"pms/backend/internal/store"
@@ -60,6 +61,7 @@ type invoiceRow struct {
 	Supplier            invoicePartySnapshot `json:"supplier"`
 	Customer            invoicePartySnapshot `json:"customer"`
 	AmountTotalCents    int                  `json:"amount_total_cents"`
+	Items               []invoiceitems.Item  `json:"items"`
 	Currency            string               `json:"currency"`
 	PaymentStatus       string               `json:"payment_status"`
 	PaymentNote         string               `json:"payment_note"`
@@ -105,8 +107,16 @@ type invoiceRequestBody struct {
 	StayStartDate          string                `json:"stay_start_date"`
 	StayEndDate            string                `json:"stay_end_date"`
 	AmountTotalCents       *int                  `json:"amount_total_cents"`
+	Items                  *[]invoiceItemRequest `json:"items"`
 	PaymentNote            *string               `json:"payment_note"`
 	Customer               *invoicePartySnapshot `json:"customer"`
+}
+
+type invoiceItemRequest struct {
+	Description    string `json:"description"`
+	Quantity       string `json:"quantity"`
+	UnitPriceCents *int   `json:"unit_price_cents"`
+	LineTotalCents *int   `json:"line_total_cents"`
 }
 
 type invoiceNamedStayCandidate struct {
@@ -416,10 +426,6 @@ func (s *Server) regenerateInvoice(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "failed to refresh supplier snapshot")
 		return
 	}
-	if err := s.refreshInvoiceBillableFromLinkedPayout(r.Context(), row); err != nil {
-		WriteError(w, http.StatusInternalServerError, "failed to refresh invoice amount from booking payout")
-		return
-	}
 	if _, err := s.renderAndAttachInvoiceVersion(r.Context(), pid, row, row.Version+1); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to generate invoice pdf")
 		return
@@ -494,8 +500,8 @@ func (s *Server) parseInvoiceCreateRequest(r *http.Request, propertyID int64, bo
 		}
 		applyInvoicePayoutPrefill(body, linkedPayout)
 	}
-	if body.AmountTotalCents == nil {
-		return nil, fmt.Errorf("amount_total_cents is required")
+	if body.AmountTotalCents == nil && body.Items == nil {
+		return nil, fmt.Errorf("items or amount_total_cents is required")
 	}
 	customer, err := normalizeInvoiceCustomer(body.Customer)
 	if err != nil {
@@ -670,7 +676,31 @@ func (s *Server) buildInvoiceRowFromBody(r *http.Request, propertyID int64, curr
 	if !row.StayEndDate.After(row.StayStartDate) {
 		return nil, fmt.Errorf("stay_end_date must be on or after stay_start_date")
 	}
-	if body.AmountTotalCents != nil {
+	if body.Items != nil {
+		items := make([]invoiceitems.Item, len(*body.Items))
+		for i, item := range *body.Items {
+			if item.UnitPriceCents == nil {
+				return nil, fmt.Errorf("item %d unit_price_cents is required", i+1)
+			}
+			items[i] = invoiceitems.Item{Description: item.Description, Quantity: item.Quantity, UnitPriceCents: *item.UnitPriceCents}
+		}
+		normalized, total, err := invoiceitems.Normalize(items)
+		if err != nil {
+			return nil, err
+		}
+		if body.AmountTotalCents != nil && *body.AmountTotalCents != total {
+			return nil, fmt.Errorf("amount_total_cents must equal the sum of item totals")
+		}
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode invoice items")
+		}
+		row.LineItemsJSON = sql.NullString{String: string(encoded), Valid: true}
+		row.AmountTotalCents = total
+	} else if body.AmountTotalCents != nil {
+		if row.LineItemsJSON.Valid && *body.AmountTotalCents != row.AmountTotalCents {
+			return nil, fmt.Errorf("update items to change an itemized invoice total")
+		}
 		row.AmountTotalCents = *body.AmountTotalCents
 	}
 	if row.AmountTotalCents < 0 {
@@ -742,7 +772,12 @@ func (s *Server) renderAndAttachInvoiceVersion(ctx context.Context, propertyID i
 	if err != nil {
 		return nil, err
 	}
+	items, err := decodeInvoiceItems(invoice)
+	if err != nil {
+		return nil, err
+	}
 	content, err := invoicepdf.Render(invoicepdf.Document{
+		Items:             items,
 		Language:          invoice.Language,
 		DocumentType:      invoice.DocumentType,
 		InvoiceNumber:     invoice.InvoiceNumber,
@@ -826,7 +861,12 @@ func invoiceToRow(propertyID int64, row store.Invoice, files []store.InvoiceFile
 	if err != nil {
 		return invoiceRow{}, err
 	}
+	items, err := decodeInvoiceItems(&row)
+	if err != nil {
+		return invoiceRow{}, err
+	}
 	out := invoiceRow{
+		Items:             items,
 		ID:                row.ID,
 		NamedStayID:       nullInt64Ptr(row.NamedStayID),
 		BookingPayoutID:   nullInt64Ptr(row.FinanceBookingPayoutID),
@@ -879,6 +919,17 @@ func invoiceToRow(propertyID int64, row store.Invoice, files []store.InvoiceFile
 	return out, nil
 }
 
+func decodeInvoiceItems(row *store.Invoice) ([]invoiceitems.Item, error) {
+	if !row.LineItemsJSON.Valid {
+		return invoiceitems.Legacy(row.Language, row.AmountTotalCents), nil
+	}
+	var items []invoiceitems.Item
+	if err := json.Unmarshal([]byte(row.LineItemsJSON.String), &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func decodeInvoiceSnapshots(row *store.Invoice) (invoicePartySnapshot, invoicePartySnapshot, error) {
 	var supplier invoicePartySnapshot
 	var customer invoicePartySnapshot
@@ -905,11 +956,11 @@ func (s *Server) refreshInvoiceSupplierFromProperty(ctx context.Context, row *st
 		return err
 	}
 	supplier := defaultInvoiceSupplier(property, profile)
+	var previous invoicePartySnapshot
+	if err := json.Unmarshal([]byte(row.SupplierSnapshotJSON), &previous); err == nil {
+		supplier.VATStatus = previous.VATStatus
+	}
 	if row.DocumentType == "proforma" {
-		var previous invoicePartySnapshot
-		if err := json.Unmarshal([]byte(row.SupplierSnapshotJSON), &previous); err == nil {
-			supplier.VATStatus = previous.VATStatus
-		}
 		supplier.CompanyName = ""
 	}
 	supplierJSON, err := json.Marshal(supplier)
@@ -917,33 +968,6 @@ func (s *Server) refreshInvoiceSupplierFromProperty(ctx context.Context, row *st
 		return err
 	}
 	row.SupplierSnapshotJSON = string(supplierJSON)
-	updated, err := s.Store.UpdateInvoice(ctx, row)
-	if err != nil {
-		return err
-	}
-	*row = *updated
-	return nil
-}
-
-// refreshInvoiceBillableFromLinkedPayout updates amount_total_cents from the linked
-// booking payout's CSV "Amount" (guest-paid total). Regenerate uses this so fixing
-// payout ingestion or re-linking a stay refreshes stale invoice totals.
-func (s *Server) refreshInvoiceBillableFromLinkedPayout(ctx context.Context, row *store.Invoice) error {
-	if !row.FinanceBookingPayoutID.Valid || row.FinanceBookingPayoutID.Int64 <= 0 {
-		return nil
-	}
-	payout, err := s.Store.GetBookingPayoutByID(ctx, row.PropertyID, row.FinanceBookingPayoutID.Int64)
-	if err != nil {
-		return err
-	}
-	billable := payoutInvoiceBillableCents(payout)
-	if billable <= 0 {
-		return nil
-	}
-	if row.AmountTotalCents == billable {
-		return nil
-	}
-	row.AmountTotalCents = billable
 	updated, err := s.Store.UpdateInvoice(ctx, row)
 	if err != nil {
 		return err
@@ -1102,7 +1126,7 @@ func applyInvoicePayoutPrefill(body *invoiceRequestBody, payout *store.FinanceBo
 	if payout == nil {
 		return
 	}
-	if body.AmountTotalCents == nil {
+	if body.AmountTotalCents == nil && body.Items == nil {
 		n := payoutInvoiceBillableCents(payout)
 		body.AmountTotalCents = &n
 	}

@@ -21,6 +21,13 @@ export interface InvoiceFile {
   created_at: string
 }
 
+export interface InvoiceItem {
+  description: string
+  quantity: string
+  unit_price_cents: number
+  line_total_cents: number
+}
+
 export interface Invoice {
   id: number
   named_stay_id: number
@@ -40,6 +47,7 @@ export interface Invoice {
   supplier: InvoiceParty
   customer: InvoiceParty
   amount_total_cents: number
+  items: InvoiceItem[]
   currency: string
   payment_status: string
   payment_note: string

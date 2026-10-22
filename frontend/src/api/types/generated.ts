@@ -5719,6 +5719,17 @@ export interface components {
             dic?: string;
             vat_id?: string;
         };
+        InvoiceItem: {
+            description: string;
+            /**
+             * @description Positive decimal quantity up to 1000000, with at most six fractional digits.
+             * @example 1.5
+             */
+            quantity: string;
+            unit_price_cents: number;
+            /** @description Quantity times unit price, rounded half-up to cents by the server. */
+            readonly line_total_cents: number;
+        };
         InvoiceRequestFields: {
             /** Format: int64 */
             named_stay_id?: number;
@@ -5740,6 +5751,8 @@ export interface components {
             stay_start_date?: string;
             stay_end_date?: string;
             amount_total_cents?: number;
+            /** @description Replaces the ordered item snapshot. Omitted or null preserves existing items on PATCH. If amount_total_cents is also supplied, it must match the calculated sum. */
+            items?: components["schemas"]["InvoiceItem"][] | null;
             payment_note?: string;
             customer?: components["schemas"]["InvoicePartyRequest"];
         };
@@ -5784,6 +5797,7 @@ export interface components {
             supplier: components["schemas"]["InvoiceParty"];
             customer: components["schemas"]["InvoiceParty"];
             amount_total_cents: number;
+            items: components["schemas"]["InvoiceItem"][];
             currency: string;
             payment_status: string;
             payment_note: string;

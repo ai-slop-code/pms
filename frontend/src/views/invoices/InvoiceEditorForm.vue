@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Download } from 'lucide-vue-next'
 import UiCard from '@/components/ui/UiCard.vue'
 import UiSection from '@/components/ui/UiSection.vue'
@@ -6,7 +7,8 @@ import UiInput from '@/components/ui/UiInput.vue'
 import UiSelect from '@/components/ui/UiSelect.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import { apiUrl } from '@/api/http'
-import { stayOptionLabel, payoutOptionLabel } from './format'
+import { stayOptionLabel, payoutOptionLabel, eur } from './format'
+import { invoiceItemValue, type InvoiceItemForm } from './items'
 import type {
   Invoice,
   InvoiceNamedStayOption as StayOption,
@@ -23,7 +25,8 @@ export interface InvoiceFormState {
   due_date: string
   stay_start_date: string
   stay_end_date: string
-  amount_eur: number
+  items: InvoiceItemForm[]
+  supplier_vat_status: '' | 'non_vat_payer'
   payment_note: string
   booking_reference: string
   guest_name: string
@@ -49,6 +52,7 @@ defineProps<{
   selectedInvoice: Invoice | null
   stayOptions: StayOption[]
   payoutOptions: BookingPayoutOption[]
+  hasFinalInvoice: boolean
 }>()
 
 const form = defineModel<InvoiceFormState>('form', { required: true })
@@ -58,7 +62,22 @@ const emit = defineEmits<{
   selectStay: [value: string]
   selectPayout: [value: string]
   regenerate: []
+  createFinal: []
 }>()
+
+function itemTotal(item: InvoiceItemForm): number | null {
+  try {
+    return invoiceItemValue(item).line_total_cents
+  } catch {
+    return null
+  }
+}
+
+const total = computed(() => {
+  const values = form.value.items.map(itemTotal)
+  if (values.some((value) => value === null)) return null
+  return values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+})
 </script>
 
 <template>
@@ -66,6 +85,15 @@ const emit = defineEmits<{
       <div class="card-head">
       <h2 class="card-head__title">{{ isEditing ? 'Edit invoice' : 'Create invoice' }}</h2>
       <div class="card-head__actions">
+        <UiButton
+          v-if="selectedInvoice?.document_type === 'proforma'"
+          variant="secondary"
+          size="sm"
+          :disabled="saving || regenerating"
+          @click="emit('createFinal')"
+        >
+          {{ hasFinalInvoice ? 'Open final invoice' : 'Create final invoice' }}
+        </UiButton>
         <UiButton
           v-if="selectedInvoice"
           variant="secondary"
@@ -136,34 +164,78 @@ const emit = defineEmits<{
         <UiInput v-model="form.issue_date" type="date" label="Issue date" />
         <UiInput v-if="form.document_type === 'invoice'" v-model="form.taxable_supply_date" type="date" label="Taxable supply date" />
         <UiInput v-if="form.document_type === 'invoice'" v-model="form.due_date" type="date" label="Due date" />
-        <UiInput
-          v-model.number="form.amount_eur"
-          type="number"
-          min="0"
-          step="0.01"
-          label="Amount billed (EUR)"
-          help="Full guest price"
-        />
         <UiInput v-model="form.stay_start_date" type="date" label="Stay start" />
         <UiInput v-model="form.stay_end_date" type="date" label="Stay end" />
         <UiInput
-          v-if="form.document_type === 'proforma'"
           v-model="form.booking_reference"
           label="Booking.com reservation number"
           placeholder="6429185079"
-          required
+          :required="form.document_type === 'proforma'"
           class="form-grid__full"
         />
-        <UiInput v-if="form.document_type === 'proforma'" v-model="form.guest_name" label="Guest name" required />
+        <UiInput v-model="form.guest_name" label="Guest name" :required="form.document_type === 'proforma'" />
         <label v-if="form.document_type === 'invoice'" class="textarea-field form-grid__full">
           <span class="textarea-field__label">Payment note</span>
           <textarea v-model="form.payment_note" rows="3" />
         </label>
-        <label v-else class="textarea-field form-grid__full">
+        <label class="textarea-field form-grid__full">
           <span class="textarea-field__label">Price details</span>
           <textarea v-model="form.price_details" rows="3" maxlength="1000" />
         </label>
       </div>
+
+      <UiSection title="Items">
+        <p class="muted">
+          Selecting a Booking.com payout prefills the first item's unit price and resets its quantity
+          to 1. Other items are preserved.
+        </p>
+        <div v-for="(item, index) in form.items" :key="index" class="invoice-item" data-testid="invoice-item">
+          <UiInput
+            v-model="item.description"
+            :label="`Item ${index + 1} description`"
+            required
+            class="form-grid__full"
+          />
+          <UiInput
+            v-model="item.quantity"
+            type="number"
+            min="0.000001"
+            max="1000000"
+            step="0.000001"
+            label="Quantity"
+            required
+            data-testid="item-quantity"
+          />
+          <UiInput
+            v-model="item.unit_price_eur"
+            type="number"
+            min="0"
+            max="10000000000"
+            step="0.01"
+            label="Unit price (EUR)"
+            required
+            data-testid="item-price"
+          />
+          <p class="item-total">
+            Line total: <strong>{{ itemTotal(item) === null ? '—' : eur(itemTotal(item)) }}</strong>
+          </p>
+          <UiButton
+            type="button"
+            variant="ghost"
+            size="sm"
+            :disabled="form.items.length === 1"
+            :aria-label="`Remove item ${index + 1}`"
+            @click="form.items.splice(index, 1)"
+          >Remove item</UiButton>
+        </div>
+        <UiButton
+          type="button"
+          variant="secondary"
+          :disabled="form.items.length >= 100"
+          @click="form.items.push({ description: '', quantity: '1', unit_price_eur: '0.00' })"
+        >Add item</UiButton>
+        <p class="document-total">Total (EUR): <strong>{{ total === null ? '—' : eur(total) }}</strong></p>
+      </UiSection>
 
       <UiSection title="Customer details">
         <div class="form-grid">
@@ -213,6 +285,23 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
+.invoice-item {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  padding-block: var(--space-3);
+  margin-bottom: var(--space-3);
+  align-items: end;
+}
+.document-total {
+  text-align: right;
+  font-size: var(--font-size-lg);
+}
+.item-total {
+  margin: 0;
+  padding-block: var(--space-2);
+}
 .muted {
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);

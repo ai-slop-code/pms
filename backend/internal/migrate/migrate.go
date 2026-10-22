@@ -88,7 +88,7 @@ func up(db *sql.DB, automatic bool, onlyVersion string) error {
 			if _, manual := manualMigrations[version]; manual {
 				continue
 			}
-			if version == "000045_invoice_proforma" {
+			if version == "000045_invoice_proforma" || version == "000046_invoice_line_items" {
 				var pms21Applied int
 				if err := db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE version = '000039_legacy_occupancy_removal'`).Scan(&pms21Applied); err != nil {
 					return fmt.Errorf("check PMS-21 migration prerequisite: %w", err)

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"pms/backend/internal/invoiceitems"
+
 	_ "embed"
 
 	"github.com/go-pdf/fpdf"
@@ -71,6 +73,7 @@ type Document struct {
 	StayStartDate     time.Time
 	StayEndDate       time.Time
 	AmountTotalCents  int
+	Items             []invoiceitems.Item
 	Currency          string
 	PaymentStatus     string
 	PaymentNote       string
@@ -106,11 +109,20 @@ func Render(doc Document) ([]byte, error) {
 
 	y = drawDetailsCard(pdf, doc, pdf.GetY())
 	pdf.SetY(y + 6)
+	if len(doc.Items) > 0 {
+		y = drawItems(pdf, doc, pdf.GetY())
+		pdf.SetY(y + 6)
+	}
 
 	y = drawInfoCards(pdf, doc, pdf.GetY())
-	pdf.SetY(y + 8)
-
-	drawFooter(pdf, doc, pdf.GetY())
+	footerY := y + 6
+	if footerY+22 > 297-pageMargin {
+		footerY = invoicePageRoom(pdf, footerY, 22)
+	}
+	// The body reserves bottom space for this banner; its text must not trigger
+	// the body's automatic page break while using that reserved space.
+	pdf.SetAutoPageBreak(false, pageMargin)
+	drawFooter(pdf, doc, footerY)
 
 	var buf bytes.Buffer
 	if err := pdf.Output(&buf); err != nil {
@@ -364,6 +376,9 @@ func drawDetailsCard(pdf *fpdf.Fpdf, doc Document, y float64) float64 {
 	rowPad := 1.5
 	rowH := 7.5
 	totalH := 12.0
+	if len(doc.Items) > 0 {
+		totalH = 0
+	}
 
 	saved := pdf.GetCellMargin()
 	pdf.SetCellMargin(0)
@@ -421,16 +436,18 @@ func drawDetailsCard(pdf *fpdf.Fpdf, doc Document, y float64) float64 {
 		}
 	}
 
-	// Separator before total
-	pdf.SetDrawColor(cBorderR, cBorderG, cBorderB)
-	pdf.SetLineWidth(0.1)
-	pdf.Line(x+detailPad, cy-rowPad*0.5, x+w-detailPad, cy-rowPad*0.5)
+	if len(doc.Items) == 0 {
+		// Separator before total
+		pdf.SetDrawColor(cBorderR, cBorderG, cBorderB)
+		pdf.SetLineWidth(0.1)
+		pdf.Line(x+detailPad, cy-rowPad*0.5, x+w-detailPad, cy-rowPad*0.5)
 
-	// Total row
-	pdf.SetFillColor(cCardBlueR, cCardBlueG, cCardBlueB)
-	pdf.RoundedRect(x, cy, w, totalH, cornerRadius, "34", "F")
-	pdf.Rect(x, cy, w, cornerRadius, "F")
-	drawRow(pdf, x+detailPad, cy, totalRow.l, totalRow.v, totalH, totalH, true)
+		// Total row
+		pdf.SetFillColor(cCardBlueR, cCardBlueG, cCardBlueB)
+		pdf.RoundedRect(x, cy, w, totalH, cornerRadius, "34", "F")
+		pdf.Rect(x, cy, w, cornerRadius, "F")
+		drawRow(pdf, x+detailPad, cy, totalRow.l, totalRow.v, totalH, totalH, true)
+	}
 
 	pdf.SetY(y + cardH)
 	return y + cardH
@@ -528,6 +545,23 @@ func drawInfoCards(pdf *fpdf.Fpdf, doc Document, y float64) float64 {
 	lH := measureInfoH(pdf, doc, w, true)
 	rH := measureInfoH(pdf, doc, w, false)
 	h := maxF(lH, rH)
+	if h > 240 {
+		for _, block := range []struct{ title, text string }{
+			{lbl(doc.Language, "service_summary"), svcPlain(doc) + "\n" + doc.PriceDetails},
+			{lbl(doc.Language, "payment_note_title"), payNote(doc)},
+		} {
+			y = invoicePageRoom(pdf, y, 15)
+			pdf.SetXY(pageMargin, y)
+			pdf.SetFont(fontRoboto, "B", 10)
+			pdf.MultiCell(contentW, 6, block.title, "", "L", false)
+			pdf.SetFont(fontRoboto, "", 10)
+			pdf.SetX(pageMargin)
+			pdf.MultiCell(contentW, 5.2, block.text, "", "L", false)
+			y = pdf.GetY() + 5
+		}
+		return y
+	}
+	y = invoicePageRoom(pdf, y, h+4)
 
 	drawInfoCard(pdf, xL, y, w, h, doc, true)
 	drawInfoCard(pdf, xR, y, w, h, doc, false)
@@ -604,6 +638,7 @@ func writeSvcRich(pdf *fpdf.Fpdf, x, y, maxW float64, doc Document) {
 	if doc.DocumentType == "proforma" {
 		pdf.MultiCell(maxW, lh, svcPlain(doc), "", "L", false)
 		if doc.PriceDetails != "" {
+			pdf.SetX(x)
 			pdf.MultiCell(maxW, lh, doc.PriceDetails, "", "L", false)
 		}
 		return
@@ -629,6 +664,11 @@ func writeSvcRich(pdf *fpdf.Fpdf, x, y, maxW float64, doc Document) {
 	pdf.SetFont(fontRoboto, "", 10)
 	pdf.SetTextColor(cBodyR, cBodyG, cBodyB)
 	pdf.Write(lh, ".")
+	if doc.PriceDetails != "" {
+		pdf.Ln(lh)
+		pdf.SetX(x)
+		pdf.MultiCell(maxW, lh, doc.PriceDetails, "", "L", false)
+	}
 }
 
 // ---------------------------------------------------------------------------

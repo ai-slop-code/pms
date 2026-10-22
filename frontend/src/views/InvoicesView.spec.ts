@@ -201,7 +201,7 @@ describe('InvoicesView', () => {
     const w = mount(InvoicesView)
     await flushPromises()
     await w.find('select').setValue('55')
-    const amountInput = w.find('input[type="number"]')
+    const amountInput = w.find('input[step="0.01"]')
     await amountInput.setValue(String(amount))
     expect((amountInput.element as HTMLInputElement).validity.stepMismatch).toBe(false)
     await w.find('form').trigger('submit')
@@ -241,7 +241,7 @@ describe('InvoicesView', () => {
     const w = mount(InvoicesView)
     await flushPromises()
     await w.findAll('select')[1]!.setValue('88')
-    const amountInput = w.find('input[type="number"]')
+    const amountInput = w.find('input[step="0.01"]')
     expect((amountInput.element as HTMLInputElement).value).toBe('4234.23')
     expect((amountInput.element as HTMLInputElement).validity.stepMismatch).toBe(false)
     await w.find('form').trigger('submit')
@@ -269,7 +269,7 @@ describe('InvoicesView', () => {
     await w.findAll('select')[0]!.setValue('55')
     await w.findAll('select')[2]!.setValue('proforma')
     await w.find('input[placeholder="6429185079"]').setValue('6429185079')
-    await w.find('input[type="number"]').setValue('1234.56')
+    await w.find('input[step="0.01"]').setValue('1234.56')
     await w.find('form').trigger('submit')
     await flushPromises()
 
@@ -309,7 +309,7 @@ describe('InvoicesView', () => {
     await flushPromises()
     await w.find('.invoice-list-item').trigger('click')
     await flushPromises()
-    const amountInput = w.find('input[type="number"]')
+    const amountInput = w.find('input[step="0.01"]')
     await amountInput.setValue('4234.23')
     await w.find('form').trigger('submit')
     await flushPromises()
@@ -319,6 +319,112 @@ describe('InvoicesView', () => {
     )
     expect(updateCall?.[1].json).toMatchObject({ amount_total_cents: 423423 })
     expect((amountInput.element as HTMLInputElement).value).toBe('4234.23')
+  })
+
+  it('adds fractional cleaning, preserves it on payout selection, and removes a row', async () => {
+    seedProperty()
+    const payout = { id: 88, reference_number: 'PAY-88', net_cents: 100000, amount_cents: 100000, named_stay_id: 55 }
+    apiMock.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url.includes('/invoices/stay-candidates')) return Promise.resolve({ stays: [namedStay] })
+      if (url.includes('/invoices/payout-link-candidates')) return Promise.resolve({ payouts: [payout] })
+      if (url.endsWith('/invoices') && options?.method === 'POST') return Promise.resolve({ invoice: invoiceFixture(100152) })
+      if (url.endsWith('/invoices/101')) return Promise.resolve({ invoice: invoiceFixture(100152) })
+      if (url.endsWith('/invoices')) return Promise.resolve({ invoices: [] })
+      return Promise.resolve({})
+    })
+    const w = mount(InvoicesView)
+    await flushPromises()
+    await w.findAll('button').find((button) => button.text() === 'Add item')!.trigger('click')
+    const cleaning = w.findAll('[data-testid="invoice-item"]')[1]!
+    await cleaning.find('input[type="text"]').setValue('Cleaning')
+    await cleaning.find('input[step="0.000001"]').setValue('1.5')
+    await cleaning.find('input[step="0.01"]').setValue('1.01')
+    expect((cleaning.find('input[step="0.000001"]').element as HTMLInputElement).validity.stepMismatch).toBe(false)
+    await w.findAll('select')[1]!.setValue('88')
+    expect(cleaning.find('input[step="0.01"]').element).toHaveProperty('value', '1.01')
+    await w.findAll('button').find((button) => button.text() === 'Add item')!.trigger('click')
+    await w.find('button[aria-label="Remove item 3"]').trigger('click')
+    expect(w.findAll('[data-testid="invoice-item"]')).toHaveLength(2)
+    await w.find('form').trigger('submit')
+    await flushPromises()
+    const call = apiMock.mock.calls.find(([, options]) => options?.method === 'POST')
+    expect(call?.[1].json).toMatchObject({
+      amount_total_cents: 100152,
+      items: [
+        { quantity: '1', unit_price_cents: 100000, line_total_cents: 100000 },
+        { description: 'Cleaning', quantity: '1.5', unit_price_cents: 101, line_total_cents: 152 },
+      ],
+    })
+  })
+
+  it('copies saved pro forma items and customer into an independent final draft', async () => {
+    seedProperty()
+    const source = {
+      ...invoiceFixture(100152), document_type: 'proforma',
+      taxable_supply_date: null, due_date: null, payment_status: 'not_applicable', payment_note: '',
+      supplier: { vat_status: 'non_vat_payer' },
+      customer: { name: 'Guest', company_name: 'Company', address_line_1: 'Main 1' },
+      booking_reference: 'REF-55', guest_name: 'Guest', price_details: 'Accommodation and cleaning',
+      stay_start_date: '2026-03-31T22:00:00Z', stay_end_date: '2026-04-01T22:00:00Z',
+      items: [
+        { description: 'Accommodation', quantity: '1', unit_price_cents: 100000, line_total_cents: 100000 },
+        { description: 'Cleaning', quantity: '1.5', unit_price_cents: 101, line_total_cents: 152 },
+      ],
+    }
+    apiMock.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url.includes('/invoices/stay-candidates')) return Promise.resolve({ stays: [namedStay] })
+      if (url.includes('/invoices/payout-link-candidates')) return Promise.resolve({ payouts: [] })
+      if (url.endsWith('/invoices') && options?.method === 'POST') return Promise.resolve({ invoice: { ...source, id: 102, document_type: 'invoice' } })
+      if (url.endsWith('/invoices/101')) return Promise.resolve({ invoice: source })
+      if (url.endsWith('/invoices/102')) return Promise.resolve({ invoice: { ...source, id: 102, document_type: 'invoice' } })
+      if (url.endsWith('/invoices')) return Promise.resolve({ invoices: [source] })
+      return Promise.resolve({})
+    })
+    const w = mount(InvoicesView)
+    await flushPromises()
+    await w.find('.invoice-list-item').trigger('click')
+    await flushPromises()
+    // Unsaved edits must not become the source of the copied draft.
+    await w.findAll('input[step="0.01"]')[1]!.setValue('9.99')
+    await w.findAll('button').find((button) => button.text() === 'Create final invoice')!.trigger('click')
+    await flushPromises()
+    expect(w.findAll('input[step="0.01"]')[1]!.element).toHaveProperty('value', '1.01')
+    expect(apiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
+    expect(w.text()).toContain('Final invoice draft copied')
+    expect(w.text()).not.toContain('Regenerate PDF')
+    await w.findAll('input[step="0.000001"]')[1]!.setValue('2.5')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+    const call = apiMock.mock.calls.find(([, options]) => options?.method === 'POST')
+    expect(call?.[1].json).toMatchObject({
+      document_type: 'invoice', named_stay_id: 55, amount_total_cents: 100253,
+      stay_start_date: '2026-04-01', stay_end_date: '2026-04-02',
+      booking_reference: 'REF-55', supplier_vat_status: 'non_vat_payer',
+      customer: { company_name: 'Company' },
+    })
+    expect(call?.[1].json.taxable_supply_date).toBeTruthy()
+    expect(source.items[1]!.quantity).toBe('1.5')
+    expect(source.items[1]!.unit_price_cents).toBe(101)
+  })
+
+  it('opens an existing final invoice instead of creating another draft', async () => {
+    seedProperty()
+    const source = { ...invoiceFixture(10000), document_type: 'proforma' }
+    const final = { ...invoiceFixture(10000, 102), document_type: 'invoice' }
+    apiRouter({
+      '/invoices/101': () => ({ invoice: source }),
+      '/invoices/102': () => ({ invoice: final }),
+      '/invoices': () => ({ invoices: [source, final] }),
+    })
+    const w = mount(InvoicesView)
+    await flushPromises()
+    await w.find('.invoice-list-item').trigger('click')
+    await flushPromises()
+    await w.findAll('button').find((button) => button.text() === 'Open final invoice')!.trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('Edit invoice')
+    expect(w.text()).not.toContain('Create final invoice')
+    expect(apiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
   })
 
   it('downloads invoices through the configured API origin', async () => {

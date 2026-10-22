@@ -5,6 +5,10 @@ This folder contains the full specification package for the PMS project and is i
 
 ## Current Authority
 
+For invoice itemization, `PMS_37_Invoice_Line_Items_Spec.md` extends PMS 36 with
+fractional-quantity line items on both document types, preserved saved totals,
+and the pro forma-to-final-invoice draft workflow.
+
 For availability and stay identity, the final authority is
 `PMS_21_Legacy_Occupancy_Removal_Spec.md`, supported by ADR-007. The final
 model uses raw booking blocks, named stays and named-stay nights, source links,
