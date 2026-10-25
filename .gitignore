@@ -27,3 +27,9 @@ spec/statement_processing/*.csv
 .vscode/
 *.swp
 *.log
+# Local screenshots and exported Booking.com finance data
+/booking_calendar.png
+/night_detail.png
+/pms_occupancy.png
+/payout_*.csv
+/reservation_statements_overview_*.csv
