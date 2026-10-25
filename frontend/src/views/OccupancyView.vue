@@ -15,6 +15,8 @@ import OccupancyCalendar from '@/views/occupancy/OccupancyCalendar.vue'
 import OccupancySyncPanel from '@/views/occupancy/OccupancySyncPanel.vue'
 import { stayOutcomeLabel, stayOutcomeTone } from '@/views/occupancy/outcome'
 import { monthKey, parseMonthKey } from '@/utils/month'
+import { formatBookingAdvertisedNightlyPrice, parseBookingAdvertisedNightlyPrice } from '@/utils/bookingPrice'
+import { formatEuros } from '@/utils/format'
 import type {
   CalendarAvailabilityBlock,
   CalendarNamedStay,
@@ -58,6 +60,7 @@ const promoteDisplayName = ref('')
 const promoteStayType = ref('booking_com')
 const promoteCleaningRequired = ref(true)
 const promoteLateCheckout = ref(false)
+const promoteAdvertisedNightlyPrice = ref('')
 const promoteCleaningManuallyChanged = ref(false)
 
 const manualStayDialogOpen = ref(false)
@@ -69,6 +72,7 @@ const manualStayCheckIn = ref('')
 const manualStayCheckOut = ref('')
 const manualStayCleaningRequired = ref(true)
 const manualStayLateCheckout = ref(false)
+const manualStayAdvertisedNightlyPrice = ref('')
 const manualStayCleaningManuallyChanged = ref(false)
 
 const availabilityDialogOpen = ref(false)
@@ -92,6 +96,7 @@ const editStayCheckIn = ref('')
 const editStayCheckOut = ref('')
 const editStayCleaningRequired = ref(true)
 const editStayLateCheckout = ref(false)
+const editStayAdvertisedNightlyPrice = ref('')
 const stayStatusBusyID = ref<number | null>(null)
 
 const outcomeDialogOpen = ref(false)
@@ -159,6 +164,7 @@ function openPromoteDialog(block: CalendarRawBookingBlock) {
   promoteStayType.value = 'booking_com'
   promoteCleaningRequired.value = true
   promoteLateCheckout.value = false
+  promoteAdvertisedNightlyPrice.value = ''
   promoteCleaningManuallyChanged.value = false
   promoteError.value = ''
   dayDialogOpen.value = false
@@ -172,6 +178,7 @@ function openManualStayDialog(dateKey = dayDialogDate.value) {
   manualStayCheckOut.value = addISODate(manualStayCheckIn.value, 1)
   manualStayCleaningRequired.value = true
   manualStayLateCheckout.value = false
+  manualStayAdvertisedNightlyPrice.value = ''
   manualStayCleaningManuallyChanged.value = false
   manualStayError.value = ''
   dayDialogOpen.value = false
@@ -185,9 +192,18 @@ watch(promoteStayType, (stayType) => {
 })
 
 watch(manualStayType, (stayType) => {
+  if (stayType !== 'booking_com') manualStayAdvertisedNightlyPrice.value = ''
   if (!manualStayCleaningManuallyChanged.value) {
     manualStayCleaningRequired.value = defaultCleaningRequired(stayType)
   }
+})
+
+watch(promoteStayType, (stayType) => {
+  if (stayType !== 'booking_com') promoteAdvertisedNightlyPrice.value = ''
+})
+
+watch(editStayType, (stayType) => {
+  if (stayType !== 'booking_com') editStayAdvertisedNightlyPrice.value = ''
 })
 
 async function submitManualStay() {
@@ -205,6 +221,16 @@ async function submitManualStay() {
     manualStayError.value = 'Choose a valid check-in and later check-out.'
     return
   }
+  let advertisedNightlyPriceCents: number | null
+  try {
+    advertisedNightlyPriceCents =
+      manualStayType.value === 'booking_com'
+        ? parseBookingAdvertisedNightlyPrice(manualStayAdvertisedNightlyPrice.value)
+        : null
+  } catch (cause) {
+    manualStayError.value = cause instanceof Error ? cause.message : 'Invalid advertised nightly price'
+    return
+  }
   manualStayBusy.value = true
   manualStayError.value = ''
   try {
@@ -214,23 +240,26 @@ async function submitManualStay() {
       error?: string
       nuki_generation_status?: string
       cleaning_calendar?: { status: string; error?: string }
-    }>(
-      `/api/properties/${pid.value}/stays`,
-      {
-        method: 'POST',
-        json: {
-          display_name: name,
-          check_in: manualStayCheckIn.value,
-          check_out: manualStayCheckOut.value,
-          stay_type: manualStayType.value,
-          cleaning_required: manualStayCleaningRequired.value,
-          late_checkout: manualStayLateCheckout.value && ['booking_com', 'external'].includes(manualStayType.value),
-        },
+    }>(`/api/properties/${pid.value}/stays`, {
+      method: 'POST',
+      json: {
+        display_name: name,
+        check_in: manualStayCheckIn.value,
+        check_out: manualStayCheckOut.value,
+        stay_type: manualStayType.value,
+        cleaning_required: manualStayCleaningRequired.value,
+        ...(['booking_com', 'external'].includes(manualStayType.value)
+          ? { late_checkout: manualStayLateCheckout.value }
+          : {}),
+        ...(manualStayType.value === 'booking_com'
+          ? { booking_advertised_nightly_price_cents: advertisedNightlyPriceCents }
+          : {}),
       },
-    )
+    })
     if (result.stay_saved && result.cleaning_calendar?.status === 'error') {
       manualStayDialogOpen.value = false
-      error.value = result.error || 'Stay saved, but cleaning calendar sync failed. Retry calendar synchronization.'
+      error.value =
+        result.error || 'Stay saved, but cleaning calendar sync failed. Retry calendar synchronization.'
       await loadCalendar()
       return
     }
@@ -260,6 +289,16 @@ async function submitPromoteRawBlock() {
     promoteError.value = 'Choose a valid check-in and later check-out.'
     return
   }
+  let advertisedNightlyPriceCents: number | null
+  try {
+    advertisedNightlyPriceCents =
+      promoteStayType.value === 'booking_com'
+        ? parseBookingAdvertisedNightlyPrice(promoteAdvertisedNightlyPrice.value)
+        : null
+  } catch (cause) {
+    promoteError.value = cause instanceof Error ? cause.message : 'Invalid advertised nightly price'
+    return
+  }
   if (
     promoteCheckIn.value < promoteRawBlock.value.check_in_date ||
     promoteCheckOut.value > promoteRawBlock.value.check_out_date
@@ -276,23 +315,26 @@ async function submitPromoteRawBlock() {
       error?: string
       nuki_generation_status?: string
       cleaning_calendar?: { status: string; error?: string }
-    }>(
-      `/api/properties/${pid.value}/booking-blocks/${promoteRawBlock.value.id}/promote`,
-      {
-        method: 'POST',
-        json: {
-          display_name: name,
-          check_in: promoteCheckIn.value,
-          check_out: promoteCheckOut.value,
-          stay_type: promoteStayType.value,
-          cleaning_required: promoteCleaningRequired.value,
-          late_checkout: promoteLateCheckout.value && ['booking_com', 'external'].includes(promoteStayType.value),
-        },
+    }>(`/api/properties/${pid.value}/booking-blocks/${promoteRawBlock.value.id}/promote`, {
+      method: 'POST',
+      json: {
+        display_name: name,
+        check_in: promoteCheckIn.value,
+        check_out: promoteCheckOut.value,
+        stay_type: promoteStayType.value,
+        cleaning_required: promoteCleaningRequired.value,
+        ...(['booking_com', 'external'].includes(promoteStayType.value)
+          ? { late_checkout: promoteLateCheckout.value }
+          : {}),
+        ...(promoteStayType.value === 'booking_com'
+          ? { booking_advertised_nightly_price_cents: advertisedNightlyPriceCents }
+          : {}),
       },
-    )
+    })
     if (result.stay_saved && result.cleaning_calendar?.status === 'error') {
       promoteDialogOpen.value = false
-      error.value = result.error || 'Stay saved, but cleaning calendar sync failed. Retry calendar synchronization.'
+      error.value =
+        result.error || 'Stay saved, but cleaning calendar sync failed. Retry calendar synchronization.'
       await loadCalendar()
       return
     }
@@ -398,6 +440,9 @@ function openEditStayDialog(stay: CalendarNamedStay) {
   editStayCheckOut.value = stay.check_out_date
   editStayCleaningRequired.value = stay.cleaning_required
   editStayLateCheckout.value = stay.late_checkout
+  editStayAdvertisedNightlyPrice.value = formatBookingAdvertisedNightlyPrice(
+    stay.booking_advertised_nightly_price_cents,
+  )
   editStayError.value = ''
   dayDialogOpen.value = false
   editStayDialogOpen.value = true
@@ -418,6 +463,16 @@ async function submitEditStay() {
     editStayError.value = 'Choose a valid check-in and later check-out.'
     return
   }
+  let advertisedNightlyPriceCents: number | null
+  try {
+    advertisedNightlyPriceCents =
+      editStayType.value === 'booking_com'
+        ? parseBookingAdvertisedNightlyPrice(editStayAdvertisedNightlyPrice.value)
+        : null
+  } catch (cause) {
+    editStayError.value = cause instanceof Error ? cause.message : 'Invalid advertised nightly price'
+    return
+  }
   editStayBusy.value = true
   editStayError.value = ''
   try {
@@ -431,7 +486,12 @@ async function submitEditStay() {
           check_out: editStayCheckOut.value,
           stay_type: editStayType.value,
           cleaning_required: editStayCleaningRequired.value,
-          late_checkout: editStayLateCheckout.value && ['booking_com', 'external'].includes(editStayType.value),
+          ...(['booking_com', 'external'].includes(editStayType.value)
+            ? { late_checkout: editStayLateCheckout.value }
+            : {}),
+          ...(editStayType.value === 'booking_com'
+            ? { booking_advertised_nightly_price_cents: advertisedNightlyPriceCents }
+            : {}),
         },
       },
     )
@@ -793,6 +853,10 @@ watch(
                     >
                   </div>
                   <p v-if="stay.review_reason" class="note">Review: {{ stay.review_reason }}</p>
+                  <p v-if="stay.stay_type === 'booking_com'" class="note">
+                    Booking.com advertised nightly price:
+                    {{ formatEuros(stay.booking_advertised_nightly_price_cents) }} / night
+                  </p>
                   <p v-if="stay.outcome_reason" class="note">Outcome: {{ stay.outcome_reason }}</p>
                   <p v-if="stay.nuki_generation_error" class="warning">
                     Nuki: {{ stay.nuki_generation_error }}
@@ -922,6 +986,15 @@ watch(
               :max="promoteRawBlock?.check_out_date"
             />
           </div>
+          <UiInput
+            v-if="promoteStayType === 'booking_com'"
+            v-model="promoteAdvertisedNightlyPrice"
+            label="Booking.com advertised nightly price (EUR)"
+            help="Optional. Your nightly price before Booking.com promotions or discounts, excluding extras. This is not income."
+            inputmode="decimal"
+            step="0.01"
+            :disabled="promoteBusy"
+          />
           <label class="checkbox"
             ><input
               v-model="promoteCleaningRequired"
@@ -930,7 +1003,14 @@ watch(
             />
             Cleaning required</label
           >
-          <label class="checkbox"><input v-model="promoteLateCheckout" type="checkbox" :disabled="!['booking_com', 'external'].includes(promoteStayType)" /> Late checkout</label>
+          <label class="checkbox"
+            ><input
+              v-model="promoteLateCheckout"
+              type="checkbox"
+              :disabled="!['booking_com', 'external'].includes(promoteStayType)"
+            />
+            Late checkout</label
+          >
           <p v-if="promoteError" class="form-error">{{ promoteError }}</p>
         </form>
         <template #footer
@@ -967,6 +1047,15 @@ watch(
               :min="manualStayCheckIn"
             />
           </div>
+          <UiInput
+            v-if="manualStayType === 'booking_com'"
+            v-model="manualStayAdvertisedNightlyPrice"
+            label="Booking.com advertised nightly price (EUR)"
+            help="Optional. Your nightly price before Booking.com promotions or discounts, excluding extras. This is not income."
+            inputmode="decimal"
+            step="0.01"
+            :disabled="manualStayBusy"
+          />
           <label class="checkbox"
             ><input
               v-model="manualStayCleaningRequired"
@@ -975,7 +1064,14 @@ watch(
             />
             Cleaning required</label
           >
-          <label class="checkbox"><input v-model="manualStayLateCheckout" type="checkbox" :disabled="!['booking_com', 'external'].includes(manualStayType)" /> Late checkout</label>
+          <label class="checkbox"
+            ><input
+              v-model="manualStayLateCheckout"
+              type="checkbox"
+              :disabled="!['booking_com', 'external'].includes(manualStayType)"
+            />
+            Late checkout</label
+          >
           <p v-if="manualStayError" class="form-error">{{ manualStayError }}</p>
         </form>
         <template #footer
@@ -1007,10 +1103,26 @@ watch(
               :min="editStayCheckIn"
             />
           </div>
+          <UiInput
+            v-if="editStayType === 'booking_com'"
+            v-model="editStayAdvertisedNightlyPrice"
+            label="Booking.com advertised nightly price (EUR)"
+            help="Optional. Your nightly price before Booking.com promotions or discounts, excluding extras. This is not income."
+            inputmode="decimal"
+            step="0.01"
+            :disabled="editStayBusy"
+          />
           <label class="checkbox"
             ><input v-model="editStayCleaningRequired" type="checkbox" /> Cleaning required</label
           >
-          <label class="checkbox"><input v-model="editStayLateCheckout" type="checkbox" :disabled="!['booking_com', 'external'].includes(editStayType)" /> Late checkout</label>
+          <label class="checkbox"
+            ><input
+              v-model="editStayLateCheckout"
+              type="checkbox"
+              :disabled="!['booking_com', 'external'].includes(editStayType)"
+            />
+            Late checkout</label
+          >
           <p v-if="editStayError" class="form-error">{{ editStayError }}</p>
         </form>
         <template #footer

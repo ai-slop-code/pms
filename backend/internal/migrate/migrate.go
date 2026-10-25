@@ -88,6 +88,15 @@ func up(db *sql.DB, automatic bool, onlyVersion string) error {
 			if _, manual := manualMigrations[version]; manual {
 				continue
 			}
+			if version == "000049_booking_advertised_nightly_price" {
+				var pms22Applied int
+				if err := db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE version = '000040_named_stay_only_cleaning_calendar'`).Scan(&pms22Applied); err != nil {
+					return fmt.Errorf("check PMS-22 migration prerequisite: %w", err)
+				}
+				if pms22Applied != 1 {
+					continue
+				}
+			}
 			if version == "000045_invoice_proforma" || version == "000046_invoice_line_items" || version == "000047_finance_payout_only_rows" {
 				var pms21Applied int
 				if err := db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE version = '000039_legacy_occupancy_removal'`).Scan(&pms21Applied); err != nil {

@@ -32,26 +32,28 @@ type CalendarRawBookingBlock struct {
 }
 
 type CalendarNamedStay struct {
-	ID                   int64                    `json:"id"`
-	PropertyID           int64                    `json:"property_id"`
-	DisplayName          string                   `json:"display_name"`
-	StayType             string                   `json:"stay_type"`
-	CheckInDate          string                   `json:"check_in_date"`
-	CheckOutDate         string                   `json:"check_out_date"`
-	Status               string                   `json:"status"`
-	CleaningRequired     bool                     `json:"cleaning_required"`
-	LateCheckout         bool                     `json:"late_checkout"`
-	ReviewStatus         string                   `json:"review_status"`
-	ReviewReason         *string                  `json:"review_reason,omitempty"`
-	Outcome              *string                  `json:"outcome,omitempty"`
-	OutcomeReason        *string                  `json:"outcome_reason,omitempty"`
-	CountsAsSold         bool                     `json:"counts_as_sold"`
-	HasFinanceEvidence   bool                     `json:"has_finance_evidence"`
-	NukiGenerationStatus string                   `json:"nuki_generation_status"`
-	NukiGenerationError  *string                  `json:"nuki_generation_error,omitempty"`
-	CoveredNights        []string                 `json:"covered_nights"`
-	SourceLinks          []CalendarStaySourceLink `json:"source_links"`
-	CleaningEvents       []CalendarCleaningEvent  `json:"cleaning_events"`
+	ID                                    int64                    `json:"id"`
+	PropertyID                            int64                    `json:"property_id"`
+	DisplayName                           string                   `json:"display_name"`
+	StayType                              string                   `json:"stay_type"`
+	CheckInDate                           string                   `json:"check_in_date"`
+	CheckOutDate                          string                   `json:"check_out_date"`
+	Status                                string                   `json:"status"`
+	CleaningRequired                      bool                     `json:"cleaning_required"`
+	LateCheckout                          bool                     `json:"late_checkout"`
+	BookingAdvertisedNightlyPriceCents    *int64                   `json:"booking_advertised_nightly_price_cents"`
+	BookingAdvertisedNightlyPriceCurrency *string                  `json:"booking_advertised_nightly_price_currency"`
+	ReviewStatus                          string                   `json:"review_status"`
+	ReviewReason                          *string                  `json:"review_reason,omitempty"`
+	Outcome                               *string                  `json:"outcome,omitempty"`
+	OutcomeReason                         *string                  `json:"outcome_reason,omitempty"`
+	CountsAsSold                          bool                     `json:"counts_as_sold"`
+	HasFinanceEvidence                    bool                     `json:"has_finance_evidence"`
+	NukiGenerationStatus                  string                   `json:"nuki_generation_status"`
+	NukiGenerationError                   *string                  `json:"nuki_generation_error,omitempty"`
+	CoveredNights                         []string                 `json:"covered_nights"`
+	SourceLinks                           []CalendarStaySourceLink `json:"source_links"`
+	CleaningEvents                        []CalendarCleaningEvent  `json:"cleaning_events"`
 }
 
 type CalendarCleaningEvent struct {
@@ -190,6 +192,7 @@ func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, st
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date,
 		       ns.status, ns.cleaning_required,
+		       ns.booking_advertised_nightly_price_cents, ns.booking_advertised_nightly_price_currency,
 		       COALESCE(ns.review_resolution, ns.review_status),
 		       ns.review_reason, ns.stay_outcome, ns.stay_outcome_reason,
 		       CASE WHEN ns.status = 'active' AND COALESCE(ns.review_resolution, ns.review_status, 'confirmed') = 'confirmed' AND (
@@ -234,13 +237,16 @@ func (s *Store) ListCalendarNamedStays(ctx context.Context, propertyID int64, st
 		var cleaningRequired int
 		var countsAsSold int
 		var hasFinanceEvidence int
-		var reviewStatus, reviewReason, outcome, outcomeReason, nukiStatus, nukiError sql.NullString
+		var advertisedPriceCents sql.NullInt64
+		var advertisedPriceCurrency, reviewStatus, reviewReason, outcome, outcomeReason, nukiStatus, nukiError sql.NullString
 		if err := rows.Scan(&stay.ID, &stay.PropertyID, &stay.DisplayName, &stay.StayType, &stay.CheckInDate, &stay.CheckOutDate,
-			&stay.Status, &cleaningRequired, &reviewStatus, &reviewReason, &outcome, &outcomeReason, &countsAsSold, &hasFinanceEvidence,
+			&stay.Status, &cleaningRequired, &advertisedPriceCents, &advertisedPriceCurrency, &reviewStatus, &reviewReason, &outcome, &outcomeReason, &countsAsSold, &hasFinanceEvidence,
 			&nukiStatus, &nukiError); err != nil {
 			return nil, err
 		}
 		stay.CleaningRequired = cleaningRequired == 1
+		stay.BookingAdvertisedNightlyPriceCents = int64Ptr(advertisedPriceCents)
+		stay.BookingAdvertisedNightlyPriceCurrency = stringPtr(advertisedPriceCurrency)
 		stay.ReviewStatus = nullStringDefault(reviewStatus, "confirmed")
 		stay.ReviewReason = stringPtr(reviewReason)
 		stay.Outcome = stringPtr(outcome)

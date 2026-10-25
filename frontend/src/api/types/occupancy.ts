@@ -52,6 +52,8 @@ export interface CalendarNamedStay {
   status: 'active' | 'cancelled' | 'archived' | string
   cleaning_required: boolean
   late_checkout: boolean
+  booking_advertised_nightly_price_cents: number | null
+  booking_advertised_nightly_price_currency: 'EUR' | null
   review_status: 'confirmed' | 'rejected' | string
   review_reason?: string | null
   outcome?: StayOutcome | null

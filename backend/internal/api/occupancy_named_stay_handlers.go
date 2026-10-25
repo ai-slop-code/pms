@@ -18,24 +18,26 @@ import (
 const stayReasonMaxLen = 500
 
 type stayCreateBody struct {
-	DisplayName      string `json:"display_name"`
-	StayType         string `json:"stay_type"`
-	CheckIn          string `json:"check_in"`
-	CheckOut         string `json:"check_out"`
-	CleaningRequired *bool  `json:"cleaning_required"`
-	LateCheckout     *bool  `json:"late_checkout"`
+	DisplayName                        string `json:"display_name"`
+	StayType                           string `json:"stay_type"`
+	CheckIn                            string `json:"check_in"`
+	CheckOut                           string `json:"check_out"`
+	CleaningRequired                   *bool  `json:"cleaning_required"`
+	LateCheckout                       *bool  `json:"late_checkout"`
+	BookingAdvertisedNightlyPriceCents *int64 `json:"booking_advertised_nightly_price_cents"`
 }
 
 type stayPatchBody struct {
-	DisplayName           *string `json:"display_name"`
-	StayType              *string `json:"stay_type"`
-	CheckIn               *string `json:"check_in"`
-	CheckOut              *string `json:"check_out"`
-	CleaningRequired      *bool   `json:"cleaning_required"`
-	LateCheckout          *bool   `json:"late_checkout"`
-	ManualRevenueCents    *int64  `json:"manual_revenue_cents"`
-	ManualRevenueCurrency *string `json:"manual_revenue_currency"`
-	ManualRevenueNote     *string `json:"manual_revenue_note"`
+	DisplayName                        *string         `json:"display_name"`
+	StayType                           *string         `json:"stay_type"`
+	CheckIn                            *string         `json:"check_in"`
+	CheckOut                           *string         `json:"check_out"`
+	CleaningRequired                   *bool           `json:"cleaning_required"`
+	LateCheckout                       *bool           `json:"late_checkout"`
+	ManualRevenueCents                 *int64          `json:"manual_revenue_cents"`
+	ManualRevenueCurrency              *string         `json:"manual_revenue_currency"`
+	ManualRevenueNote                  *string         `json:"manual_revenue_note"`
+	BookingAdvertisedNightlyPriceCents json.RawMessage `json:"booking_advertised_nightly_price_cents"`
 }
 
 type stayStatusBody struct {
@@ -93,13 +95,14 @@ func (s *Server) postBookingBlockPromote(w http.ResponseWriter, r *http.Request)
 	}
 	s.audit(r, actor, "named_stay_promoted", "raw_booking_block", strconv.FormatInt(blockID, 10), "attempt")
 	stay, err := s.Store.PromoteRawBookingBlockToNamedStay(r.Context(), propID, blockID, store.NamedStayCreateInput{
-		DisplayName:      strings.TrimSpace(body.DisplayName),
-		StayType:         stayType,
-		CheckInDate:      body.CheckIn,
-		CheckOutDate:     body.CheckOut,
-		CleaningRequired: body.CleaningRequired,
-		LateCheckout:     body.LateCheckout,
-		CreatedByUserID:  actor.ID,
+		DisplayName:                        strings.TrimSpace(body.DisplayName),
+		StayType:                           stayType,
+		CheckInDate:                        body.CheckIn,
+		CheckOutDate:                       body.CheckOut,
+		CleaningRequired:                   body.CleaningRequired,
+		LateCheckout:                       body.LateCheckout,
+		BookingAdvertisedNightlyPriceCents: body.BookingAdvertisedNightlyPriceCents,
+		CreatedByUserID:                    actor.ID,
 	})
 	if err != nil {
 		writeNamedStayError(w, err)
@@ -122,15 +125,16 @@ func (s *Server) postStay(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, actor, "named_stay_created", "property", strconv.FormatInt(propID, 10), "attempt")
 	stay, err := s.Store.CreateNamedStayRecord(r.Context(), store.NamedStayCreateInput{
-		PropertyID:       propID,
-		DisplayName:      strings.TrimSpace(body.DisplayName),
-		StayType:         body.StayType,
-		CheckInDate:      body.CheckIn,
-		CheckOutDate:     body.CheckOut,
-		CleaningRequired: body.CleaningRequired,
-		LateCheckout:     body.LateCheckout,
-		CreatedByUserID:  actor.ID,
-		SourceChannel:    "manual",
+		PropertyID:                         propID,
+		DisplayName:                        strings.TrimSpace(body.DisplayName),
+		StayType:                           body.StayType,
+		CheckInDate:                        body.CheckIn,
+		CheckOutDate:                       body.CheckOut,
+		CleaningRequired:                   body.CleaningRequired,
+		LateCheckout:                       body.LateCheckout,
+		BookingAdvertisedNightlyPriceCents: body.BookingAdvertisedNightlyPriceCents,
+		CreatedByUserID:                    actor.ID,
+		SourceChannel:                      "manual",
 	})
 	if err != nil {
 		writeNamedStayError(w, err)
@@ -156,19 +160,26 @@ func (s *Server) patchStay(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	priceSet, priceCents, err := decodeAdvertisedNightlyPricePatch(body.BookingAdvertisedNightlyPriceCents)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	before, _ := s.Store.GetNamedStay(r.Context(), propID, stayID)
 	s.audit(r, actor, "named_stay_updated", "named_stay", strconv.FormatInt(stayID, 10), "attempt")
 	stay, err := s.Store.UpdateNamedStayRecord(r.Context(), propID, stayID, store.NamedStayUpdateInput{
-		DisplayName:           body.DisplayName,
-		StayType:              body.StayType,
-		CheckInDate:           body.CheckIn,
-		CheckOutDate:          body.CheckOut,
-		CleaningRequired:      body.CleaningRequired,
-		LateCheckout:          body.LateCheckout,
-		ManualRevenueCents:    body.ManualRevenueCents,
-		ManualRevenueCurrency: body.ManualRevenueCurrency,
-		ManualRevenueNote:     body.ManualRevenueNote,
-		UpdatedByUserID:       actor.ID,
+		DisplayName:                        body.DisplayName,
+		StayType:                           body.StayType,
+		CheckInDate:                        body.CheckIn,
+		CheckOutDate:                       body.CheckOut,
+		CleaningRequired:                   body.CleaningRequired,
+		LateCheckout:                       body.LateCheckout,
+		ManualRevenueCents:                 body.ManualRevenueCents,
+		ManualRevenueCurrency:              body.ManualRevenueCurrency,
+		ManualRevenueNote:                  body.ManualRevenueNote,
+		BookingAdvertisedNightlyPriceSet:   priceSet,
+		BookingAdvertisedNightlyPriceCents: priceCents,
+		UpdatedByUserID:                    actor.ID,
 	})
 	if err != nil {
 		writeNamedStayError(w, err)
@@ -433,11 +444,25 @@ func writeNamedStayError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNamedStayOutsideBlock), errors.Is(err, store.ErrNamedStayOverlap):
 		WriteError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, store.ErrNamedStayInvalidRange), errors.Is(err, store.ErrNamedStayInvalidType):
+	case errors.Is(err, store.ErrNamedStayInvalidRange), errors.Is(err, store.ErrNamedStayInvalidType), errors.Is(err, store.ErrNamedStayInvalidAdvertisedNightlyPrice):
 		WriteError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrUpstreamBlockNotFound), errors.Is(err, sql.ErrNoRows):
 		WriteError(w, http.StatusNotFound, "not found")
 	default:
 		WriteError(w, http.StatusInternalServerError, "update failed")
 	}
+}
+
+func decodeAdvertisedNightlyPricePatch(raw json.RawMessage) (bool, *int64, error) {
+	if len(raw) == 0 {
+		return false, nil, nil
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		return true, nil, nil
+	}
+	var cents int64
+	if err := json.Unmarshal(raw, &cents); err != nil {
+		return true, nil, errors.New("booking advertised nightly price must be a positive integer number of cents or null")
+	}
+	return true, &cents, nil
 }

@@ -3455,7 +3455,9 @@ components:
           check_out_date,
           status,
           cleaning_required,
-          review_status,
+          booking_advertised_nightly_price_cents,
+          booking_advertised_nightly_price_currency,
+           review_status,
           counts_as_sold,
           has_finance_evidence,
           nuki_generation_status,
@@ -3477,6 +3479,12 @@ components:
         status: { type: string, enum: [active, cancelled, archived] }
         cleaning_required: { type: boolean }
         late_checkout: { type: boolean }
+        booking_advertised_nightly_price_cents:
+          { type: integer, format: int64, minimum: 1, maximum: 9007199254740991, nullable: true,
+            description: Optional advertised Booking.com nightly price before promotions or discounts, excluding extras, in EUR cents. Null means absent. }
+        booking_advertised_nightly_price_currency:
+          { type: string, enum: [EUR], nullable: true,
+            description: Fixed EUR currency for the advertised nightly price; null when absent. }
         review_status: { type: string, enum: [confirmed, needs_review, rejected] }
         review_reason: { type: string }
         outcome:
@@ -3578,6 +3586,9 @@ components:
           }
         cleaning_required: { type: boolean }
         late_checkout: { type: boolean, description: Only supported for booking_com and external stays. }
+        booking_advertised_nightly_price_cents:
+          { type: integer, format: int64, minimum: 1, maximum: 9007199254740991, nullable: true,
+            description: Optional advertised Booking.com nightly price before promotions or discounts, excluding extras, in EUR cents. Omit on create to leave absent; null on PATCH clears it. }
 
     CleaningCalendarEvent:
       type: object
@@ -3642,6 +3653,9 @@ components:
         manual_revenue_cents: { type: integer, format: int64, minimum: 0, nullable: true }
         manual_revenue_currency: { type: string, nullable: true }
         manual_revenue_note: { type: string, nullable: true }
+        booking_advertised_nightly_price_cents:
+          { type: integer, format: int64, minimum: 1, maximum: 9007199254740991, nullable: true,
+            description: Omit to preserve the saved advertised Booking.com nightly price; null clears it. Positive integer EUR cents only. }
 
     StayOutcomePatchRequest:
       type: object

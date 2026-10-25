@@ -6231,6 +6231,16 @@ export interface components {
             status: "active" | "cancelled" | "archived";
             cleaning_required: boolean;
             late_checkout?: boolean;
+            /**
+             * Format: int64
+             * @description Optional advertised Booking.com nightly price before promotions or discounts
+             */
+            booking_advertised_nightly_price_cents: number | null;
+            /**
+             * @description Fixed EUR currency for the advertised nightly price; null when absent.
+             * @enum {string|null}
+             */
+            booking_advertised_nightly_price_currency: "EUR" | null;
             /** @enum {string} */
             review_status: "confirmed" | "needs_review" | "rejected";
             review_reason?: string;
@@ -6304,6 +6314,11 @@ export interface components {
             cleaning_required?: boolean;
             /** @description Only supported for booking_com and external stays. */
             late_checkout?: boolean;
+            /**
+             * Format: int64
+             * @description Optional advertised Booking.com nightly price before promotions or discounts
+             */
+            booking_advertised_nightly_price_cents?: number | null;
         };
         CleaningCalendarEvent: {
             /** Format: int64 */
@@ -6368,6 +6383,11 @@ export interface components {
             manual_revenue_cents?: number | null;
             manual_revenue_currency?: string | null;
             manual_revenue_note?: string | null;
+            /**
+             * Format: int64
+             * @description Omit to preserve the saved advertised Booking.com nightly price; null clears it. Positive integer EUR cents only.
+             */
+            booking_advertised_nightly_price_cents?: number | null;
         };
         StayOutcomePatchRequest: {
             /** @enum {string|null} */

@@ -504,3 +504,47 @@ func TestNamedStayCRUDNeverWritesLegacyOccupanciesOrMigrationMap(t *testing.T) {
 		t.Fatalf("legacy occupancy tables=%d want 0", legacyTables)
 	}
 }
+
+func TestNamedStayAdvertisedNightlyPriceLifecycle(t *testing.T) {
+	st, pid := recTestProperty(t)
+	ctx := context.Background()
+	price := int64(9995)
+	stay, err := st.CreateNamedStayRecord(ctx, NamedStayCreateInput{
+		PropertyID: pid, DisplayName: "Price Guest", StayType: StayTypeBookingCom,
+		CheckInDate: "2026-12-01", CheckOutDate: "2026-12-04",
+		BookingAdvertisedNightlyPriceCents: &price,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stay.BookingAdvertisedNightlyPriceCents.Int64 != price || stay.BookingAdvertisedNightlyPriceCurrency.String != "EUR" {
+		t.Fatalf("created advertised price=%v/%v", stay.BookingAdvertisedNightlyPriceCents, stay.BookingAdvertisedNightlyPriceCurrency)
+	}
+
+	updated, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{
+		CheckOutDate: ptrString("2026-12-05"), UpdatedByUserID: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.BookingAdvertisedNightlyPriceCents.Int64 != price {
+		t.Fatalf("date edit changed advertised price=%v", updated.BookingAdvertisedNightlyPriceCents)
+	}
+
+	updated, err = st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{
+		BookingAdvertisedNightlyPriceSet: true, BookingAdvertisedNightlyPriceCents: nil, UpdatedByUserID: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.BookingAdvertisedNightlyPriceCents.Valid || updated.BookingAdvertisedNightlyPriceCurrency.Valid {
+		t.Fatalf("cleared advertised price=%v/%v", updated.BookingAdvertisedNightlyPriceCents, updated.BookingAdvertisedNightlyPriceCurrency)
+	}
+
+	bad := int64(0)
+	if _, err := st.UpdateNamedStayRecord(ctx, pid, stay.ID, NamedStayUpdateInput{
+		BookingAdvertisedNightlyPriceSet: true, BookingAdvertisedNightlyPriceCents: &bad,
+	}); !errors.Is(err, ErrNamedStayInvalidAdvertisedNightlyPrice) {
+		t.Fatalf("zero price error=%v", err)
+	}
+}

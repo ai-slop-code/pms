@@ -24,71 +24,79 @@ const (
 	NukiGenerationError         = "error"
 )
 
-var ErrNamedStayInvalidType = errors.New("invalid stay type")
+var (
+	ErrNamedStayInvalidType                   = errors.New("invalid stay type")
+	ErrNamedStayInvalidAdvertisedNightlyPrice = errors.New("invalid booking advertised nightly price")
+)
 
 type NamedStay struct {
-	ID                      int64          `json:"id"`
-	PropertyID              int64          `json:"property_id"`
-	DisplayName             string         `json:"display_name"`
-	StayType                string         `json:"stay_type"`
-	CheckInDate             string         `json:"check_in_date"`
-	CheckOutDate            string         `json:"check_out_date"`
-	Status                  string         `json:"status"`
-	CleaningRequired        bool           `json:"cleaning_required"`
-	LateCheckout            bool           `json:"late_checkout"`
-	CleaningOverrideReason  sql.NullString `json:"-"`
-	SourceChannel           sql.NullString `json:"-"`
-	SourceReference         sql.NullString `json:"-"`
-	ManualRevenueCents      sql.NullInt64  `json:"-"`
-	ManualRevenueCurrency   sql.NullString `json:"-"`
-	ManualRevenueNote       sql.NullString `json:"-"`
-	ReviewStatus            sql.NullString `json:"-"`
-	ReviewReason            sql.NullString `json:"-"`
-	ReviewActorUserID       sql.NullInt64  `json:"-"`
-	ReviewedAt              sql.NullTime   `json:"-"`
-	StayOutcome             sql.NullString `json:"-"`
-	StayOutcomeReason       sql.NullString `json:"-"`
-	StayOutcomeActorUserID  sql.NullInt64  `json:"-"`
-	StayOutcomeMarkedAt     sql.NullTime   `json:"-"`
-	NukiGenerationStatus    sql.NullString `json:"-"`
-	NukiGenerationError     sql.NullString `json:"-"`
-	NukiGenerationUpdatedAt sql.NullTime   `json:"-"`
-	FirstKnownAt            time.Time      `json:"first_known_at"`
-	CancellationEffectiveAt sql.NullTime   `json:"-"`
-	CreatedAt               time.Time      `json:"created_at"`
-	UpdatedAt               time.Time      `json:"updated_at"`
+	ID                                    int64          `json:"id"`
+	PropertyID                            int64          `json:"property_id"`
+	DisplayName                           string         `json:"display_name"`
+	StayType                              string         `json:"stay_type"`
+	CheckInDate                           string         `json:"check_in_date"`
+	CheckOutDate                          string         `json:"check_out_date"`
+	Status                                string         `json:"status"`
+	CleaningRequired                      bool           `json:"cleaning_required"`
+	LateCheckout                          bool           `json:"late_checkout"`
+	CleaningOverrideReason                sql.NullString `json:"-"`
+	SourceChannel                         sql.NullString `json:"-"`
+	SourceReference                       sql.NullString `json:"-"`
+	ManualRevenueCents                    sql.NullInt64  `json:"-"`
+	ManualRevenueCurrency                 sql.NullString `json:"-"`
+	ManualRevenueNote                     sql.NullString `json:"-"`
+	BookingAdvertisedNightlyPriceCents    sql.NullInt64  `json:"-"`
+	BookingAdvertisedNightlyPriceCurrency sql.NullString `json:"-"`
+	ReviewStatus                          sql.NullString `json:"-"`
+	ReviewReason                          sql.NullString `json:"-"`
+	ReviewActorUserID                     sql.NullInt64  `json:"-"`
+	ReviewedAt                            sql.NullTime   `json:"-"`
+	StayOutcome                           sql.NullString `json:"-"`
+	StayOutcomeReason                     sql.NullString `json:"-"`
+	StayOutcomeActorUserID                sql.NullInt64  `json:"-"`
+	StayOutcomeMarkedAt                   sql.NullTime   `json:"-"`
+	NukiGenerationStatus                  sql.NullString `json:"-"`
+	NukiGenerationError                   sql.NullString `json:"-"`
+	NukiGenerationUpdatedAt               sql.NullTime   `json:"-"`
+	FirstKnownAt                          time.Time      `json:"first_known_at"`
+	CancellationEffectiveAt               sql.NullTime   `json:"-"`
+	CreatedAt                             time.Time      `json:"created_at"`
+	UpdatedAt                             time.Time      `json:"updated_at"`
 }
 
 type NamedStayCreateInput struct {
-	PropertyID             int64
-	DisplayName            string
-	StayType               string
-	CheckInDate            string
-	CheckOutDate           string
-	CleaningRequired       *bool
-	LateCheckout           *bool
-	CleaningOverrideReason string
-	SourceChannel          string
-	SourceReference        string
-	ReviewStatus           string
-	ReviewReason           string
-	CreatedByUserID        int64
-	RawBookingBlockID      int64
-	RequireWithinRawBlock  bool
+	PropertyID                         int64
+	DisplayName                        string
+	StayType                           string
+	CheckInDate                        string
+	CheckOutDate                       string
+	CleaningRequired                   *bool
+	LateCheckout                       *bool
+	CleaningOverrideReason             string
+	SourceChannel                      string
+	SourceReference                    string
+	ReviewStatus                       string
+	ReviewReason                       string
+	CreatedByUserID                    int64
+	RawBookingBlockID                  int64
+	RequireWithinRawBlock              bool
+	BookingAdvertisedNightlyPriceCents *int64
 }
 
 type NamedStayUpdateInput struct {
-	DisplayName            *string
-	StayType               *string
-	CheckInDate            *string
-	CheckOutDate           *string
-	CleaningRequired       *bool
-	LateCheckout           *bool
-	CleaningOverrideReason *string
-	ManualRevenueCents     *int64
-	ManualRevenueCurrency  *string
-	ManualRevenueNote      *string
-	UpdatedByUserID        int64
+	DisplayName                        *string
+	StayType                           *string
+	CheckInDate                        *string
+	CheckOutDate                       *string
+	CleaningRequired                   *bool
+	LateCheckout                       *bool
+	CleaningOverrideReason             *string
+	ManualRevenueCents                 *int64
+	ManualRevenueCurrency              *string
+	ManualRevenueNote                  *string
+	BookingAdvertisedNightlyPriceSet   bool
+	BookingAdvertisedNightlyPriceCents *int64
+	UpdatedByUserID                    int64
 }
 
 type NamedStayFinanceCandidate struct {
@@ -163,6 +171,9 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 	if err := validateStayType(stayType); err != nil {
 		return nil, err
 	}
+	if err := validateAdvertisedNightlyPrice(stayType, in.BookingAdvertisedNightlyPriceCents); err != nil {
+		return nil, err
+	}
 	ci, co, err := parseNamedStayRange(in.CheckInDate, in.CheckOutDate)
 	if err != nil {
 		return nil, err
@@ -222,12 +233,14 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 		INSERT INTO named_stays (
 			property_id, display_name, stay_type, check_in_date, check_out_date, status,
 			cleaning_required, late_checkout, cleaning_override_reason, source_channel, source_reference,
+			booking_advertised_nightly_price_cents, booking_advertised_nightly_price_currency,
 			review_status, review_resolution, review_reason, nuki_generation_status, created_by_user_id, updated_by_user_id,
 			first_known_at, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.PropertyID, displayName, stayType, ci.Format("2006-01-02"), co.Format("2006-01-02"), boolInt(cleaningRequired), boolInt(lateCheckout),
 		nullableString(strings.TrimSpace(in.CleaningOverrideReason)), nullableString(strings.TrimSpace(in.SourceChannel)), nullableString(sourceReference),
+		advertisedNightlyPriceCentsArg(in.BookingAdvertisedNightlyPriceCents), advertisedNightlyPriceCurrencyArg(in.BookingAdvertisedNightlyPriceCents),
 		reviewStatus, reviewResolution, nullableString(strings.TrimSpace(in.ReviewReason)), nukiStatus,
 		nullableInt64(in.CreatedByUserID), nullableInt64(in.CreatedByUserID), firstKnownAt, nowStr, nowStr)
 	if err != nil {
@@ -338,6 +351,23 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 	if stayType != StayTypeBookingCom && stayType != StayTypeExternal {
 		lateCheckout = false
 	}
+	var advertisedNightlyPrice *int64
+	if current.BookingAdvertisedNightlyPriceCents.Valid {
+		value := current.BookingAdvertisedNightlyPriceCents.Int64
+		advertisedNightlyPrice = &value
+	}
+	if in.BookingAdvertisedNightlyPriceSet {
+		advertisedNightlyPrice = in.BookingAdvertisedNightlyPriceCents
+	}
+	if stayType != StayTypeBookingCom {
+		if in.BookingAdvertisedNightlyPriceSet && in.BookingAdvertisedNightlyPriceCents != nil {
+			return nil, ErrNamedStayInvalidAdvertisedNightlyPrice
+		}
+		advertisedNightlyPrice = nil
+	}
+	if err := validateAdvertisedNightlyPrice(stayType, advertisedNightlyPrice); err != nil {
+		return nil, err
+	}
 	var cleaningReason interface{}
 	if in.CleaningOverrideReason != nil {
 		cleaningReason = nullableString(strings.TrimSpace(*in.CleaningOverrideReason))
@@ -360,10 +390,12 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 		UPDATE named_stays
 		SET display_name = ?, stay_type = ?, check_in_date = ?, check_out_date = ?, cleaning_required = ?, late_checkout = ?,
 			cleaning_override_reason = ?, manual_revenue_cents = ?, manual_revenue_currency = ?, manual_revenue_note = ?,
+			booking_advertised_nightly_price_cents = ?, booking_advertised_nightly_price_currency = ?,
 			updated_by_user_id = ?, updated_at = ?
 		WHERE property_id = ? AND id = ?`,
 		displayName, stayType, ci.Format("2006-01-02"), co.Format("2006-01-02"), boolInt(cleaningRequired), boolInt(lateCheckout), cleaningReason,
 		manualRevenueCentsArg(current.ManualRevenueCents, in.ManualRevenueCents), manualRevenueStringArg(current.ManualRevenueCurrency, in.ManualRevenueCurrency), manualRevenueStringArg(current.ManualRevenueNote, in.ManualRevenueNote),
+		advertisedNightlyPriceCentsArg(advertisedNightlyPrice), advertisedNightlyPriceCurrencyArg(advertisedNightlyPrice),
 		nullableInt64(in.UpdatedByUserID), nowStr, propertyID, stayID); err != nil {
 		return nil, err
 	}
@@ -554,6 +586,7 @@ const namedStaySelectSQL = `
 	SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
 	       ns.cleaning_required, ns.late_checkout, ns.cleaning_override_reason, ns.source_channel, ns.source_reference,
 	       ns.manual_revenue_cents, ns.manual_revenue_currency, ns.manual_revenue_note,
+	       ns.booking_advertised_nightly_price_cents, ns.booking_advertised_nightly_price_currency,
 	       COALESCE(ns.review_resolution, ns.review_status),
 	       ns.review_reason, ns.review_actor_user_id, ns.reviewed_at,
 	       ns.stay_outcome, ns.stay_outcome_reason, ns.stay_outcome_actor_user_id, ns.stay_outcome_marked_at,
@@ -573,6 +606,7 @@ func scanNamedStays(rows *sql.Rows) ([]NamedStay, error) {
 		if err := rows.Scan(&n.ID, &n.PropertyID, &n.DisplayName, &n.StayType, &n.CheckInDate, &n.CheckOutDate, &n.Status,
 			&cleaning, &lateCheckout, &n.CleaningOverrideReason, &n.SourceChannel, &n.SourceReference,
 			&n.ManualRevenueCents, &n.ManualRevenueCurrency, &n.ManualRevenueNote,
+			&n.BookingAdvertisedNightlyPriceCents, &n.BookingAdvertisedNightlyPriceCurrency,
 			&n.ReviewStatus, &n.ReviewReason, &n.ReviewActorUserID, &reviewed,
 			&n.StayOutcome, &n.StayOutcomeReason, &n.StayOutcomeActorUserID, &outcomeMarked,
 			&n.NukiGenerationStatus, &n.NukiGenerationError, &nukiUpdated,
@@ -677,6 +711,32 @@ func validateStayType(stayType string) error {
 	default:
 		return ErrNamedStayInvalidType
 	}
+}
+
+const maxAdvertisedNightlyPriceCents int64 = 9007199254740991
+
+func validateAdvertisedNightlyPrice(stayType string, cents *int64) error {
+	if cents == nil {
+		return nil
+	}
+	if stayType != StayTypeBookingCom || *cents <= 0 || *cents > maxAdvertisedNightlyPriceCents {
+		return ErrNamedStayInvalidAdvertisedNightlyPrice
+	}
+	return nil
+}
+
+func advertisedNightlyPriceCentsArg(cents *int64) interface{} {
+	if cents == nil {
+		return nil
+	}
+	return *cents
+}
+
+func advertisedNightlyPriceCurrencyArg(cents *int64) interface{} {
+	if cents == nil {
+		return nil
+	}
+	return "EUR"
 }
 
 func defaultCleaningRequired(stayType string) bool {

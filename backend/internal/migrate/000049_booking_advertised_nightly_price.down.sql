@@ -1,0 +1,2 @@
+ALTER TABLE named_stays DROP COLUMN booking_advertised_nightly_price_currency;
+ALTER TABLE named_stays DROP COLUMN booking_advertised_nightly_price_cents;
