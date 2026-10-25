@@ -52,6 +52,7 @@ const profileForm = ref({
   contact_phone: '',
   default_check_in_time: '',
   default_check_out_time: '',
+  late_check_out_time: '13:00',
   cleaner_nuki_auth_id: '',
   parking_instructions: '',
   wifi_ssid: '',
@@ -99,6 +100,7 @@ async function load() {
       contact_phone: String(s.profile.contact_phone ?? ''),
       default_check_in_time: String(s.profile.default_check_in_time ?? ''),
       default_check_out_time: String(s.profile.default_check_out_time ?? ''),
+      late_check_out_time: String(s.profile.late_check_out_time ?? '13:00'),
       cleaner_nuki_auth_id: String(s.profile.cleaner_nuki_auth_id ?? ''),
       parking_instructions: String(s.profile.parking_instructions ?? ''),
       wifi_ssid: String(s.profile.wifi_ssid ?? ''),
@@ -156,6 +158,7 @@ async function saveSettings() {
       contact_phone: profileForm.value.contact_phone || null,
       default_check_in_time: profileForm.value.default_check_in_time,
       default_check_out_time: profileForm.value.default_check_out_time,
+      late_check_out_time: profileForm.value.late_check_out_time,
       cleaner_nuki_auth_id: profileForm.value.cleaner_nuki_auth_id || null,
       parking_instructions: profileForm.value.parking_instructions || null,
       wifi_ssid: profileForm.value.wifi_ssid || null,
@@ -299,6 +302,7 @@ watch(id, load)
                     label="Default check-out time"
                     type="time"
                   />
+                  <UiInput v-model="profileForm.late_check_out_time" label="Late checkout time" type="time" />
                   <UiInput v-model="profileForm.wifi_ssid" label="Wi-Fi SSID" />
                   <UiInput
                     v-model="profileForm.wifi_password"

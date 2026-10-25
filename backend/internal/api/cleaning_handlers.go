@@ -23,11 +23,12 @@ type cleaningLogsResponse struct {
 }
 
 type cleaningSummaryResponse struct {
-	Month                 string `json:"month"`
-	CountedDays           int    `json:"counted_days"`
-	BaseSalaryCents       int    `json:"base_salary_cents"`
-	AdjustmentsTotalCents int    `json:"adjustments_total_cents"`
-	FinalSalaryCents      int    `json:"final_salary_cents"`
+	Month                  string `json:"month"`
+	CountedDays            int    `json:"counted_days"`
+	BaseSalaryCents        int    `json:"base_salary_cents"`
+	AdjustmentsTotalCents  int    `json:"adjustments_total_cents"`
+	LateCheckoutBonusCents int    `json:"late_checkout_bonus_cents"`
+	FinalSalaryCents       int    `json:"final_salary_cents"`
 }
 
 type cleaningHeatmapBucket struct {
@@ -161,11 +162,12 @@ func (s *Server) getCleaningSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, cleaningSummaryResponse{
-		Month:                 month,
-		CountedDays:           summary.CountedDays,
-		BaseSalaryCents:       summary.BaseSalaryCents,
-		AdjustmentsTotalCents: summary.AdjustmentsTotalCents,
-		FinalSalaryCents:      summary.FinalSalaryCents,
+		Month:                  month,
+		CountedDays:            summary.CountedDays,
+		BaseSalaryCents:        summary.BaseSalaryCents,
+		AdjustmentsTotalCents:  summary.AdjustmentsTotalCents,
+		LateCheckoutBonusCents: summary.LateCheckoutBonusCents,
+		FinalSalaryCents:       summary.FinalSalaryCents,
 	})
 }
 

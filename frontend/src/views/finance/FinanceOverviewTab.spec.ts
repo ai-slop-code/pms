@@ -19,7 +19,10 @@ const summary: FinanceSummary = {
   generated_entry_sync: { status: 'synced' },
 }
 
-function comparison(longTermNetCents: number | null, outcome: FinanceLongTermComparison['outcome'] = 'behind'): FinanceLongTermComparison {
+function comparison(
+  longTermNetCents: number | null,
+  outcome: FinanceLongTermComparison['outcome'] = 'behind',
+): FinanceLongTermComparison {
   return {
     status: 'configured',
     rate_id: 1,
@@ -40,7 +43,7 @@ function mountOverview(
   return mount(FinanceOverviewTab, {
     props: {
       summary,
-      recognizedGrossCents: 0,
+      recognizedIncomingCents: 0,
       recognizedNetCents,
       recognizedNetAvailable: recognizedNetCents !== null,
       longTermComparison: comparison(longTermNetCents, outcome),
@@ -115,7 +118,7 @@ describe('FinanceOverviewTab long-term net card', () => {
     const wrapper = mount(FinanceOverviewTab, {
       props: {
         summary,
-        recognizedGrossCents: 0,
+        recognizedIncomingCents: 0,
         recognizedNetCents: 0,
         recognizedNetAvailable: true,
         longTermComparison: {

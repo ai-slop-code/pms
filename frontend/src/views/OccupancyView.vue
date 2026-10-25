@@ -57,6 +57,7 @@ const promoteCheckOut = ref('')
 const promoteDisplayName = ref('')
 const promoteStayType = ref('booking_com')
 const promoteCleaningRequired = ref(true)
+const promoteLateCheckout = ref(false)
 const promoteCleaningManuallyChanged = ref(false)
 
 const manualStayDialogOpen = ref(false)
@@ -67,6 +68,7 @@ const manualStayType = ref('external')
 const manualStayCheckIn = ref('')
 const manualStayCheckOut = ref('')
 const manualStayCleaningRequired = ref(true)
+const manualStayLateCheckout = ref(false)
 const manualStayCleaningManuallyChanged = ref(false)
 
 const availabilityDialogOpen = ref(false)
@@ -89,6 +91,7 @@ const editStayType = ref('external')
 const editStayCheckIn = ref('')
 const editStayCheckOut = ref('')
 const editStayCleaningRequired = ref(true)
+const editStayLateCheckout = ref(false)
 const stayStatusBusyID = ref<number | null>(null)
 
 const outcomeDialogOpen = ref(false)
@@ -155,6 +158,7 @@ function openPromoteDialog(block: CalendarRawBookingBlock) {
   promoteDisplayName.value = ''
   promoteStayType.value = 'booking_com'
   promoteCleaningRequired.value = true
+  promoteLateCheckout.value = false
   promoteCleaningManuallyChanged.value = false
   promoteError.value = ''
   dayDialogOpen.value = false
@@ -167,6 +171,7 @@ function openManualStayDialog(dateKey = dayDialogDate.value) {
   manualStayCheckIn.value = dateKey || `${month.value}-01`
   manualStayCheckOut.value = addISODate(manualStayCheckIn.value, 1)
   manualStayCleaningRequired.value = true
+  manualStayLateCheckout.value = false
   manualStayCleaningManuallyChanged.value = false
   manualStayError.value = ''
   dayDialogOpen.value = false
@@ -219,6 +224,7 @@ async function submitManualStay() {
           check_out: manualStayCheckOut.value,
           stay_type: manualStayType.value,
           cleaning_required: manualStayCleaningRequired.value,
+          late_checkout: manualStayLateCheckout.value && ['booking_com', 'external'].includes(manualStayType.value),
         },
       },
     )
@@ -280,6 +286,7 @@ async function submitPromoteRawBlock() {
           check_out: promoteCheckOut.value,
           stay_type: promoteStayType.value,
           cleaning_required: promoteCleaningRequired.value,
+          late_checkout: promoteLateCheckout.value && ['booking_com', 'external'].includes(promoteStayType.value),
         },
       },
     )
@@ -390,6 +397,7 @@ function openEditStayDialog(stay: CalendarNamedStay) {
   editStayCheckIn.value = stay.check_in_date
   editStayCheckOut.value = stay.check_out_date
   editStayCleaningRequired.value = stay.cleaning_required
+  editStayLateCheckout.value = stay.late_checkout
   editStayError.value = ''
   dayDialogOpen.value = false
   editStayDialogOpen.value = true
@@ -423,6 +431,7 @@ async function submitEditStay() {
           check_out: editStayCheckOut.value,
           stay_type: editStayType.value,
           cleaning_required: editStayCleaningRequired.value,
+          late_checkout: editStayLateCheckout.value && ['booking_com', 'external'].includes(editStayType.value),
         },
       },
     )
@@ -921,6 +930,7 @@ watch(
             />
             Cleaning required</label
           >
+          <label class="checkbox"><input v-model="promoteLateCheckout" type="checkbox" :disabled="!['booking_com', 'external'].includes(promoteStayType)" /> Late checkout</label>
           <p v-if="promoteError" class="form-error">{{ promoteError }}</p>
         </form>
         <template #footer
@@ -965,6 +975,7 @@ watch(
             />
             Cleaning required</label
           >
+          <label class="checkbox"><input v-model="manualStayLateCheckout" type="checkbox" :disabled="!['booking_com', 'external'].includes(manualStayType)" /> Late checkout</label>
           <p v-if="manualStayError" class="form-error">{{ manualStayError }}</p>
         </form>
         <template #footer
@@ -999,6 +1010,7 @@ watch(
           <label class="checkbox"
             ><input v-model="editStayCleaningRequired" type="checkbox" /> Cleaning required</label
           >
+          <label class="checkbox"><input v-model="editStayLateCheckout" type="checkbox" :disabled="!['booking_com', 'external'].includes(editStayType)" /> Late checkout</label>
           <p v-if="editStayError" class="form-error">{{ editStayError }}</p>
         </form>
         <template #footer

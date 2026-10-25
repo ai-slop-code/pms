@@ -77,18 +77,31 @@ const revenueRecognition = ref<FinanceRevenueRecognitionResponse>({
   month: month.value,
   gross_revenue_cents: 0,
   recognized_booking_net_cents: 0,
+  late_checkout_incoming_cents: 0,
+  recognized_incoming_cents: 0,
   other_incoming_cents: 0,
   other_outgoing_cents: 0,
   recognized_net_cents: 0,
   bookings: [],
   excluded_bookings: [],
-  long_term_comparison: { status: 'not_configured', rate_id: null, effective_from_month: null, monthly_rent_cents: null, eligible_outgoing_cents: null, long_term_net_cents: null, short_term_difference_cents: null, outcome: null },
+  long_term_comparison: {
+    status: 'not_configured',
+    rate_id: null,
+    effective_from_month: null,
+    monthly_rent_cents: null,
+    eligible_outgoing_cents: null,
+    long_term_net_cents: null,
+    short_term_difference_cents: null,
+    outcome: null,
+  },
 })
 const revenueRecognitionAvailable = ref(false)
 const rentRates = ref<FinanceLongTermRentRate[]>([])
 const rentCanManage = ref(false)
 const rentDialogOpen = ref(false)
-watch(pid, () => { rentDialogOpen.value = false })
+watch(pid, () => {
+  rentDialogOpen.value = false
+})
 let loadSequence = 0
 
 const txFilterDirection = ref<'' | 'incoming' | 'outgoing'>('')
@@ -328,12 +341,17 @@ async function loadAll() {
       api<FinanceRevenueRecognitionResponse>(
         `/api/properties/${pid.value}/finance/revenue-recognition?month=${encodeURIComponent(month.value)}`,
       ),
-      api<{ rates: FinanceLongTermRentRate[]; can_manage: boolean }>(`/api/properties/${pid.value}/finance/long-term-rent-rates`),
+      api<{ rates: FinanceLongTermRentRate[]; can_manage: boolean }>(
+        `/api/properties/${pid.value}/finance/long-term-rent-rates`,
+      ),
     ])
-    if (sequence !== loadSequence || pid.value !== requestedPropertyID || month.value !== requestedMonth) return
+    if (sequence !== loadSequence || pid.value !== requestedPropertyID || month.value !== requestedMonth)
+      return
     const requiredRecognitionFields = [
       revenue.gross_revenue_cents,
       revenue.recognized_booking_net_cents,
+      revenue.late_checkout_incoming_cents,
+      revenue.recognized_incoming_cents,
       revenue.other_incoming_cents,
       revenue.other_outgoing_cents,
       revenue.recognized_net_cents,
@@ -341,23 +359,32 @@ async function loadAll() {
     if (requiredRecognitionFields.some((value) => !Number.isInteger(value))) {
       throw new Error('Finance recognition data is unavailable')
     }
+    if (
+      revenue.bookings.some(
+        (booking) => !Number.isInteger(booking.net_cents) || !Number.isInteger(booking.recognized_net_cents),
+      )
+    ) {
+      throw new Error('Finance recognition booking data is unavailable')
+    }
     categories.value = cats.categories
     transactions.value = txs.transactions
     summary.value = sum
     recurringRules.value = rules.rules
-      revenueRecognition.value = {
+    revenueRecognition.value = {
       month: revenue.month || month.value,
       gross_revenue_cents: revenue.gross_revenue_cents,
       recognized_booking_net_cents: revenue.recognized_booking_net_cents,
+      late_checkout_incoming_cents: revenue.late_checkout_incoming_cents,
+      recognized_incoming_cents: revenue.recognized_incoming_cents,
       other_incoming_cents: revenue.other_incoming_cents,
       other_outgoing_cents: revenue.other_outgoing_cents,
       recognized_net_cents: revenue.recognized_net_cents,
       bookings: revenue.bookings || [],
-        excluded_bookings: revenue.excluded_bookings || [],
-        long_term_comparison: revenue.long_term_comparison,
-      }
-      rentRates.value = rentHistory.rates || []
-      rentCanManage.value = rentHistory.can_manage === true
+      excluded_bookings: revenue.excluded_bookings || [],
+      long_term_comparison: revenue.long_term_comparison,
+    }
+    rentRates.value = rentHistory.rates || []
+    rentCanManage.value = rentHistory.can_manage === true
     revenueRecognitionAvailable.value = true
   } catch (e) {
     if (sequence !== loadSequence) return
@@ -831,10 +858,12 @@ watch(payoutImportFile, (file, previous) => {
       <FinanceOverviewTab
         v-if="tab === 'overview'"
         :summary="summary"
-        :recognized-gross-cents="revenueRecognition.gross_revenue_cents"
+        :recognized-incoming-cents="revenueRecognition.recognized_incoming_cents"
         :recognized-net-cents="revenueRecognitionAvailable ? revenueRecognition.recognized_net_cents : null"
         :recognized-net-available="revenueRecognitionAvailable"
-        :long-term-comparison="revenueRecognitionAvailable ? (revenueRecognition.long_term_comparison ?? null) : null"
+        :long-term-comparison="
+          revenueRecognitionAvailable ? (revenueRecognition.long_term_comparison ?? null) : null
+        "
         :month="month"
         :can-manage-rent="rentCanManage"
         :property-timezone="currentProperty?.timezone"
@@ -1045,8 +1074,8 @@ watch(payoutImportFile, (file, previous) => {
           <li v-if="importPreview.rejected.length">
             <strong>{{ importPreview.rejected.length }}</strong> rejected
           </li>
-           <li v-if="plannedStayNameChangeCount && importPreview.source_type === 'payout'">
-             <strong>{{ plannedStayNameChangeCount }}</strong> stay-name changes
+          <li v-if="plannedStayNameChangeCount && importPreview.source_type === 'payout'">
+            <strong>{{ plannedStayNameChangeCount }}</strong> stay-name changes
           </li>
           <li v-if="pendingOmissionCount > 0">
             <strong>{{ pendingOmissionCount }}</strong> rows omitted unless selected
@@ -1055,7 +1084,7 @@ watch(payoutImportFile, (file, previous) => {
         <details v-if="importPreview.inserts.length" class="import-preview__list">
           <summary>New bookings ({{ importPreview.inserts.length }})</summary>
           <ul>
-             <li v-for="ins in importPreview.inserts" :key="`${ins.line}-${ins.reference}`">
+            <li v-for="ins in importPreview.inserts" :key="`${ins.line}-${ins.reference}`">
               {{ ins.reference }} — {{ ins.guest_name || '—' }}
               <span v-if="ins.check_in_date">({{ ins.check_in_date }} → {{ ins.check_out_date }})</span>
               <span v-if="ins.named_stay_id"> · stay #{{ ins.named_stay_id }} · {{ ins.match_basis }}</span>
@@ -1065,16 +1094,22 @@ watch(payoutImportFile, (file, previous) => {
               <span v-if="ins.status">[{{ ins.status }}]</span>
             </li>
           </ul>
-         </details>
-         <details v-if="importPreview.skipped_cancellations.length" open class="import-preview__list">
-           <summary>Cancelled reservations retained for statement analytics ({{ importPreview.skipped_cancellations.length }})</summary>
-           <ul>
-             <li v-for="item in importPreview.skipped_cancellations" :key="`${item.line}-${item.reference}`">
-               Line {{ item.line }}: {{ item.reference }} — {{ item.guest_name || '—' }}
-               ({{ item.check_in_date }} → {{ item.check_out_date }})
-             </li>
-           </ul>
-         </details>
+        </details>
+        <details v-if="importPreview.skipped_cancellations.length" open class="import-preview__list">
+          <summary>
+            Cancelled reservations retained for statement analytics ({{
+              importPreview.skipped_cancellations.length
+            }})
+          </summary>
+          <ul>
+            <li v-for="item in importPreview.skipped_cancellations" :key="`${item.line}-${item.reference}`">
+              Line {{ item.line }}: {{ item.reference }} — {{ item.guest_name || '—' }} ({{
+                item.check_in_date
+              }}
+              → {{ item.check_out_date }})
+            </li>
+          </ul>
+        </details>
         <details v-if="importPreview.stay_name_changes.length" open class="import-preview__list">
           <summary>Stay-name changes ({{ importPreview.stay_name_changes.length }})</summary>
           <ul>
@@ -1103,16 +1138,23 @@ watch(payoutImportFile, (file, previous) => {
                 {{ item.guest_name || '—' }} · {{ item.check_in_date }} → {{ item.check_out_date }} ·
                 {{ item.net_cents }} cents
               </div>
-             <small>{{ item.reason }}</small>
+              <small>{{ item.reason }}</small>
               <small
-                v-if="importPreview.source_type === 'payout' &&
+                v-if="
+                  importPreview.source_type === 'payout' &&
                   staySelections[item.line] &&
                   item.guest_name.trim() &&
-                  item.candidates.find((candidate) => candidate.named_stay_id === Number(staySelections[item.line]))
+                  item.candidates.find(
+                    (candidate) => candidate.named_stay_id === Number(staySelections[item.line]),
+                  )
                 "
-               >
+              >
                 Proposed rename:
-                {{ item.candidates.find((candidate) => candidate.named_stay_id === Number(staySelections[item.line]))?.display_name }}
+                {{
+                  item.candidates.find(
+                    (candidate) => candidate.named_stay_id === Number(staySelections[item.line]),
+                  )?.display_name
+                }}
                 → {{ item.guest_name.trim() }}
               </small>
             </div>
@@ -1132,7 +1174,7 @@ watch(payoutImportFile, (file, previous) => {
         <details v-if="importPreview.updates.length" class="import-preview__list">
           <summary>Updated bookings ({{ importPreview.updates.length }})</summary>
           <ul>
-             <li v-for="upd in importPreview.updates" :key="`${upd.line}-${upd.reference}`">
+            <li v-for="upd in importPreview.updates" :key="`${upd.line}-${upd.reference}`">
               {{ upd.reference }} — {{ upd.guest_name || '—' }}
               <span v-if="upd.status_changed" class="import-preview__flag">status changed</span>
               <span v-if="upd.changes?.length"> · {{ upd.changes.map((c) => c.field).join(', ') }}</span>
@@ -1151,7 +1193,7 @@ watch(payoutImportFile, (file, previous) => {
         <details v-if="importPreview.rejected.length" class="import-preview__list">
           <summary>Rejected ({{ importPreview.rejected.length }})</summary>
           <ul>
-             <li v-for="r in importPreview.rejected" :key="`${r.line}-${r.reason}`">
+            <li v-for="r in importPreview.rejected" :key="`${r.line}-${r.reason}`">
               Line {{ r.line }}: {{ r.reason }}
             </li>
           </ul>

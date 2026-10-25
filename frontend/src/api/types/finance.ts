@@ -80,9 +80,11 @@ export interface FinanceRevenueRecognitionBooking {
   check_in_date: string
   check_out_date: string
   gross_cents: number
+  net_cents: number
   stay_nights: number
   recognized_nights: number
   recognized_gross_cents: number
+  recognized_net_cents: number
   unmatched: boolean
   cancelled: boolean
   no_show: boolean
@@ -101,6 +103,8 @@ export interface FinanceRevenueRecognitionResponse {
   month: string
   gross_revenue_cents: number
   recognized_booking_net_cents: number
+  late_checkout_incoming_cents: number
+  recognized_incoming_cents: number
   other_incoming_cents: number
   other_outgoing_cents: number
   recognized_net_cents: number
@@ -144,6 +148,8 @@ export interface FinanceResetDeleteCounts {
 
 export interface FinanceResetPreserveCounts {
   cleaning_salary_transactions: number
+  late_checkout_charges: number
+  late_checkout_bonuses: number
   cleaning_daily_logs: number
   cleaning_salary_adjustments: number
   cleaner_fee_history: number

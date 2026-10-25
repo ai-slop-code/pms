@@ -92,6 +92,7 @@ type propertySettingsProfileDTO struct {
 	ParkingInstructions *string `json:"parking_instructions"`
 	DefaultCheckInTime  string  `json:"default_check_in_time"`
 	DefaultCheckOutTime string  `json:"default_check_out_time"`
+	LateCheckOutTime    string  `json:"late_check_out_time"`
 	CleanerNukiAuthID   *string `json:"cleaner_nuki_auth_id"`
 }
 
@@ -137,10 +138,12 @@ type cleaningMonthWidget struct {
 }
 
 type financeMonthWidget struct {
-	Incoming        int `json:"incoming"`
-	Outgoing        int `json:"outgoing"`
-	Net             int `json:"net"`
-	RecognizedGross int `json:"recognized_gross"`
+	Incoming           int `json:"incoming"`
+	Outgoing           int `json:"outgoing"`
+	Net                int `json:"net"`
+	RecognizedIncoming int `json:"recognized_incoming"`
+	// Retained for compatibility with older clients; it remains genuine gross.
+	RecognizedGross int `json:"recognized_gross,omitempty"`
 }
 
 type dashboardInvoiceRow struct {

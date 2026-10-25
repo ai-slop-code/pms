@@ -403,6 +403,9 @@ func (s *Server) postFinanceImportPreview(w http.ResponseWriter, r *http.Request
 					entry.MatchBasis = "existing finance association"
 				}
 			}
+		} else if parsed.Source == statements.SourcePayout && (row.CheckInDate == "" || row.CheckOutDate == "" || strings.TrimSpace(row.GuestName) == "") {
+			// Payout adjustments and notes may contain partial stay fields. They
+			// still belong in payout-date cashflow, but remain ineligible for recognition.
 		} else {
 			stay, err = s.Store.FindNamedStayForFinanceStayDates(r.Context(), pid, row.ReferenceNumber, row.CheckInDate, row.CheckOutDate, row.GuestName)
 			if err != nil {
@@ -899,7 +902,24 @@ func (s *Server) commitPayoutBookingSideEffects(ctx context.Context, propertyID,
 		}
 	}
 	// Upsert the linked finance_transactions row.
-	if entry.NetCents != 0 && entry.BookingIncomeID > 0 {
+	if entry.Input.IsCommissionAdjustment() || entry.Input.IsRefund() {
+		if entry.ExistingID > 0 && entry.Result.NetCents != nil && entry.Result.PayoutDate != nil {
+			payoutDate, err := time.Parse(time.RFC3339, *entry.Result.PayoutDate)
+			if err != nil {
+				return err
+			}
+			if err := s.Store.UpsertBookingFinanceTransaction(ctx, propertyID, bookingID, entry.Reference, *entry.Result.NetCents, payoutDate, entry.BookingIncomeID, entry.PayoutID); err != nil {
+				return err
+			}
+		}
+		kind := "commission_adjustment"
+		if entry.Input.IsRefund() {
+			kind = "refund"
+		}
+		if err := s.Store.UpsertBookingPayoutAdjustment(ctx, propertyID, entry.Reference, entry.Input.NetCents, entry.Input.PayoutDate, entry.BookingIncomeID, entry.Input.PayoutID, kind); err != nil {
+			return err
+		}
+	} else if entry.NetCents != 0 && entry.BookingIncomeID > 0 {
 		txDate := entry.PayoutDate
 		if txDate.IsZero() {
 			txDate = time.Now().UTC()

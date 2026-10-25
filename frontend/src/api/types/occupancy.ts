@@ -51,6 +51,7 @@ export interface CalendarNamedStay {
   check_out_date: string
   status: 'active' | 'cancelled' | 'archived' | string
   cleaning_required: boolean
+  late_checkout: boolean
   review_status: 'confirmed' | 'rejected' | string
   review_reason?: string | null
   outcome?: StayOutcome | null

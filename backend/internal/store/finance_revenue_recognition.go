@@ -38,6 +38,9 @@ type FinanceRevenueRecognitionReport struct {
 	Month                     string
 	GrossRevenueCents         int
 	RecognizedBookingNetCents int
+	LateCheckoutIncomingCents int
+	RecognizedIncomingCents   int
+	OtherOutgoingCents        int
 	Bookings                  []FinanceRevenueRecognitionBooking
 	ExcludedBookings          []FinanceRevenueRecognitionIssue
 }
@@ -175,6 +178,14 @@ func (s *Store) ComputeFinanceRevenueRecognition(ctx context.Context, propertyID
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_cents), 0) FROM finance_transactions WHERE property_id = ? AND source_type = 'late_checkout' AND substr(transaction_date, 1, 7) = ?`, propertyID, month).Scan(&report.LateCheckoutIncomingCents); err != nil {
+		return nil, err
+	}
+	_, report.OtherOutgoingCents, err = s.ComputeFinanceOtherMovements(ctx, propertyID, month)
+	if err != nil {
+		return nil, err
+	}
+	report.RecognizedIncomingCents = report.RecognizedBookingNetCents + report.LateCheckoutIncomingCents
 	return report, nil
 }
 

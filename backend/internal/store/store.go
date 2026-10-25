@@ -114,6 +114,7 @@ type PropertyProfile struct {
 	ParkingInstructions sql.NullString
 	DefaultCheckInTime  string
 	DefaultCheckOutTime string
+	LateCheckOutTime    string
 	CleanerNukiAuthID   sql.NullString
 	UpdatedAt           time.Time
 }
@@ -601,11 +602,11 @@ func (s *Store) GetPropertyProfile(ctx context.Context, propertyID int64) (*Prop
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT property_id, legal_owner_name, billing_name, billing_address, city, postal_code, country,
 			ico, dic, vat_id, contact_phone, wifi_ssid, wifi_password, parking_instructions,
-			default_check_in_time, default_check_out_time, cleaner_nuki_auth_id, updated_at
+			default_check_in_time, default_check_out_time, late_check_out_time, cleaner_nuki_auth_id, updated_at
 		FROM property_profiles WHERE property_id = ?`, propertyID).
 		Scan(&pr.PropertyID, &pr.LegalOwnerName, &pr.BillingName, &pr.BillingAddress, &pr.City, &pr.PostalCode, &pr.Country,
 			&pr.ICO, &pr.DIC, &pr.VATID, &pr.ContactPhone, &pr.WifiSSID, &pr.WifiPassword, &pr.ParkingInstructions,
-			&pr.DefaultCheckInTime, &pr.DefaultCheckOutTime, &pr.CleanerNukiAuthID, &updated)
+			&pr.DefaultCheckInTime, &pr.DefaultCheckOutTime, &pr.LateCheckOutTime, &pr.CleanerNukiAuthID, &updated)
 	if err != nil {
 		return nil, err
 	}
@@ -675,15 +676,20 @@ func (s *Store) UpdatePropertyProfile(ctx context.Context, propertyID int64, pat
 			pr.DefaultCheckOutTime = s
 		}
 	}
+	if v, ok := patch["late_check_out_time"]; ok {
+		if value, ok := v.(string); ok {
+			pr.LateCheckOutTime = value
+		}
+	}
 	_, err = s.DB.ExecContext(ctx, `
 		UPDATE property_profiles SET
 			legal_owner_name = ?, billing_name = ?, billing_address = ?, city = ?, postal_code = ?, country = ?,
 			ico = ?, dic = ?, vat_id = ?, contact_phone = ?, wifi_ssid = ?, wifi_password = ?, parking_instructions = ?,
-			default_check_in_time = ?, default_check_out_time = ?, cleaner_nuki_auth_id = ?, updated_at = ?
+			default_check_in_time = ?, default_check_out_time = ?, late_check_out_time = ?, cleaner_nuki_auth_id = ?, updated_at = ?
 		WHERE property_id = ?`,
 		nullStr(pr.LegalOwnerName), nullStr(pr.BillingName), nullStr(pr.BillingAddress), nullStr(pr.City), nullStr(pr.PostalCode), nullStr(pr.Country),
 		nullStr(pr.ICO), nullStr(pr.DIC), nullStr(pr.VATID), nullStr(pr.ContactPhone), nullStr(pr.WifiSSID), nullStr(pr.WifiPassword), nullStr(pr.ParkingInstructions),
-		pr.DefaultCheckInTime, pr.DefaultCheckOutTime, nullStr(pr.CleanerNukiAuthID), now, propertyID)
+		pr.DefaultCheckInTime, pr.DefaultCheckOutTime, pr.LateCheckOutTime, nullStr(pr.CleanerNukiAuthID), now, propertyID)
 	return err
 }
 

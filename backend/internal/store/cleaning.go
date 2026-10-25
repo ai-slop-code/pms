@@ -39,14 +39,15 @@ type CleaningSalaryAdjustment struct {
 }
 
 type CleaningMonthlySummary struct {
-	PropertyID            int64
-	Year                  int
-	Month                 int
-	CountedDays           int
-	BaseSalaryCents       int
-	AdjustmentsTotalCents int
-	FinalSalaryCents      int
-	ComputedAt            time.Time
+	PropertyID             int64
+	Year                   int
+	Month                  int
+	CountedDays            int
+	BaseSalaryCents        int
+	AdjustmentsTotalCents  int
+	LateCheckoutBonusCents int
+	FinalSalaryCents       int
+	ComputedAt             time.Time
 }
 
 type CleaningYearMonthCount struct {
@@ -227,16 +228,21 @@ func (s *Store) ComputeCleaningMonthlySummary(ctx context.Context, propertyID in
 	for _, a := range adj {
 		adjustments += a.AdjustmentAmountCents
 	}
-	final := base + adjustments
+	bonus := 0
+	if err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_cents), 0) FROM finance_transactions WHERE property_id = ? AND source_type = 'late_checkout_cleaner_bonus' AND substr(transaction_date, 1, 7) = ?`, propertyID, monthKey).Scan(&bonus); err != nil {
+		return nil, err
+	}
+	final := base + adjustments + bonus
 	summary := &CleaningMonthlySummary{
-		PropertyID:            propertyID,
-		Year:                  year,
-		Month:                 month,
-		CountedDays:           counted,
-		BaseSalaryCents:       base,
-		AdjustmentsTotalCents: adjustments,
-		FinalSalaryCents:      final,
-		ComputedAt:            time.Now().In(loc),
+		PropertyID:             propertyID,
+		Year:                   year,
+		Month:                  month,
+		CountedDays:            counted,
+		BaseSalaryCents:        base,
+		AdjustmentsTotalCents:  adjustments,
+		LateCheckoutBonusCents: bonus,
+		FinalSalaryCents:       final,
+		ComputedAt:             time.Now().In(loc),
 	}
 	_ = s.UpsertCleaningMonthlySummary(ctx, summary)
 	return summary, nil

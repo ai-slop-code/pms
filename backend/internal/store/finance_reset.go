@@ -24,6 +24,8 @@ type FinanceResetDeleteCounts struct {
 
 type FinanceResetPreserveCounts struct {
 	CleaningSalaryTransactions int `json:"cleaning_salary_transactions"`
+	LateCheckoutCharges        int `json:"late_checkout_charges"`
+	LateCheckoutBonuses        int `json:"late_checkout_bonuses"`
 	CleaningDailyLogs          int `json:"cleaning_daily_logs"`
 	CleaningSalaryAdjustments  int `json:"cleaning_salary_adjustments"`
 	CleanerFeeHistory          int `json:"cleaner_fee_history"`
@@ -118,7 +120,7 @@ func (s *Store) ResetFinanceRecords(ctx context.Context, propertyID int64, actor
 		)`, propertyID, propertyID, propertyID); err != nil {
 		return nil, nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM finance_transactions WHERE property_id = ? AND source_type <> 'cleaning_salary'`, propertyID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM finance_transactions WHERE property_id = ? AND source_type NOT IN ('cleaning_salary', 'late_checkout', 'late_checkout_cleaner_bonus')`, propertyID); err != nil {
 		return nil, nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM finance_recurring_rules WHERE property_id = ?`, propertyID); err != nil {
@@ -210,7 +212,7 @@ func (s *Store) fillFinanceResetDeleteCounts(ctx context.Context, q financeReset
 		sql  string
 		args []interface{}
 	}{
-		{&counts.FinanceTransactions, `SELECT COUNT(*) FROM finance_transactions WHERE property_id = ? AND source_type <> 'cleaning_salary'`, []interface{}{propertyID}},
+		{&counts.FinanceTransactions, `SELECT COUNT(*) FROM finance_transactions WHERE property_id = ? AND source_type NOT IN ('cleaning_salary', 'late_checkout', 'late_checkout_cleaner_bonus')`, []interface{}{propertyID}},
 		{&counts.FinanceRecurringRules, `SELECT COUNT(*) FROM finance_recurring_rules WHERE property_id = ?`, []interface{}{propertyID}},
 		{&counts.FinanceBookings, `SELECT COUNT(*) FROM finance_bookings WHERE property_id = ?`, []interface{}{propertyID}},
 		{&counts.FinanceImports, `SELECT COUNT(*) FROM finance_imports WHERE property_id = ?`, []interface{}{propertyID}},
@@ -249,12 +251,14 @@ func (s *Store) fillFinanceResetDeleteCounts(ctx context.Context, q financeReset
 }
 
 func (s *Store) fillFinanceResetPreserveCounts(ctx context.Context, q financeResetQuerier, propertyID int64, counts *FinanceResetPreserveCounts) error {
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM finance_transactions WHERE property_id = ? AND source_type = 'late_checkout'`, propertyID).Scan(&counts.LateCheckoutCharges); err != nil { return err }
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM finance_transactions WHERE property_id = ? AND source_type = 'late_checkout_cleaner_bonus'`, propertyID).Scan(&counts.LateCheckoutBonuses); err != nil { return err }
 	queries := []struct {
 		dest *int
 		sql  string
 		args []interface{}
 	}{
-		{&counts.CleaningSalaryTransactions, `SELECT COUNT(*) FROM finance_transactions WHERE property_id = ? AND source_type = 'cleaning_salary'`, []interface{}{propertyID}},
+		{&counts.CleaningSalaryTransactions, `SELECT COUNT(*) FROM finance_transactions WHERE property_id = ? AND source_type IN ('cleaning_salary', 'late_checkout', 'late_checkout_cleaner_bonus')`, []interface{}{propertyID}},
 		{&counts.CleaningDailyLogs, `SELECT COUNT(*) FROM cleaning_daily_logs WHERE property_id = ?`, []interface{}{propertyID}},
 		{&counts.CleaningSalaryAdjustments, `SELECT COUNT(*) FROM cleaning_salary_adjustments WHERE property_id = ?`, []interface{}{propertyID}},
 		{&counts.CleanerFeeHistory, `SELECT COUNT(*) FROM cleaner_fee_history WHERE property_id = ?`, []interface{}{propertyID}},
@@ -276,7 +280,7 @@ func financeResetFilePaths(ctx context.Context, tx *sql.Tx, propertyID int64) ([
 		sql  string
 		args []interface{}
 	}{
-		{`SELECT attachment_path FROM finance_transactions WHERE property_id = ? AND source_type <> 'cleaning_salary' AND attachment_path IS NOT NULL AND attachment_path <> ''`, []interface{}{propertyID}},
+		{`SELECT attachment_path FROM finance_transactions WHERE property_id = ? AND source_type NOT IN ('cleaning_salary', 'late_checkout', 'late_checkout_cleaner_bonus') AND attachment_path IS NOT NULL AND attachment_path <> ''`, []interface{}{propertyID}},
 		{`SELECT f.file_path FROM invoice_files f JOIN invoices i ON i.id = f.invoice_id WHERE i.property_id = ? AND i.document_type = 'invoice' AND (i.finance_booking_payout_id IN (SELECT id FROM finance_bookings WHERE property_id = ?) OR i.named_stay_id IN (SELECT named_stay_id FROM finance_bookings WHERE property_id = ? AND named_stay_id IS NOT NULL))`, []interface{}{propertyID, propertyID, propertyID}},
 	}
 	for _, query := range queries {
@@ -315,6 +319,7 @@ func financeResetCleaningMonths(ctx context.Context, tx *sql.Tx, propertyID int6
 		args []interface{}
 	}{
 		{`SELECT source_reference_id FROM finance_transactions WHERE property_id = ? AND source_type = 'cleaning_salary' AND source_reference_id IS NOT NULL AND source_reference_id <> ''`, []interface{}{propertyID}},
+		{`SELECT substr(transaction_date, 1, 7) FROM finance_transactions WHERE property_id = ? AND source_type = 'late_checkout_cleaner_bonus'`, []interface{}{propertyID}},
 		{`SELECT DISTINCT substr(day_date, 1, 7) FROM cleaning_daily_logs WHERE property_id = ? AND counted_for_salary = 1`, []interface{}{propertyID}},
 		{`SELECT DISTINCT printf('%04d-%02d', year, month) FROM cleaning_salary_adjustments WHERE property_id = ?`, []interface{}{propertyID}},
 	}
@@ -369,7 +374,8 @@ func financeResetUpsertCleaningSalary(ctx context.Context, tx *sql.Tx, propertyI
 		return 0, 0, err
 	}
 	monthAnchorUTC := time.Date(year, time.Month(m), 1, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
-	if summary.FinalSalaryCents <= 0 {
+	ordinarySalary := summary.BaseSalaryCents + summary.AdjustmentsTotalCents
+	if ordinarySalary <= 0 {
 		_, err := tx.ExecContext(ctx, `DELETE FROM finance_transactions WHERE property_id = ? AND source_type = 'cleaning_salary' AND source_reference_id = ?`, propertyID, month)
 		return 0, 0, err
 	}
@@ -394,7 +400,7 @@ func financeResetUpsertCleaningSalary(ctx context.Context, tx *sql.Tx, propertyI
 				property_id, transaction_date, direction, amount_cents, category_id, note,
 				source_type, source_reference_id, is_auto_generated, created_at, updated_at
 			) VALUES (?, ?, 'outgoing', ?, ?, ?, 'cleaning_salary', ?, 1, ?, ?)`,
-			propertyID, monthAnchorUTC, summary.FinalSalaryCents, cleaningCategoryID, fmt.Sprintf("Cleaner salary for %s", month), month, now, now)
+			propertyID, monthAnchorUTC, ordinarySalary, cleaningCategoryID, fmt.Sprintf("Cleaner salary for %s", month), month, now, now)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -406,7 +412,7 @@ func financeResetUpsertCleaningSalary(ctx context.Context, tx *sql.Tx, propertyI
 	_, err = tx.ExecContext(ctx, `
 		UPDATE finance_transactions
 		SET transaction_date = ?, direction = 'outgoing', amount_cents = ?, category_id = ?, note = ?, is_auto_generated = 1, updated_at = ?
-		WHERE id = ?`, monthAnchorUTC, summary.FinalSalaryCents, cleaningCategoryID, fmt.Sprintf("Cleaner salary for %s", month), now, existingID)
+		WHERE id = ?`, monthAnchorUTC, ordinarySalary, cleaningCategoryID, fmt.Sprintf("Cleaner salary for %s", month), now, existingID)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -459,15 +465,20 @@ func computeCleaningMonthlySummaryTx(ctx context.Context, tx *sql.Tx, propertyID
 		WHERE property_id = ? AND year = ? AND month = ?`, propertyID, year, month).Scan(&adjustments); err != nil {
 		return nil, err
 	}
+	bonus := 0
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_cents), 0) FROM finance_transactions WHERE property_id = ? AND source_type = 'late_checkout_cleaner_bonus' AND substr(transaction_date, 1, 7) = ?`, propertyID, monthKey).Scan(&bonus); err != nil {
+		return nil, err
+	}
 	return &CleaningMonthlySummary{
-		PropertyID:            propertyID,
-		Year:                  year,
-		Month:                 month,
-		CountedDays:           counted,
-		BaseSalaryCents:       base,
-		AdjustmentsTotalCents: adjustments,
-		FinalSalaryCents:      base + adjustments,
-		ComputedAt:            time.Now().In(loc),
+		PropertyID:             propertyID,
+		Year:                   year,
+		Month:                  month,
+		CountedDays:            counted,
+		BaseSalaryCents:        base,
+		AdjustmentsTotalCents:  adjustments,
+		LateCheckoutBonusCents: bonus,
+		FinalSalaryCents:       base + adjustments + bonus,
+		ComputedAt:             time.Now().In(loc),
 	}, nil
 }
 

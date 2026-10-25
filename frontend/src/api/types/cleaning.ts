@@ -27,6 +27,7 @@ export interface CleaningSummary {
   counted_days: number
   base_salary_cents: number
   adjustments_total_cents: number
+  late_checkout_bonus_cents: number
   final_salary_cents: number
 }
 

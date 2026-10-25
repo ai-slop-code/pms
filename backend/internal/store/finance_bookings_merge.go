@@ -209,15 +209,19 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 		}
 		return existingID, nil
 	}
-	if namedStayID <= 0 {
+	if namedStayID <= 0 && !b.HasPayoutData {
 		return 0, fmt.Errorf("named_stay_id is required")
 	}
-	var stayPropertyID int64
-	if err := db.QueryRowContext(ctx, `SELECT property_id FROM named_stays WHERE id = ?`, namedStayID).Scan(&stayPropertyID); err != nil {
-		return 0, fmt.Errorf("invalid named_stay_id: %w", err)
-	}
-	if stayPropertyID != propertyID {
-		return 0, fmt.Errorf("named_stay_id does not belong to property")
+	var namedStayValue interface{}
+	if namedStayID > 0 {
+		var stayPropertyID int64
+		if err := db.QueryRowContext(ctx, `SELECT property_id FROM named_stays WHERE id = ?`, namedStayID).Scan(&stayPropertyID); err != nil {
+			return 0, fmt.Errorf("invalid named_stay_id: %w", err)
+		}
+		if stayPropertyID != propertyID {
+			return 0, fmt.Errorf("named_stay_id does not belong to property")
+		}
+		namedStayValue = namedStayID
 	}
 	netCents := 0
 	if b.NetCents != nil {
@@ -257,7 +261,7 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 			status,
 			created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		propertyID, namedStayID, b.ReferenceNumber, channel,
+		propertyID, namedStayValue, b.ReferenceNumber, channel,
 		boolToInt(b.HasPayoutData), boolToInt(b.HasStatementData),
 		ptrToNullString(b.BookedOn),
 		ptrToNullString(b.CheckInDate), ptrToNullString(b.CheckOutDate),
@@ -281,8 +285,10 @@ func (s *Store) UpsertFinanceBookingFromCanonical(ctx context.Context, propertyI
 	if err != nil {
 		return 0, err
 	}
-	if _, err := s.ConfirmNamedStayWithFinanceEvidence(ctx, propertyID, namedStayID); err != nil {
-		return 0, err
+	if namedStayID > 0 {
+		if _, err := s.ConfirmNamedStayWithFinanceEvidence(ctx, propertyID, namedStayID); err != nil {
+			return 0, err
+		}
 	}
 	return bookingID, nil
 }
@@ -341,6 +347,48 @@ func (s *Store) UpsertBookingFinanceTransaction(ctx context.Context, propertyID,
 	_, err = db.ExecContext(ctx, `
 		UPDATE finance_bookings SET transaction_id = ?, updated_at = ? WHERE id = ?`,
 		txID, now, bookingID)
+	return err
+}
+
+// UpsertBookingPayoutAdjustment records a correction as its own cash movement
+// so its payout date remains independent of the reservation's payout date.
+func (s *Store) UpsertBookingPayoutAdjustment(ctx context.Context, propertyID int64, reference string, netCents int, payoutDate time.Time, categoryID int64, payoutID, kind string) error {
+	db := dbForContext(ctx, s.DB)
+	if netCents == 0 {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if kind == "" {
+		kind = "commission_adjustment"
+	}
+	sourceReference := kind + ":" + reference + ":" + payoutID
+	direction := "incoming"
+	amount := netCents
+	if amount < 0 {
+		direction = "outgoing"
+		amount = -amount
+	}
+	note := "Booking.com commission adjustment"
+	if payoutID != "" {
+		note += " (" + payoutID + ")"
+	}
+	existing, err := s.financeTransactionBySourceReference(ctx, db, propertyID, "booking_payout_adjustment", sourceReference)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if existing != nil {
+		_, err = db.ExecContext(ctx, `
+			UPDATE finance_transactions
+			SET transaction_date = ?, direction = ?, amount_cents = ?, category_id = ?, note = ?, is_auto_generated = 1, updated_at = ?
+			WHERE id = ?`, payoutDate.UTC().Format(time.RFC3339), direction, amount, categoryID, note, now, existing.ID)
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO finance_transactions (
+			property_id, transaction_date, direction, amount_cents, category_id, note,
+			source_type, source_reference_id, is_auto_generated, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, 'booking_payout_adjustment', ?, 1, ?, ?)`,
+		propertyID, payoutDate.UTC().Format(time.RFC3339), direction, amount, categoryID, note, sourceReference, now, now)
 	return err
 }
 

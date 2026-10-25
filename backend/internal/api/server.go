@@ -818,6 +818,7 @@ func (s *Server) getPropertySettings(w http.ResponseWriter, r *http.Request) {
 			ParkingInstructions: nullStringPtr(pr.ParkingInstructions),
 			DefaultCheckInTime:  pr.DefaultCheckInTime,
 			DefaultCheckOutTime: pr.DefaultCheckOutTime,
+			LateCheckOutTime:    pr.LateCheckOutTime,
 			CleanerNukiAuthID:   nullStringPtr(pr.CleanerNukiAuthID),
 		},
 		Integrations: propertyIntegrationsDTO{
@@ -855,7 +856,21 @@ func (s *Server) patchPropertySettings(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	beforeProfile, _ := s.Store.GetPropertyProfile(r.Context(), id)
 	if body.Profile != nil {
+		if value, ok := body.Profile["late_check_out_time"]; ok {
+			text, valid := value.(string)
+			if !valid {
+				WriteError(w, http.StatusBadRequest, "invalid late checkout time")
+				return
+			}
+			parsed, parseErr := time.Parse("15:04", strings.TrimSpace(text))
+			if parseErr != nil || parsed.Format("15:04") != strings.TrimSpace(text) {
+				WriteError(w, http.StatusBadRequest, "invalid late checkout time")
+				return
+			}
+			body.Profile["late_check_out_time"] = strings.TrimSpace(text)
+		}
 		if err := s.Store.UpdatePropertyProfile(r.Context(), id, body.Profile); err != nil {
 			WriteError(w, http.StatusInternalServerError, "profile update failed")
 			return
@@ -865,6 +880,13 @@ func (s *Server) patchPropertySettings(w http.ResponseWriter, r *http.Request) {
 		if err := s.Store.UpdatePropertySecrets(r.Context(), id, body.Secrets.BookingICSURL, body.Secrets.NukiAPIToken, body.Secrets.NukiSmartlockID); err != nil {
 			WriteError(w, http.StatusInternalServerError, "secrets update failed")
 			return
+		}
+	}
+	if beforeProfile != nil && body.Profile != nil {
+		if value, ok := body.Profile["late_check_out_time"].(string); ok && value != beforeProfile.LateCheckOutTime && s.Nuki != nil {
+			if err := s.Nuki.MaintainLateCheckoutStays(r.Context(), id); err != nil {
+				s.audit(r, actor, "update", "property_settings_nuki_maintenance", strconv.FormatInt(id, 10), "error")
+			}
 		}
 	}
 	s.audit(r, actor, "update", "property_settings", strconv.FormatInt(id, 10), "success")
@@ -1012,16 +1034,22 @@ func (s *Server) getDashboardSummary(w http.ResponseWriter, r *http.Request) {
 
 	if financeCan && loc != nil {
 		month := time.Now().In(loc).Format("2006-01")
-		if sum, err := s.Store.ComputeFinanceSummary(r.Context(), pid, month); err == nil && sum != nil {
-			widget := &financeMonthWidget{
-				Incoming: sum.MonthlyIncomingCents,
-				Outgoing: sum.MonthlyOutgoingCents,
-				Net:      sum.MonthlyNetCents,
-			}
-			if revenue, err := s.Store.ComputeFinanceRevenueRecognition(r.Context(), pid, month, loc); err == nil && revenue != nil {
-				widget.RecognizedGross = revenue.GrossRevenueCents
-			}
-			widgets.FinanceMonth = widget
+		sum, err := s.Store.ComputeFinanceSummary(r.Context(), pid, month)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "finance summary unavailable")
+			return
+		}
+		revenue, err := s.Store.ComputeFinanceRevenueRecognition(r.Context(), pid, month, loc)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "finance revenue unavailable")
+			return
+		}
+		widgets.FinanceMonth = &financeMonthWidget{
+			Incoming:           sum.MonthlyIncomingCents,
+			Outgoing:           sum.MonthlyOutgoingCents,
+			Net:                sum.MonthlyNetCents,
+			RecognizedIncoming: revenue.RecognizedIncomingCents,
+			RecognizedGross:    revenue.GrossRevenueCents,
 		}
 	}
 

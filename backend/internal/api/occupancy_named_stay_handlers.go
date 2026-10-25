@@ -23,6 +23,7 @@ type stayCreateBody struct {
 	CheckIn          string `json:"check_in"`
 	CheckOut         string `json:"check_out"`
 	CleaningRequired *bool  `json:"cleaning_required"`
+	LateCheckout     *bool  `json:"late_checkout"`
 }
 
 type stayPatchBody struct {
@@ -31,6 +32,7 @@ type stayPatchBody struct {
 	CheckIn               *string `json:"check_in"`
 	CheckOut              *string `json:"check_out"`
 	CleaningRequired      *bool   `json:"cleaning_required"`
+	LateCheckout          *bool   `json:"late_checkout"`
 	ManualRevenueCents    *int64  `json:"manual_revenue_cents"`
 	ManualRevenueCurrency *string `json:"manual_revenue_currency"`
 	ManualRevenueNote     *string `json:"manual_revenue_note"`
@@ -96,6 +98,7 @@ func (s *Server) postBookingBlockPromote(w http.ResponseWriter, r *http.Request)
 		CheckInDate:      body.CheckIn,
 		CheckOutDate:     body.CheckOut,
 		CleaningRequired: body.CleaningRequired,
+		LateCheckout:     body.LateCheckout,
 		CreatedByUserID:  actor.ID,
 	})
 	if err != nil {
@@ -125,6 +128,7 @@ func (s *Server) postStay(w http.ResponseWriter, r *http.Request) {
 		CheckInDate:      body.CheckIn,
 		CheckOutDate:     body.CheckOut,
 		CleaningRequired: body.CleaningRequired,
+		LateCheckout:     body.LateCheckout,
 		CreatedByUserID:  actor.ID,
 		SourceChannel:    "manual",
 	})
@@ -160,6 +164,7 @@ func (s *Server) patchStay(w http.ResponseWriter, r *http.Request) {
 		CheckInDate:           body.CheckIn,
 		CheckOutDate:          body.CheckOut,
 		CleaningRequired:      body.CleaningRequired,
+		LateCheckout:          body.LateCheckout,
 		ManualRevenueCents:    body.ManualRevenueCents,
 		ManualRevenueCurrency: body.ManualRevenueCurrency,
 		ManualRevenueNote:     body.ManualRevenueNote,

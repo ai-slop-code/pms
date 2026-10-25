@@ -40,6 +40,7 @@ type CalendarNamedStay struct {
 	CheckOutDate         string                   `json:"check_out_date"`
 	Status               string                   `json:"status"`
 	CleaningRequired     bool                     `json:"cleaning_required"`
+	LateCheckout         bool                     `json:"late_checkout"`
 	ReviewStatus         string                   `json:"review_status"`
 	ReviewReason         *string                  `json:"review_reason,omitempty"`
 	Outcome              *string                  `json:"outcome,omitempty"`

@@ -728,14 +728,14 @@ paths:
       - $ref: "#/components/parameters/IdPath"
     get:
       tags: [Finance]
-      summary: List payout-backed gross revenue recognized across stay nights.
+      summary: List payout-backed Net recognized across stay nights.
       parameters:
         - in: query
           name: month
           schema: { type: string, pattern: "^\\d{4}-\\d{2}$" }
       responses:
         "200":
-          description: Monthly gross revenue recognition report.
+          description: Monthly Net revenue recognition report.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/FinanceRevenueRecognitionResponse" }
@@ -887,8 +887,30 @@ paths:
 
   /properties/{id}/settings:
     parameters: [{ $ref: "#/components/parameters/IdPath" }]
-    get: *route-read
-    patch: *route-write
+    get:
+      tags: [Properties]
+      summary: Return property profile and integration settings.
+      responses:
+        "200":
+          description: Property settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PropertySettingsResponse" }
+    patch:
+      tags: [Properties]
+      summary: Update property profile settings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PropertySettingsPatchRequest" }
+      responses:
+        "200":
+          description: Updated property settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PropertySettingsResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /dashboard/summary:
     get:
       tags: [Dashboard]
@@ -1371,7 +1393,17 @@ paths:
     post: *route-write
   /properties/{id}/finance/summary:
     parameters: [{ $ref: "#/components/parameters/IdPath" }]
-    get: *route-read
+    get:
+      tags: [Finance]
+      summary: Return payout-date cashflow and monthly revenue summary.
+      responses:
+        "200":
+          description: Finance summary for the selected property and month.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceSummaryResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /properties/{id}/finance/categories:
     parameters: [{ $ref: "#/components/parameters/IdPath" }]
     get: *route-read
@@ -2425,13 +2457,51 @@ components:
         has_payout_data: { type: boolean }
         has_statement_data: { type: boolean }
 
+    FinanceSummaryResponse:
+      type: object
+      required: [month, total_incoming_cents, total_outgoing_cents, monthly_incoming_cents, monthly_outgoing_cents, monthly_net_cents, property_income_cents, monthly_property_income_cents, cleaner_expense_cents, cleaner_margin, breakdown, generated_entry_sync]
+      properties:
+        month: { type: string, pattern: "^\\d{4}-\\d{2}$" }
+        total_incoming_cents: { type: integer, format: int64, description: All-time signed payout Net plus other incoming transactions. }
+        total_outgoing_cents: { type: integer, format: int64, description: All-time outgoing transactions excluding booking payouts. }
+        monthly_incoming_cents: { type: integer, format: int64 }
+        monthly_outgoing_cents: { type: integer, format: int64 }
+        monthly_net_cents: { type: integer, format: int64 }
+        property_income_cents: { type: integer, format: int64, description: All-time signed canonical payout Net selected by payout date. }
+        monthly_property_income_cents: { type: integer, format: int64, description: Signed canonical payout Net selected by payout date. }
+        cleaner_expense_cents: { type: integer, format: int64 }
+        cleaner_margin: { type: number, format: double }
+        breakdown:
+          type: array
+          items:
+            type: object
+            required: [incoming_cents, outgoing_cents]
+            properties:
+              category_id: { type: integer, format: int64, nullable: true }
+              category_code: { type: string, nullable: true }
+              category_title: { type: string, nullable: true }
+              incoming_cents: { type: integer, format: int64 }
+              outgoing_cents: { type: integer, format: int64 }
+        generated_entry_sync:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [not_synced, synced] }
+            first_synced_at: { type: string, format: date-time, nullable: true }
+            first_synced_by: { type: integer, format: int64, nullable: true }
+            last_synced_at: { type: string, format: date-time, nullable: true }
+            last_synced_by: { type: integer, format: int64, nullable: true }
+            last_synced_reason: { type: string, nullable: true }
+
     FinanceRevenueRecognitionResponse:
       type: object
-      required: [month, gross_revenue_cents, recognized_booking_net_cents, other_incoming_cents, other_outgoing_cents, recognized_net_cents, bookings, excluded_bookings, long_term_comparison]
+      required: [month, gross_revenue_cents, recognized_booking_net_cents, late_checkout_incoming_cents, recognized_incoming_cents, other_incoming_cents, other_outgoing_cents, recognized_net_cents, bookings, excluded_bookings, long_term_comparison]
       properties:
         month: { type: string, pattern: "^\\d{4}-\\d{2}$" }
         gross_revenue_cents: { type: integer, format: int64 }
         recognized_booking_net_cents: { type: integer, format: int64 }
+        late_checkout_incoming_cents: { type: integer, format: int64 }
+        recognized_incoming_cents: { type: integer, format: int64 }
         other_incoming_cents: { type: integer, format: int64 }
         other_outgoing_cents: { type: integer, format: int64 }
         recognized_net_cents: { type: integer, format: int64 }
@@ -2487,7 +2557,7 @@ components:
 
     FinanceRevenueRecognitionBooking:
       type: object
-      required: [booking_id, reference_number, guest_name, check_in_date, check_out_date, gross_cents, stay_nights, recognized_nights, recognized_gross_cents, unmatched, cancelled, no_show]
+      required: [booking_id, reference_number, guest_name, check_in_date, check_out_date, gross_cents, net_cents, stay_nights, recognized_nights, recognized_gross_cents, recognized_net_cents, unmatched, cancelled, no_show]
       properties:
         booking_id: { type: integer, format: int64 }
         reference_number: { type: string }
@@ -2495,9 +2565,11 @@ components:
         check_in_date: { type: string, format: date }
         check_out_date: { type: string, format: date }
         gross_cents: { type: integer, format: int64 }
+        net_cents: { type: integer, format: int64 }
         stay_nights: { type: integer, minimum: 1 }
         recognized_nights: { type: integer, minimum: 0 }
         recognized_gross_cents: { type: integer, format: int64 }
+        recognized_net_cents: { type: integer, format: int64 }
         unmatched: { type: boolean }
         cancelled: { type: boolean }
         no_show: { type: boolean }
@@ -3165,11 +3237,12 @@ components:
             salary_draft: { type: integer }
         finance_month:
           type: object
-          required: [incoming, outgoing, net, recognized_gross]
+          required: [incoming, outgoing, net, recognized_incoming]
           properties:
             incoming: { type: integer }
             outgoing: { type: integer }
             net: { type: integer }
+            recognized_incoming: { type: integer }
             recognized_gross: { type: integer }
         recent_invoices:
           type: array
@@ -3294,6 +3367,32 @@ components:
         address: { type: string, nullable: true }
         timezone: { type: string, nullable: true }
 
+    PropertySettingsResponse:
+      type: object
+      required: [profile, integrations]
+      properties:
+        profile:
+          type: object
+          required: [default_check_in_time, default_check_out_time, late_check_out_time]
+          properties:
+            default_check_in_time: { type: string, pattern: "^\\d{2}:\\d{2}$" }
+            default_check_out_time: { type: string, pattern: "^\\d{2}:\\d{2}$" }
+            late_check_out_time: { type: string, pattern: "^\\d{2}:\\d{2}$", default: "13:00" }
+        integrations:
+          type: object
+          properties:
+            booking_ics_configured: { type: boolean }
+            nuki_configured: { type: boolean }
+
+    PropertySettingsPatchRequest:
+      type: object
+      properties:
+        profile:
+          type: object
+          properties:
+            late_check_out_time: { type: string, pattern: "^\\d{2}:\\d{2}$" }
+        secrets: { type: object }
+
     OccupancyCalendar:
       type: object
       required:
@@ -3377,6 +3476,7 @@ components:
         check_out_date: { type: string, format: date }
         status: { type: string, enum: [active, cancelled, archived] }
         cleaning_required: { type: boolean }
+        late_checkout: { type: boolean }
         review_status: { type: string, enum: [confirmed, needs_review, rejected] }
         review_reason: { type: string }
         outcome:
@@ -3477,6 +3577,7 @@ components:
             enum: [booking_com, external, maintenance, personal_use],
           }
         cleaning_required: { type: boolean }
+        late_checkout: { type: boolean, description: Only supported for booking_com and external stays. }
 
     CleaningCalendarEvent:
       type: object
@@ -3537,6 +3638,7 @@ components:
             enum: [booking_com, external, maintenance, personal_use],
           }
         cleaning_required: { type: boolean }
+        late_checkout: { type: boolean }
         manual_revenue_cents: { type: integer, format: int64, minimum: 0, nullable: true }
         manual_revenue_currency: { type: string, nullable: true }
         manual_revenue_note: { type: string, nullable: true }

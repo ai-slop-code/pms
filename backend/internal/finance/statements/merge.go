@@ -167,29 +167,14 @@ func mergePayout(b *CanonicalBooking, row Row, rawJSON string, out *MergeOutcome
 }
 
 func mergeCommissionAdjustment(b *CanonicalBooking, row Row, out *MergeOutcome) {
-	charge := -row.AmountCents
-	if charge < 0 {
-		return
-	}
-	if b.CommissionCents != nil {
-		v := *b.CommissionCents + charge
-		setIntPtrIfWins(&b.CommissionCents, &v, "commission_cents", true, out)
-	}
-	if b.NetCents != nil {
-		v := *b.NetCents + row.NetCents
-		setIntPtrIfWins(&b.NetCents, &v, "net_cents", true, out)
-	}
+	// A correction is a separate payout-date cash movement. It must not
+	// mutate the reservation's original payout, whose date may be in another
+	// month. The import side-effect layer records the adjustment separately.
 }
 
 func mergeRefund(b *CanonicalBooking, row Row, out *MergeOutcome) {
-	if b.AmountCents != nil {
-		v := *b.AmountCents + row.AmountCents
-		setIntPtrIfWins(&b.AmountCents, &v, "amount_cents", true, out)
-	}
-	if b.NetCents != nil {
-		v := *b.NetCents + row.NetCents
-		setIntPtrIfWins(&b.NetCents, &v, "net_cents", true, out)
-	}
+	// Refunds are separate payout-date cash movements. They must not mutate
+	// the reservation's original payout, whose date may be in another month.
 }
 
 func mergeStatement(b *CanonicalBooking, row Row, rawJSON string, out *MergeOutcome) {

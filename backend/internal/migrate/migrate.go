@@ -88,7 +88,7 @@ func up(db *sql.DB, automatic bool, onlyVersion string) error {
 			if _, manual := manualMigrations[version]; manual {
 				continue
 			}
-			if version == "000045_invoice_proforma" || version == "000046_invoice_line_items" {
+			if version == "000045_invoice_proforma" || version == "000046_invoice_line_items" || version == "000047_finance_payout_only_rows" {
 				var pms21Applied int
 				if err := db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE version = '000039_legacy_occupancy_removal'`).Scan(&pms21Applied); err != nil {
 					return fmt.Errorf("check PMS-21 migration prerequisite: %w", err)
@@ -119,7 +119,7 @@ func up(db *sql.DB, automatic bool, onlyVersion string) error {
 		}
 		// PMS-22 rebuilds both the event parent and its log children. Enforce
 		// their foreign keys at commit, once both replacement tables exist.
-		if version == "000040_named_stay_only_cleaning_calendar" || version == "000045_invoice_proforma" {
+		if version == "000040_named_stay_only_cleaning_calendar" || version == "000045_invoice_proforma" || version == "000047_finance_payout_only_rows" {
 			if _, err := tx.Exec(`PRAGMA defer_foreign_keys = ON`); err != nil {
 				_ = tx.Rollback()
 				return fmt.Errorf("defer table rebuild foreign keys: %w", err)

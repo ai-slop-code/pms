@@ -12,6 +12,9 @@ const payoutCSV = `"Reference number","Type","Guest name","Check-in","Checkout",
 const payoutBookingNumberCSV = `"Booking number","Type","Guest name","Check-in","Checkout","Amount","Commission","Payments service fee","Net","Currency","Payout date","Payout ID","Payment status","Reservation status"
 "6756848168","reservation","Synthetic Guest","10 May 2026","12 May 2026","180.00","-27.00","-2.00","151.00","EUR","15 May 2026","PO-456","paid","OK"`
 
+const payoutAdjustmentCSV = `"Booking number","Type","Guest name","Check-in","Checkout","Amount","Commission","VAT for online platform services","Payments Service Fee","Net","Currency","Payout date","Payout ID","Payment status","Reservation status"
+1664166249,debit_note,,,,,,,,"-579.51",EUR,"1 Oct 2026",s08hFFNDIh9VTT3z,,`
+
 const statementCSV = `"Reservation number","Invoice number","Booked on","Arrival","Departure","Booker name","Guest name","Rooms","Persons","Room nights","Commission %","Original amount","Final amount","Commission amount","Payment fee","Status","Guest request","Currency","Hotel id","Property name","City","Country"
 "1234567890","INV-1","2026-08-20T14:30:00","2026-09-01","2026-09-03","Booker","Test Guest","1","2","2","15.00","250.00","250.00","37.50","3.50","OK","Late arrival","EUR","HOTEL-1","Synthetic Property","Bratislava","SK"`
 
@@ -84,6 +87,20 @@ func TestParsePayout_BookingNumberColumn(t *testing.T) {
 	}
 	if res.Rows[0].ReferenceNumber != "6756848168" {
 		t.Fatalf("reference = %q, want 6756848168", res.Rows[0].ReferenceNumber)
+	}
+}
+
+func TestParsePayout_RetainsPayoutRowsWithoutStayDates(t *testing.T) {
+	res, err := DetectAndParse(strings.NewReader(payoutAdjustmentCSV), testLoc(t))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(res.Rows) != 1 || len(res.Rejected) != 0 {
+		t.Fatalf("rows=%d rejected=%+v, want one retained payout row", len(res.Rows), res.Rejected)
+	}
+	row := res.Rows[0]
+	if row.RowType != "debit_note" || row.NetCents != -57951 || !row.PayoutDate.Equal(time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("unexpected payout adjustment: %+v", row)
 	}
 }
 

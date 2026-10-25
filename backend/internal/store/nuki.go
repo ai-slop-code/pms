@@ -59,6 +59,7 @@ type NukiStay struct {
 	ReviewStatus    string
 	CheckInDate     string
 	CheckOutDate    string
+	LateCheckout    bool
 	Status          string
 	SourceReference sql.NullString
 }
@@ -389,7 +390,7 @@ func (s *Store) ListNamedStaysForNukiSync(ctx context.Context, propertyID int64)
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type,
 		       COALESCE(ns.review_status, 'confirmed'), ns.check_in_date, ns.check_out_date,
-		       ns.status, ns.source_reference
+		       ns.status, ns.late_checkout, ns.source_reference
 		FROM named_stays ns
 		WHERE ns.property_id = ?
 		  AND ns.status = 'active'
@@ -408,7 +409,7 @@ func (s *Store) ListNamedStaysForNukiRevocation(ctx context.Context, propertyID 
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type,
 		       COALESCE(ns.review_status, 'confirmed'), ns.check_in_date, ns.check_out_date,
-		       ns.status, ns.source_reference
+		       ns.status, ns.late_checkout, ns.source_reference
 		FROM named_stays ns
 		WHERE ns.property_id = ?
 		  AND (
@@ -429,9 +430,11 @@ func scanNukiStays(rows *sql.Rows) ([]NukiStay, error) {
 	out := []NukiStay{}
 	for rows.Next() {
 		var r NukiStay
-		if err := rows.Scan(&r.NamedStayID, &r.PropertyID, &r.DisplayName, &r.StayType, &r.ReviewStatus, &r.CheckInDate, &r.CheckOutDate, &r.Status, &r.SourceReference); err != nil {
+		var lateCheckout int
+		if err := rows.Scan(&r.NamedStayID, &r.PropertyID, &r.DisplayName, &r.StayType, &r.ReviewStatus, &r.CheckInDate, &r.CheckOutDate, &r.Status, &lateCheckout, &r.SourceReference); err != nil {
 			return nil, err
 		}
+		r.LateCheckout = lateCheckout == 1
 		out = append(out, r)
 	}
 	return out, rows.Err()

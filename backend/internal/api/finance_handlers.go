@@ -171,9 +171,11 @@ type financeRevenueRecognitionBookingRow struct {
 	CheckInDate          string `json:"check_in_date"`
 	CheckOutDate         string `json:"check_out_date"`
 	GrossCents           int    `json:"gross_cents"`
+	NetCents             int    `json:"net_cents"`
 	StayNights           int    `json:"stay_nights"`
 	RecognizedNights     int    `json:"recognized_nights"`
 	RecognizedGrossCents int    `json:"recognized_gross_cents"`
+	RecognizedNetCents   int    `json:"recognized_net_cents"`
 	Unmatched            bool   `json:"unmatched"`
 	Cancelled            bool   `json:"cancelled"`
 	NoShow               bool   `json:"no_show"`
@@ -192,6 +194,8 @@ type financeRevenueRecognitionResponse struct {
 	Month                     string                                `json:"month"`
 	GrossRevenueCents         int                                   `json:"gross_revenue_cents"`
 	RecognizedBookingNetCents int                                   `json:"recognized_booking_net_cents"`
+	LateCheckoutIncomingCents int                                   `json:"late_checkout_incoming_cents"`
+	RecognizedIncomingCents   int                                   `json:"recognized_incoming_cents"`
 	OtherIncomingCents        int                                   `json:"other_incoming_cents"`
 	OtherOutgoingCents        int                                   `json:"other_outgoing_cents"`
 	RecognizedNetCents        int                                   `json:"recognized_net_cents"`
@@ -495,7 +499,7 @@ func (s *Server) getFinanceRevenueRecognition(w http.ResponseWriter, r *http.Req
 			WriteError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		recognizedNet := int64(report.RecognizedBookingNetCents + otherIncoming - otherOutgoing)
+		recognizedNet := int64(report.RecognizedIncomingCents - otherOutgoing)
 		longTermNet := rate.MonthlyRentCents - eligibleOutgoing
 		difference := recognizedNet - longTermNet
 		outcome := "equal"
@@ -518,9 +522,11 @@ func (s *Server) getFinanceRevenueRecognition(w http.ResponseWriter, r *http.Req
 			CheckInDate:          row.CheckInDate,
 			CheckOutDate:         row.CheckOutDate,
 			GrossCents:           row.GrossCents,
+			NetCents:             row.NetCents,
 			StayNights:           row.StayNights,
 			RecognizedNights:     row.RecognizedNights,
 			RecognizedGrossCents: row.RecognizedGrossCents,
+			RecognizedNetCents:   row.RecognizedNetCents,
 			Unmatched:            row.Unmatched,
 			Cancelled:            row.Cancelled,
 			NoShow:               row.NoShow,
@@ -541,9 +547,11 @@ func (s *Server) getFinanceRevenueRecognition(w http.ResponseWriter, r *http.Req
 		Month:                     report.Month,
 		GrossRevenueCents:         report.GrossRevenueCents,
 		RecognizedBookingNetCents: report.RecognizedBookingNetCents,
+		LateCheckoutIncomingCents: report.LateCheckoutIncomingCents,
+		RecognizedIncomingCents:   report.RecognizedIncomingCents,
 		OtherIncomingCents:        otherIncoming,
 		OtherOutgoingCents:        otherOutgoing,
-		RecognizedNetCents:        report.RecognizedBookingNetCents + otherIncoming - otherOutgoing,
+		RecognizedNetCents:        report.RecognizedIncomingCents - otherOutgoing,
 		Bookings:                  bookings,
 		ExcludedBookings:          issues,
 		LongTermComparison:        comparison,

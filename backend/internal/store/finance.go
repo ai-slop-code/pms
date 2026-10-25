@@ -670,7 +670,11 @@ func (s *Store) SyncFinanceGeneratedEntriesForMonth(ctx context.Context, propert
 	if err != nil {
 		return nil, changes, err
 	}
-	if cleaningSummary != nil && cleaningSummary.FinalSalaryCents > 0 && cleaningCategoryID > 0 {
+	ordinarySalary := 0
+	if cleaningSummary != nil {
+		ordinarySalary = cleaningSummary.BaseSalaryCents + cleaningSummary.AdjustmentsTotalCents
+	}
+	if cleaningSummary != nil && ordinarySalary > 0 && cleaningCategoryID > 0 {
 		var existingID int64
 		err := tx.QueryRowContext(ctx, `
 			SELECT id
@@ -688,7 +692,7 @@ func (s *Store) SyncFinanceGeneratedEntriesForMonth(ctx context.Context, propert
 					property_id, transaction_date, direction, amount_cents, category_id, note,
 					source_type, source_reference_id, is_auto_generated, created_at, updated_at
 				) VALUES (?, ?, 'outgoing', ?, ?, ?, 'cleaning_salary', ?, 1, ?, ?)`,
-				propertyID, monthStartRFC, cleaningSummary.FinalSalaryCents, cleaningCategoryID,
+				propertyID, monthStartRFC, ordinarySalary, cleaningCategoryID,
 				fmt.Sprintf("Cleaner salary for %s", monthRef), monthRef, now, now)
 			if err != nil {
 				return nil, changes, err
@@ -700,7 +704,7 @@ func (s *Store) SyncFinanceGeneratedEntriesForMonth(ctx context.Context, propert
 				UPDATE finance_transactions
 				SET transaction_date = ?, amount_cents = ?, category_id = ?, note = ?, updated_at = ?
 				WHERE id = ?`,
-				monthStartRFC, cleaningSummary.FinalSalaryCents, cleaningCategoryID, fmt.Sprintf("Cleaner salary for %s", monthRef), now, existingID)
+				monthStartRFC, ordinarySalary, cleaningCategoryID, fmt.Sprintf("Cleaner salary for %s", monthRef), now, existingID)
 			if err != nil {
 				return nil, changes, err
 			}
@@ -726,50 +730,58 @@ func (s *Store) SyncFinanceGeneratedEntriesForMonth(ctx context.Context, propert
 
 func (s *Store) ComputeFinanceSummary(ctx context.Context, propertyID int64, month string) (*FinanceSummary, error) {
 	summary := &FinanceSummary{Month: month, Breakdown: []FinanceCategoryBreakdown{}}
-
-	_ = s.DB.QueryRowContext(ctx, `
+	var otherIncoming, otherOutgoing int
+	if err := s.DB.QueryRowContext(ctx, `
 		SELECT
 			COALESCE(SUM(CASE WHEN direction = 'incoming' THEN amount_cents ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN direction = 'outgoing' THEN amount_cents ELSE 0 END), 0)
 		FROM finance_transactions
-		WHERE property_id = ?`, propertyID).
-		Scan(&summary.TotalIncomingCents, &summary.TotalOutgoingCents)
-
-	_ = s.DB.QueryRowContext(ctx, `
-		SELECT
-			COALESCE(SUM(CASE WHEN direction = 'incoming' THEN amount_cents ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN direction = 'outgoing' THEN amount_cents ELSE 0 END), 0)
+		WHERE property_id = ? AND source_type NOT IN ('booking_payout', 'booking_payout_adjustment')`, propertyID).
+		Scan(&otherIncoming, &otherOutgoing); err != nil {
+		return nil, err
+	}
+	monthlyOtherIncoming, monthlyOtherOutgoing, err := s.ComputeFinanceOtherMovements(ctx, propertyID, month)
+	if err != nil {
+		return nil, err
+	}
+	var payoutIncome, monthlyPayoutIncome, adjustmentIncome, monthlyAdjustmentIncome int
+	if err := s.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(net_cents), 0),
+		       COALESCE(SUM(CASE WHEN substr(payout_date, 1, 7) = ? THEN net_cents ELSE 0 END), 0)
+		FROM finance_bookings
+		WHERE property_id = ? AND has_payout_data = 1`, month, propertyID).
+		Scan(&payoutIncome, &monthlyPayoutIncome); err != nil {
+		return nil, err
+	}
+	if err := s.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(CASE WHEN direction = 'incoming' THEN amount_cents ELSE -amount_cents END), 0),
+		       COALESCE(SUM(CASE WHEN substr(transaction_date, 1, 7) = ?
+		                         THEN CASE WHEN direction = 'incoming' THEN amount_cents ELSE -amount_cents END
+		                         ELSE 0 END), 0)
 		FROM finance_transactions
-		WHERE property_id = ? AND substr(transaction_date, 1, 7) = ?`, propertyID, month).
-		Scan(&summary.MonthlyIncomingCents, &summary.MonthlyOutgoingCents)
+		WHERE property_id = ? AND source_type = 'booking_payout_adjustment'`, month, propertyID).
+		Scan(&adjustmentIncome, &monthlyAdjustmentIncome); err != nil {
+		return nil, err
+	}
+	payoutIncome += adjustmentIncome
+	monthlyPayoutIncome += monthlyAdjustmentIncome
+	summary.PropertyIncomeCents = payoutIncome
+	summary.MonthlyPropertyIncomeCents = monthlyPayoutIncome
+	summary.TotalIncomingCents = payoutIncome + otherIncoming
+	summary.TotalOutgoingCents = otherOutgoing
+	summary.MonthlyIncomingCents = monthlyPayoutIncome + monthlyOtherIncoming
+	summary.MonthlyOutgoingCents = monthlyOtherOutgoing
 	summary.MonthlyNetCents = summary.MonthlyIncomingCents - summary.MonthlyOutgoingCents
 
-	_ = s.DB.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(ft.amount_cents), 0)
-		FROM finance_transactions ft
-		INNER JOIN finance_categories fc ON fc.id = ft.category_id
-		WHERE ft.property_id = ?
-		  AND ft.direction = 'incoming'
-		  AND fc.counts_toward_property_income = 1`, propertyID).
-		Scan(&summary.PropertyIncomeCents)
-
-	_ = s.DB.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(ft.amount_cents), 0)
-		FROM finance_transactions ft
-		INNER JOIN finance_categories fc ON fc.id = ft.category_id
-		WHERE ft.property_id = ?
-		  AND ft.direction = 'incoming'
-		  AND fc.counts_toward_property_income = 1
-		  AND substr(ft.transaction_date, 1, 7) = ?`, propertyID, month).
-		Scan(&summary.MonthlyPropertyIncomeCents)
-
-	_ = s.DB.QueryRowContext(ctx, `
+	if err := s.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(amount_cents), 0)
 		FROM finance_transactions
 		WHERE property_id = ?
-		  AND source_type = 'cleaning_salary'
+		  AND source_type IN ('cleaning_salary', 'late_checkout_cleaner_bonus')
 		  AND source_reference_id = ?`, propertyID, month).
-		Scan(&summary.CleanerExpenseCents)
+		Scan(&summary.CleanerExpenseCents); err != nil {
+		return nil, err
+	}
 
 	if summary.MonthlyPropertyIncomeCents > 0 {
 		summary.CleanerMargin = float64(summary.CleanerExpenseCents) / float64(summary.MonthlyPropertyIncomeCents)
@@ -782,18 +794,67 @@ func (s *Store) ComputeFinanceSummary(ctx context.Context, propertyID int64, mon
 		FROM finance_transactions ft
 		LEFT JOIN finance_categories fc ON fc.id = ft.category_id
 		WHERE ft.property_id = ? AND substr(ft.transaction_date, 1, 7) = ?
+		  AND ft.source_type NOT IN ('booking_payout', 'booking_payout_adjustment')
 		GROUP BY ft.category_id, fc.code, fc.title
 		ORDER BY outgoing_cents DESC, incoming_cents DESC`, propertyID, month)
 	if err != nil {
-		return summary, nil
+		return nil, err
 	}
 	defer rows.Close()
+	breakdown := make(map[string]*FinanceCategoryBreakdown)
 	for rows.Next() {
 		var r FinanceCategoryBreakdown
 		if err := rows.Scan(&r.CategoryID, &r.CategoryCode, &r.CategoryTitle, &r.IncomingCents, &r.OutgoingCents); err != nil {
-			return summary, nil
+			return nil, err
 		}
-		summary.Breakdown = append(summary.Breakdown, r)
+		key := fmt.Sprintf("%v:%s", r.CategoryID, r.CategoryCode.String)
+		breakdown[key] = &r
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Payout transactions are excluded above. Attribute each canonical payout
+	// once, using its linked category where available and booking_income as the
+	// fallback category, without making the linked cash row authoritative.
+	payoutRows, err := s.DB.QueryContext(ctx, `
+		SELECT fb.net_cents,
+		       COALESCE(fc.id, fallback.id),
+		       COALESCE(fc.code, fallback.code),
+		       COALESCE(fc.title, fallback.title)
+		FROM finance_bookings fb
+		LEFT JOIN finance_transactions ft
+		  ON ft.id = fb.transaction_id AND ft.property_id = fb.property_id
+		 AND ft.source_type = 'booking_payout'
+		LEFT JOIN finance_categories fc ON fc.id = ft.category_id
+		LEFT JOIN finance_categories fallback
+		  ON fallback.code = 'booking_income' AND fallback.active = 1
+		 AND (fallback.property_id IS NULL OR fallback.property_id = fb.property_id)
+		WHERE fb.property_id = ? AND fb.has_payout_data = 1
+		  AND substr(fb.payout_date, 1, 7) = ?`, propertyID, month)
+	if err != nil {
+		return nil, err
+	}
+	defer payoutRows.Close()
+	for payoutRows.Next() {
+		var amount int
+		var categoryID sql.NullInt64
+		var categoryCode, categoryTitle sql.NullString
+		if err := payoutRows.Scan(&amount, &categoryID, &categoryCode, &categoryTitle); err != nil {
+			return nil, err
+		}
+		key := fmt.Sprintf("%v:%s", categoryID, categoryCode.String)
+		row := breakdown[key]
+		if row == nil {
+			row = &FinanceCategoryBreakdown{CategoryID: categoryID, CategoryCode: categoryCode, CategoryTitle: categoryTitle}
+			breakdown[key] = row
+		}
+		row.IncomingCents += amount
+	}
+	if err := payoutRows.Err(); err != nil {
+		return nil, err
+	}
+	for _, row := range breakdown {
+		summary.Breakdown = append(summary.Breakdown, *row)
 	}
 	return summary, nil
 }

@@ -35,6 +35,7 @@ type NamedStay struct {
 	CheckOutDate            string         `json:"check_out_date"`
 	Status                  string         `json:"status"`
 	CleaningRequired        bool           `json:"cleaning_required"`
+	LateCheckout            bool           `json:"late_checkout"`
 	CleaningOverrideReason  sql.NullString `json:"-"`
 	SourceChannel           sql.NullString `json:"-"`
 	SourceReference         sql.NullString `json:"-"`
@@ -65,6 +66,7 @@ type NamedStayCreateInput struct {
 	CheckInDate            string
 	CheckOutDate           string
 	CleaningRequired       *bool
+	LateCheckout           *bool
 	CleaningOverrideReason string
 	SourceChannel          string
 	SourceReference        string
@@ -81,6 +83,7 @@ type NamedStayUpdateInput struct {
 	CheckInDate            *string
 	CheckOutDate           *string
 	CleaningRequired       *bool
+	LateCheckout           *bool
 	CleaningOverrideReason *string
 	ManualRevenueCents     *int64
 	ManualRevenueCurrency  *string
@@ -168,6 +171,10 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 	if in.CleaningRequired != nil {
 		cleaningRequired = *in.CleaningRequired
 	}
+	lateCheckout := in.LateCheckout != nil && *in.LateCheckout
+	if stayType != StayTypeBookingCom && stayType != StayTypeExternal {
+		lateCheckout = false
+	}
 	reviewStatus := strings.TrimSpace(in.ReviewStatus)
 	if reviewStatus == "" {
 		reviewStatus = "confirmed"
@@ -214,12 +221,12 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO named_stays (
 			property_id, display_name, stay_type, check_in_date, check_out_date, status,
-			cleaning_required, cleaning_override_reason, source_channel, source_reference,
+			cleaning_required, late_checkout, cleaning_override_reason, source_channel, source_reference,
 			review_status, review_resolution, review_reason, nuki_generation_status, created_by_user_id, updated_by_user_id,
 			first_known_at, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		in.PropertyID, displayName, stayType, ci.Format("2006-01-02"), co.Format("2006-01-02"), boolInt(cleaningRequired),
+		VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		in.PropertyID, displayName, stayType, ci.Format("2006-01-02"), co.Format("2006-01-02"), boolInt(cleaningRequired), boolInt(lateCheckout),
 		nullableString(strings.TrimSpace(in.CleaningOverrideReason)), nullableString(strings.TrimSpace(in.SourceChannel)), nullableString(sourceReference),
 		reviewStatus, reviewResolution, nullableString(strings.TrimSpace(in.ReviewReason)), nukiStatus,
 		nullableInt64(in.CreatedByUserID), nullableInt64(in.CreatedByUserID), firstKnownAt, nowStr, nowStr)
@@ -243,6 +250,13 @@ func (s *Store) CreateNamedStayRecord(ctx context.Context, in NamedStayCreateInp
 			in.PropertyID, stayID, raw.id, raw.sourceType, raw.sourceEventUID, ci.Format("2006-01-02"), co.Format("2006-01-02"), nowStr, nowStr); err != nil {
 			return nil, err
 		}
+	}
+	created, err := getNamedStayTx(ctx, tx, in.PropertyID, stayID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.reconcileLateCheckoutTx(ctx, tx, created); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -317,6 +331,13 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 	if in.CleaningRequired != nil {
 		cleaningRequired = *in.CleaningRequired
 	}
+	lateCheckout := current.LateCheckout
+	if in.LateCheckout != nil {
+		lateCheckout = *in.LateCheckout
+	}
+	if stayType != StayTypeBookingCom && stayType != StayTypeExternal {
+		lateCheckout = false
+	}
 	var cleaningReason interface{}
 	if in.CleaningOverrideReason != nil {
 		cleaningReason = nullableString(strings.TrimSpace(*in.CleaningOverrideReason))
@@ -337,11 +358,11 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE named_stays
-		SET display_name = ?, stay_type = ?, check_in_date = ?, check_out_date = ?, cleaning_required = ?,
+		SET display_name = ?, stay_type = ?, check_in_date = ?, check_out_date = ?, cleaning_required = ?, late_checkout = ?,
 			cleaning_override_reason = ?, manual_revenue_cents = ?, manual_revenue_currency = ?, manual_revenue_note = ?,
 			updated_by_user_id = ?, updated_at = ?
 		WHERE property_id = ? AND id = ?`,
-		displayName, stayType, ci.Format("2006-01-02"), co.Format("2006-01-02"), boolInt(cleaningRequired), cleaningReason,
+		displayName, stayType, ci.Format("2006-01-02"), co.Format("2006-01-02"), boolInt(cleaningRequired), boolInt(lateCheckout), cleaningReason,
 		manualRevenueCentsArg(current.ManualRevenueCents, in.ManualRevenueCents), manualRevenueStringArg(current.ManualRevenueCurrency, in.ManualRevenueCurrency), manualRevenueStringArg(current.ManualRevenueNote, in.ManualRevenueNote),
 		nullableInt64(in.UpdatedByUserID), nowStr, propertyID, stayID); err != nil {
 		return nil, err
@@ -357,6 +378,13 @@ func (s *Store) UpdateNamedStayRecord(ctx context.Context, propertyID, stayID in
 		if err := replaceNamedStayNightsTx(ctx, tx, propertyID, stayID, nightsUTC(ci, co), true, nowStr); err != nil {
 			return nil, err
 		}
+	}
+	updated, err := getNamedStayTx(ctx, tx, propertyID, stayID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.reconcileLateCheckoutTx(ctx, tx, updated); err != nil {
+		return nil, err
 	}
 	if _, err := recomputeSourceLinkHealthTx(ctx, tx, propertyID, nowStr); err != nil {
 		return nil, err
@@ -405,7 +433,19 @@ func (s *Store) UpdateNamedStayStatus(ctx context.Context, propertyID, stayID in
 		return nil, err
 	}
 	active := status == NamedStayStatusActive
+	if status != NamedStayStatusActive {
+		if _, err := tx.ExecContext(ctx, `UPDATE named_stays SET late_checkout = 0 WHERE property_id = ? AND id = ?`, propertyID, stayID); err != nil {
+			return nil, err
+		}
+	}
 	if err := replaceNamedStayNightsTx(ctx, tx, propertyID, stayID, nightsUTC(ci, co), active, nowStr); err != nil {
+		return nil, err
+	}
+	updated, err := getNamedStayTx(ctx, tx, propertyID, stayID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.reconcileLateCheckoutTx(ctx, tx, updated); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -431,7 +471,12 @@ func (s *Store) UpdateNamedStayOutcome(ctx context.Context, propertyID, stayID, 
 		actorValue = nullableInt64(userID)
 		markedAt = now
 	}
-	res, err := s.DB.ExecContext(ctx, `
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `
 		UPDATE named_stays
 		SET stay_outcome = ?, stay_outcome_reason = ?, stay_outcome_actor_user_id = ?,
 			stay_outcome_marked_at = ?,
@@ -443,6 +488,22 @@ func (s *Store) UpdateNamedStayOutcome(ctx context.Context, propertyID, stayID, 
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, sql.ErrNoRows
+	}
+	updated, err := getNamedStayTx(ctx, tx, propertyID, stayID)
+	if err != nil {
+		return nil, err
+	}
+	if value != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE named_stays SET late_checkout = 0 WHERE property_id = ? AND id = ?`, propertyID, stayID); err != nil {
+			return nil, err
+		}
+		updated.LateCheckout = false
+	}
+	if err := s.reconcileLateCheckoutTx(ctx, tx, updated); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return s.GetNamedStay(ctx, propertyID, stayID)
 }
@@ -491,7 +552,7 @@ func NamedStayNukiEligible(stayType, reviewStatus string) bool {
 
 const namedStaySelectSQL = `
 	SELECT ns.id, ns.property_id, ns.display_name, ns.stay_type, ns.check_in_date, ns.check_out_date, ns.status,
-	       ns.cleaning_required, ns.cleaning_override_reason, ns.source_channel, ns.source_reference,
+	       ns.cleaning_required, ns.late_checkout, ns.cleaning_override_reason, ns.source_channel, ns.source_reference,
 	       ns.manual_revenue_cents, ns.manual_revenue_currency, ns.manual_revenue_note,
 	       COALESCE(ns.review_resolution, ns.review_status),
 	       ns.review_reason, ns.review_actor_user_id, ns.reviewed_at,
@@ -508,8 +569,9 @@ func scanNamedStays(rows *sql.Rows) ([]NamedStay, error) {
 		var cleaning int
 		var firstKnown, created, updated string
 		var reviewed, outcomeMarked, nukiUpdated, cancelled sql.NullString
+		var lateCheckout int
 		if err := rows.Scan(&n.ID, &n.PropertyID, &n.DisplayName, &n.StayType, &n.CheckInDate, &n.CheckOutDate, &n.Status,
-			&cleaning, &n.CleaningOverrideReason, &n.SourceChannel, &n.SourceReference,
+			&cleaning, &lateCheckout, &n.CleaningOverrideReason, &n.SourceChannel, &n.SourceReference,
 			&n.ManualRevenueCents, &n.ManualRevenueCurrency, &n.ManualRevenueNote,
 			&n.ReviewStatus, &n.ReviewReason, &n.ReviewActorUserID, &reviewed,
 			&n.StayOutcome, &n.StayOutcomeReason, &n.StayOutcomeActorUserID, &outcomeMarked,
@@ -518,6 +580,7 @@ func scanNamedStays(rows *sql.Rows) ([]NamedStay, error) {
 			return nil, err
 		}
 		n.CleaningRequired = cleaning == 1
+		n.LateCheckout = lateCheckout == 1
 		n.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		n.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
 		n.FirstKnownAt = parseNamedStayTime(firstKnown)

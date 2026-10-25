@@ -90,6 +90,8 @@ function apiRouter(handlers: Record<string, () => unknown>) {
         month: '2026-04',
         gross_revenue_cents: 0,
         recognized_booking_net_cents: 0,
+        late_checkout_incoming_cents: 0,
+        recognized_incoming_cents: 0,
         other_incoming_cents: 0,
         other_outgoing_cents: 0,
         recognized_net_cents: 0,
@@ -183,6 +185,8 @@ describe('FinanceView', () => {
         month: '2026-04',
         gross_revenue_cents: 6666,
         recognized_booking_net_cents: 5333,
+        late_checkout_incoming_cents: 0,
+        recognized_incoming_cents: 5333,
         other_incoming_cents: 0,
         other_outgoing_cents: 0,
         recognized_net_cents: 5333,
@@ -196,7 +200,9 @@ describe('FinanceView', () => {
             gross_cents: 10000,
             stay_nights: 3,
             recognized_nights: 2,
+            net_cents: 8000,
             recognized_gross_cents: 6666,
+            recognized_net_cents: 5333,
             unmatched: true,
             cancelled: false,
             no_show: false,
@@ -208,7 +214,7 @@ describe('FinanceView', () => {
     const w = mount(FinanceView)
     await flushPromises()
 
-    expect(w.text()).toContain('Recognized gross')
+    expect(w.text()).toContain('Recognized incoming')
     const revenueTab = w.findAll('button').find((button) => button.text() === 'Revenue')
     expect(revenueTab).toBeTruthy()
     await revenueTab!.trigger('click')
@@ -266,6 +272,8 @@ describe('FinanceView', () => {
           },
           would_preserve: {
             cleaning_salary_transactions: 1,
+            late_checkout_charges: 0,
+            late_checkout_bonuses: 0,
             cleaning_daily_logs: 4,
             cleaning_salary_adjustments: 1,
             cleaner_fee_history: 1,
@@ -292,6 +300,8 @@ describe('FinanceView', () => {
           },
           preserved: {
             cleaning_salary_transactions: 1,
+            late_checkout_charges: 0,
+            late_checkout_bonuses: 0,
             cleaning_daily_logs: 4,
             cleaning_salary_adjustments: 1,
             cleaner_fee_history: 1,
@@ -308,12 +318,14 @@ describe('FinanceView', () => {
       if (url.includes('/finance/recurring-rules')) return Promise.resolve({ rules: [] })
       if (url.includes('/finance/revenue-recognition')) {
         return Promise.resolve({
-        month: '2026-04',
-        gross_revenue_cents: 0,
-        recognized_booking_net_cents: 0,
-        other_incoming_cents: 0,
-        other_outgoing_cents: 0,
-        recognized_net_cents: 0,
+          month: '2026-04',
+          gross_revenue_cents: 0,
+          recognized_booking_net_cents: 0,
+          late_checkout_incoming_cents: 0,
+          recognized_incoming_cents: 0,
+          other_incoming_cents: 0,
+          other_outgoing_cents: 0,
+          recognized_net_cents: 0,
           bookings: [],
           excluded_bookings: [],
         })
@@ -350,7 +362,9 @@ describe('FinanceView', () => {
           options?.json?.preserve_cleaning_salary === true,
       ),
     ).toBe(true)
-    expect(apiMock.mock.calls.filter(([u]) => typeof u === 'string' && u.includes('/finance/summary')).length).toBeGreaterThan(1)
+    expect(
+      apiMock.mock.calls.filter(([u]) => typeof u === 'string' && u.includes('/finance/summary')).length,
+    ).toBeGreaterThan(1)
   })
 
   it('surfaces an error banner when the initial load rejects', async () => {

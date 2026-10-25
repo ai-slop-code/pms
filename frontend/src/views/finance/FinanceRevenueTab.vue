@@ -30,14 +30,15 @@ function issueLabel(reason: string): string {
 <template>
   <div>
     <UiSection
-      title="Gross revenue recognition"
-      description="Paid Booking.com gross revenue allocated evenly across checkout-exclusive stay nights. Cash transactions remain on their payout dates."
+      title="Monthly Revenue"
+      description="Payout Net allocated over stay nights, plus late-checkout charges on the checkout date."
     >
       <div class="revenue-kpi">
         <UiKpiCard
-          label="Recognized gross"
-          :value="formatEuros(report.gross_revenue_cents)"
+          label="Recognized incoming"
+          :value="formatEuros(report.recognized_incoming_cents)"
           :hint="`${report.bookings.length} payout-backed booking${report.bookings.length === 1 ? '' : 's'}`"
+          calculation-help="Payout Net is allocated over stay nights. Late-checkout charges are recognized in full in their checkout month; paid cancellations and no-shows count in the scheduled check-in month."
           tone="success"
           hero
         />
@@ -52,7 +53,7 @@ function issueLabel(reason: string): string {
       <UiTable
         sticky-header
         :empty="!report.bookings.length"
-        empty-text="No payout-backed gross revenue is recognized for this month."
+        empty-text="No payout-backed incoming is recognized for this month."
       >
         <template #head>
           <tr>
@@ -60,8 +61,8 @@ function issueLabel(reason: string): string {
             <th scope="col">Stay dates</th>
             <th scope="col">Recognized nights</th>
             <th scope="col">Status</th>
-            <th scope="col" class="num">Stay gross</th>
-            <th scope="col" class="num">Recognized gross</th>
+            <th scope="col" class="num">Stay net</th>
+            <th scope="col" class="num">Recognized incoming</th>
           </tr>
         </template>
         <tr v-for="booking in report.bookings" :key="booking.booking_id">
@@ -95,18 +96,23 @@ function issueLabel(reason: string): string {
               >
             </div>
           </td>
-          <td class="num">{{ formatEuros(booking.gross_cents) }}</td>
+          <td class="num">{{ formatEuros(booking.net_cents) }}</td>
           <td class="num">
-            <strong>{{ formatEuros(booking.recognized_gross_cents) }}</strong>
+            <strong>{{ formatEuros(booking.recognized_net_cents) }}</strong>
           </td>
         </tr>
       </UiTable>
     </UiSection>
 
+    <p class="section-footnote">
+      Income is allocated across stay nights within the selected calendar month. Expenses use their
+      transaction date.
+    </p>
+
     <UiSection
       v-if="report.excluded_bookings.length"
       title="Revenue data issues"
-      description="These payout-backed bookings are excluded from every recognized-revenue total until their stay dates are corrected by a later import."
+      description="These payout-backed bookings are excluded from every recognized-incoming total until their stay dates are corrected by a later import."
     >
       <UiTable sticky-header>
         <template #head>

@@ -67,4 +67,24 @@ describe('UiKpiCard', () => {
     })
     expect(wrapper.find('.ui-kpi__hint').text()).toBe('Since last week')
   })
+
+  it('reveals calculation help through hover, focus, click, and Escape', async () => {
+    const wrapper = mount(UiKpiCard, {
+      props: { label: 'Monthly incoming', value: '€100', calculationHelp: 'Income formula' },
+    })
+    const trigger = wrapper.find('.ui-kpi__help-trigger')
+    expect(wrapper.find('.ui-kpi__help').exists()).toBe(false)
+
+    await trigger.trigger('focus')
+    expect(wrapper.find('.ui-kpi__help').text()).toBe('Income formula')
+    expect(trigger.attributes('aria-describedby')).toBe(wrapper.find('.ui-kpi__help').attributes('id'))
+
+    await trigger.trigger('keydown.esc')
+    expect(wrapper.find('.ui-kpi__help').exists()).toBe(false)
+
+    await trigger.trigger('click')
+    expect(wrapper.find('.ui-kpi__help').exists()).toBe(true)
+    await trigger.trigger('click')
+    expect(wrapper.find('.ui-kpi__help').exists()).toBe(false)
+  })
 })

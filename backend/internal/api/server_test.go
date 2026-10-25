@@ -323,11 +323,14 @@ func TestDashboardSummary_IncludesOnlyAuthorizedWidgets(t *testing.T) {
 	if err := json.Unmarshal(payload.Widgets["finance_month"], &financeWidget); err != nil {
 		t.Fatal(err)
 	}
-	if got := int(financeWidget["net"].(float64)); got != 12345 {
-		t.Fatalf("finance net=%d want 12345", got)
+	if got := int(financeWidget["net"].(float64)); got != 52345 {
+		t.Fatalf("finance net=%d want 52345", got)
 	}
 	if got := int(financeWidget["recognized_gross"].(float64)); got != 45678 {
 		t.Fatalf("recognized gross=%d want 45678", got)
+	}
+	if got := int(financeWidget["recognized_incoming"].(float64)); got != 40000 {
+		t.Fatalf("recognized incoming=%d want 40000", got)
 	}
 }
 

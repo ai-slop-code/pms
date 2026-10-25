@@ -5,6 +5,17 @@ This folder contains the full specification package for the PMS project and is i
 
 ## Current Authority
 
+For late checkout, `PMS_39_Late_Checkout_Spec.md` defines the confirmed stay-checkbox,
+checkout-date charge and cleaner bonus, recognized-income addition, configurable
+Nuki expiry, and Finance reset preservation. It includes an AI-agent implementation
+plan and acceptance criteria. Status: specification only; not implemented.
+
+For Finance cashflow and recognized revenue, `PMS_38_Finance_Monthly_Cashflow_and_Revenue_Spec.md`
+defines the confirmed reporting corrections across Overview, Revenue, Dashboard,
+Lifetime totals, and Breakdown. It uses signed payout Net, counts payout deductions
+as reduced income only, retains original-payout-date corrections, and defines the
+shared KPI calculation help. Status: ready for implementation.
+
 For invoice itemization, `PMS_37_Invoice_Line_Items_Spec.md` extends PMS 36 with
 fractional-quantity line items on both document types, preserved saved totals,
 and the pro forma-to-final-invoice draft workflow.
@@ -32,6 +43,17 @@ schema, and the offline deployment procedure. Implementation may proceed when
 requested; final specification status does not claim completed deployment.
 
 ## Files
+
+### `PMS_39_Late_Checkout_Spec.md`
+Confirmed late-checkout requirements, current-code integration map, transaction and
+salary consistency rules, Nuki configuration, Finance recognition/reset behavior,
+phased implementation plan, and acceptance criteria.
+
+### `PMS_38_Finance_Monthly_Cashflow_and_Revenue_Spec.md`
+Confirmed Finance reporting definitions, existing-code reuse map, API/UI changes,
+implementation sequence, and acceptance criteria for Monthly CashFlow and Monthly
+Revenue. Supersedes conflicting earlier Finance reporting rules while preserving
+existing stay allocation and Long-term net behavior.
 
 ### `PMS_00_Implementation_Prompt.md`
 Single handoff prompt for the implementation agent. This is the best starting point when you want an AI coding agent to begin building the project.

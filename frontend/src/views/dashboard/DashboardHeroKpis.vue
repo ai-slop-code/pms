@@ -32,13 +32,14 @@ const upcoming7DayCount = computed(() => {
       :value="eur(finance.net)"
       :tone="finance.net < 0 ? 'danger' : 'success'"
       hint="Net = incoming − outgoing"
+      calculation-help="Monthly incoming minus Monthly outgoing. Payout deductions are counted once as reduced income."
       hero
     />
     <UiKpiCard
       v-if="finance"
-      label="Recognized gross (month)"
-      :value="eur(finance.recognized_gross)"
-      hint="Allocated across occupied nights"
+      label="Recognized incoming (month)"
+      :value="eur(finance.recognized_incoming)"
+      calculation-help="Payout Net allocated over check-in-inclusive, checkout-exclusive stay nights in the calendar month. Paid cancellations and no-shows count in the scheduled check-in month; invalid stay dates are excluded."
     />
     <UiKpiCard
       v-if="upcomingStays"

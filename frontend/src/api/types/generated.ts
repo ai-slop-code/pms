@@ -1520,7 +1520,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** List payout-backed gross revenue recognized across stay nights. */
+        /** List payout-backed Net recognized across stay nights. */
         get: {
             parameters: {
                 query?: {
@@ -1534,7 +1534,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Monthly gross revenue recognition report. */
+                /** @description Monthly Net revenue recognition report. */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -2053,7 +2053,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Return property profile and integration settings. */
         get: {
             parameters: {
                 query?: never;
@@ -2065,12 +2065,14 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Property settings. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["PropertySettingsResponse"];
+                    };
                 };
             };
         };
@@ -2079,7 +2081,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Registered backend write operation; request and response schemas remain module-specific. */
+        /** Update property profile settings. */
         patch: {
             parameters: {
                 query?: never;
@@ -2089,15 +2091,22 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PropertySettingsPatchRequest"];
+                };
+            };
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Updated property settings. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["PropertySettingsResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
             };
         };
         trace?: never;
@@ -3839,7 +3848,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Registered backend read operation; response schema remains module-specific. */
+        /** Return payout-date cashflow and monthly revenue summary. */
         get: {
             parameters: {
                 query?: never;
@@ -3851,13 +3860,17 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Response emitted by the registered backend handler. */
-                default: {
+                /** @description Finance summary for the selected property and month. */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["FinanceSummaryResponse"];
+                    };
                 };
+                400: components["responses"]["BadRequest"];
+                403: components["responses"]["Forbidden"];
             };
         };
         put?: never;
@@ -5425,12 +5438,72 @@ export interface components {
             has_payout_data: boolean;
             has_statement_data: boolean;
         };
+        FinanceSummaryResponse: {
+            month: string;
+            /**
+             * Format: int64
+             * @description All-time signed payout Net plus other incoming transactions.
+             */
+            total_incoming_cents: number;
+            /**
+             * Format: int64
+             * @description All-time outgoing transactions excluding booking payouts.
+             */
+            total_outgoing_cents: number;
+            /** Format: int64 */
+            monthly_incoming_cents: number;
+            /** Format: int64 */
+            monthly_outgoing_cents: number;
+            /** Format: int64 */
+            monthly_net_cents: number;
+            /**
+             * Format: int64
+             * @description All-time signed canonical payout Net selected by payout date.
+             */
+            property_income_cents: number;
+            /**
+             * Format: int64
+             * @description Signed canonical payout Net selected by payout date.
+             */
+            monthly_property_income_cents: number;
+            /** Format: int64 */
+            cleaner_expense_cents: number;
+            /** Format: double */
+            cleaner_margin: number;
+            breakdown: {
+                /** Format: int64 */
+                category_id?: number | null;
+                category_code?: string | null;
+                category_title?: string | null;
+                /** Format: int64 */
+                incoming_cents: number;
+                /** Format: int64 */
+                outgoing_cents: number;
+            }[];
+            generated_entry_sync: {
+                /** @enum {string} */
+                status: "not_synced" | "synced";
+                /** Format: date-time */
+                first_synced_at?: string | null;
+                /** Format: int64 */
+                first_synced_by?: number | null;
+                /** Format: date-time */
+                last_synced_at?: string | null;
+                /** Format: int64 */
+                last_synced_by?: number | null;
+                last_synced_reason?: string | null;
+            };
+        };
         FinanceRevenueRecognitionResponse: {
             month: string;
             /** Format: int64 */
             gross_revenue_cents: number;
             /** Format: int64 */
             recognized_booking_net_cents: number;
+            /** Format: int64 */
+            late_checkout_incoming_cents: number;
+            /** Format: int64 */
+            recognized_incoming_cents: number;
             /** Format: int64 */
             other_incoming_cents: number;
             /** Format: int64 */
@@ -5491,10 +5564,14 @@ export interface components {
             check_out_date: string;
             /** Format: int64 */
             gross_cents: number;
+            /** Format: int64 */
+            net_cents: number;
             stay_nights: number;
             recognized_nights: number;
             /** Format: int64 */
             recognized_gross_cents: number;
+            /** Format: int64 */
+            recognized_net_cents: number;
             unmatched: boolean;
             cancelled: boolean;
             no_show: boolean;
@@ -5992,7 +6069,8 @@ export interface components {
                 incoming: number;
                 outgoing: number;
                 net: number;
-                recognized_gross: number;
+                recognized_incoming: number;
+                recognized_gross?: number;
             };
             recent_invoices?: components["schemas"]["DashboardInvoice"][];
         };
@@ -6089,6 +6167,24 @@ export interface components {
             address?: string | null;
             timezone?: string | null;
         };
+        PropertySettingsResponse: {
+            profile: {
+                default_check_in_time: string;
+                default_check_out_time: string;
+                /** @default 13:00 */
+                late_check_out_time: string;
+            };
+            integrations: {
+                booking_ics_configured?: boolean;
+                nuki_configured?: boolean;
+            };
+        };
+        PropertySettingsPatchRequest: {
+            profile?: {
+                late_check_out_time?: string;
+            };
+            secrets?: Record<string, never>;
+        };
         OccupancyCalendar: {
             /** Format: int64 */
             property_id: number;
@@ -6134,6 +6230,7 @@ export interface components {
             /** @enum {string} */
             status: "active" | "cancelled" | "archived";
             cleaning_required: boolean;
+            late_checkout?: boolean;
             /** @enum {string} */
             review_status: "confirmed" | "needs_review" | "rejected";
             review_reason?: string;
@@ -6205,6 +6302,8 @@ export interface components {
             /** @enum {string} */
             stay_type: "booking_com" | "external" | "maintenance" | "personal_use";
             cleaning_required?: boolean;
+            /** @description Only supported for booking_com and external stays. */
+            late_checkout?: boolean;
         };
         CleaningCalendarEvent: {
             /** Format: int64 */
@@ -6264,6 +6363,7 @@ export interface components {
             /** @enum {string} */
             stay_type?: "booking_com" | "external" | "maintenance" | "personal_use";
             cleaning_required?: boolean;
+            late_checkout?: boolean;
             /** Format: int64 */
             manual_revenue_cents?: number | null;
             manual_revenue_currency?: string | null;

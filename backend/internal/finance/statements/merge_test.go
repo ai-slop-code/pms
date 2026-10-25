@@ -149,33 +149,36 @@ func TestMerge_IdempotentReupload(t *testing.T) {
 	}
 }
 
-func TestMerge_CommissionAdjustmentIsAdditive(t *testing.T) {
+func TestMerge_CommissionAdjustmentLeavesOriginalPayoutUnchanged(t *testing.T) {
 	first := Merge(nil, mkPayoutRow("X1", "ok", 5716))
 	cb := first.Result
 	adjustment := Row{Source: SourcePayout, ReferenceNumber: "X1", RowType: "Commission adjustment", AmountCents: -318, NetCents: -318}
 	out := Merge(&cb, adjustment)
-	if out.Result.CommissionCents == nil || *out.Result.CommissionCents != 1818 {
-		t.Fatalf("commission = %v, want 1818", out.Result.CommissionCents)
+	if out.Action != ActionUnchanged {
+		t.Fatalf("action = %v, want unchanged", out.Action)
 	}
-	if out.Result.NetCents == nil || *out.Result.NetCents != 5398 {
-		t.Fatalf("net = %v, want 5398", out.Result.NetCents)
+	if out.Result.CommissionCents == nil || *out.Result.CommissionCents != 1500 {
+		t.Fatalf("commission = %v, want 1500", out.Result.CommissionCents)
 	}
-	if out.Result.AmountCents == nil || *out.Result.AmountCents != 10000 {
-		t.Fatalf("amount changed: %v", out.Result.AmountCents)
+	if out.Result.NetCents == nil || *out.Result.NetCents != 5716 {
+		t.Fatalf("net = %v, want 5716", out.Result.NetCents)
 	}
 }
 
-func TestMerge_RefundReducesAmountAndNet(t *testing.T) {
+func TestMerge_RefundLeavesOriginalPayoutUnchanged(t *testing.T) {
 	first := Merge(nil, mkPayoutRow("X1", "ok", 5158))
 	cb := first.Result
 	cb.AmountCents = intPtr(6405)
 	refund := Row{Source: SourcePayout, ReferenceNumber: "X1", RowType: "Reservation", AmountCents: -2848, NetCents: -2848}
 	out := Merge(&cb, refund)
-	if out.Result.AmountCents == nil || *out.Result.AmountCents != 3557 {
-		t.Fatalf("amount = %v, want 3557", out.Result.AmountCents)
+	if out.Action != ActionUnchanged {
+		t.Fatalf("action = %v, want unchanged", out.Action)
 	}
-	if out.Result.NetCents == nil || *out.Result.NetCents != 2310 {
-		t.Fatalf("net = %v, want 2310", out.Result.NetCents)
+	if out.Result.AmountCents == nil || *out.Result.AmountCents != 6405 {
+		t.Fatalf("amount = %v, want 6405", out.Result.AmountCents)
+	}
+	if out.Result.NetCents == nil || *out.Result.NetCents != 5158 {
+		t.Fatalf("net = %v, want 5158", out.Result.NetCents)
 	}
 }
 

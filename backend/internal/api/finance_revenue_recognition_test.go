@@ -49,6 +49,12 @@ func TestFinanceRevenueRecognitionEndpoint_ReturnsProratedGross(t *testing.T) {
 	if _, err := st.DB.ExecContext(ctx, `UPDATE finance_bookings SET has_payout_data = 1 WHERE property_id = ? AND reference_number = 'REVENUE-API'`, prop.ID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.CreateFinanceTransaction(ctx, &store.FinanceTransaction{
+		PropertyID: prop.ID, TransactionDate: time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC),
+		Direction: "incoming", AmountCents: 1000, SourceType: "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := &Server{Store: st, SessionTTL: time.Hour}
 	ts := httptest.NewServer(srv.Routes())
@@ -76,7 +82,9 @@ func TestFinanceRevenueRecognitionEndpoint_ReturnsProratedGross(t *testing.T) {
 		RecognizedNetCents        int `json:"recognized_net_cents"`
 		Bookings                  []struct {
 			ReferenceNumber      string `json:"reference_number"`
+			NetCents             int    `json:"net_cents"`
 			RecognizedGrossCents int    `json:"recognized_gross_cents"`
+			RecognizedNetCents   int    `json:"recognized_net_cents"`
 			Unmatched            bool   `json:"unmatched"`
 		} `json:"bookings"`
 		Excluded []json.RawMessage `json:"excluded_bookings"`
@@ -84,7 +92,7 @@ func TestFinanceRevenueRecognitionEndpoint_ReturnsProratedGross(t *testing.T) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.GrossRevenueCents != 6666 || payload.RecognizedBookingNetCents != 5333 || payload.OtherIncomingCents != 0 || payload.OtherOutgoingCents != 0 || payload.RecognizedNetCents != 5333 || len(payload.Bookings) != 1 || payload.Bookings[0].RecognizedGrossCents != 6666 || payload.Bookings[0].Unmatched {
+	if payload.GrossRevenueCents != 6666 || payload.RecognizedBookingNetCents != 5333 || payload.OtherIncomingCents != 1000 || payload.OtherOutgoingCents != 0 || payload.RecognizedNetCents != 5333 || len(payload.Bookings) != 1 || payload.Bookings[0].NetCents != 8000 || payload.Bookings[0].RecognizedGrossCents != 6666 || payload.Bookings[0].RecognizedNetCents != 5333 || payload.Bookings[0].Unmatched {
 		t.Fatalf("unexpected response: %+v", payload)
 	}
 	if payload.Excluded == nil {

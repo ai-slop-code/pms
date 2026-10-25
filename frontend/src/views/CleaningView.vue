@@ -487,6 +487,7 @@ watch([pid, month], () => {
           :value="eur(summary.adjustments_total_cents)"
           :tone="summary.adjustments_total_cents < 0 ? 'danger' : 'default'"
         />
+        <UiKpiCard label="Late checkout bonuses" :value="eur(summary.late_checkout_bonus_cents)" />
         <UiKpiCard label="Final salary" :value="eur(summary.final_salary_cents)" hero tone="success" />
       </div>
 

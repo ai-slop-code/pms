@@ -489,11 +489,14 @@ func (s *Service) MaintainNamedStay(ctx context.Context, propertyID, stayID int6
 	if s.Client == nil {
 		s.Client = NewClient(Config{})
 	}
-	_, _, cred, loc, inH, inM, outH, outM, err := s.loadNukiSyncContext(ctx, propertyID, true)
+	_, profile, cred, loc, inH, inM, outH, outM, err := s.loadNukiSyncContext(ctx, propertyID, true)
 	if err != nil {
 		return err
 	}
-	nukiStay := store.NukiStay{NamedStayID: stay.ID, PropertyID: propertyID, DisplayName: stay.DisplayName, CheckInDate: stay.CheckInDate, CheckOutDate: stay.CheckOutDate}
+	nukiStay := store.NukiStay{NamedStayID: stay.ID, PropertyID: propertyID, DisplayName: stay.DisplayName, CheckInDate: stay.CheckInDate, CheckOutDate: stay.CheckOutDate, LateCheckout: stay.LateCheckout}
+	if stay.LateCheckout && profile != nil {
+		outH, outM = parseHM(profile.LateCheckOutTime, 13, 0)
+	}
 	from, until := namedStayWindow(nukiStay, loc, inH, inM, outH, outM)
 	label := buildGuestCodeLabelFromName(stay.DisplayName)
 	if len([]rune(label)) > 32 {
@@ -543,6 +546,24 @@ func (s *Service) MaintainNamedStay(ctx context.Context, propertyID, stayID int6
 		return err
 	}
 	_ = s.Store.MarkNamedStayNukiGeneration(ctx, propertyID, stayID, store.NukiGenerationGenerated, "")
+	return nil
+}
+
+// MaintainLateCheckoutStays refreshes existing credentials only. It never
+// provisions a missing code, preserving the Nuki Access creation boundary.
+func (s *Service) MaintainLateCheckoutStays(ctx context.Context, propertyID int64) error {
+	stays, err := s.Store.ListNamedStaysForNukiSync(ctx, propertyID)
+	if err != nil {
+		return err
+	}
+	for _, stay := range stays {
+		if !stay.LateCheckout {
+			continue
+		}
+		if err := s.MaintainNamedStay(ctx, propertyID, stay.NamedStayID, "late_checkout_setting"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -605,7 +626,7 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 	stats := runStats{}
 	var selectedErr error
 
-	_, _, cred, loc, inH, inM, outH, outM, err := s.loadNukiSyncContext(ctx, propertyID, true)
+	_, profile, cred, loc, inH, inM, outH, outM, err := s.loadNukiSyncContext(ctx, propertyID, true)
 	if err != nil {
 		msg := truncateErr(err.Error())
 		_ = s.finishRun(ctx, propertyID, runID, "failure", &msg, stats)
@@ -625,6 +646,9 @@ func (s *Service) generateCodesInternal(ctx context.Context, propertyID int64, t
 	for _, stay := range stays {
 		if stay.NamedStayID != *onlyStayID {
 			continue
+		}
+		if stay.LateCheckout && profile != nil {
+			outH, outM = parseHM(profile.LateCheckOutTime, 13, 0)
 		}
 		selected = true
 		from, until := namedStayWindow(stay, loc, inH, inM, outH, outM)

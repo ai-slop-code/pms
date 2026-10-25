@@ -658,14 +658,58 @@ func TestComputeFinanceSummary_CalculatesCleanerMargin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.MonthlyPropertyIncomeCents != 100000 {
-		t.Fatalf("monthly property income = %d, want 100000", sum.MonthlyPropertyIncomeCents)
+	if sum.MonthlyPropertyIncomeCents != 0 {
+		t.Fatalf("monthly property income = %d, want 0 without a payout booking", sum.MonthlyPropertyIncomeCents)
 	}
 	if sum.CleanerExpenseCents != 40000 {
 		t.Fatalf("cleaner expense = %d, want 40000", sum.CleanerExpenseCents)
 	}
-	if sum.CleanerMargin < 0.399 || sum.CleanerMargin > 0.401 {
-		t.Fatalf("cleaner margin = %f, want ~0.4", sum.CleanerMargin)
+	if sum.CleanerMargin != 0 {
+		t.Fatalf("cleaner margin = %f, want 0 when payout income is absent", sum.CleanerMargin)
+	}
+}
+
+func TestComputeFinanceSummary_UsesCanonicalPayoutNetAndExcludesPayoutTransactions(t *testing.T) {
+	st := &Store{DB: testutil.OpenTestDB(t)}
+	ctx := context.Background()
+	pid := setupFinanceProperty(t, st)
+	stay := createFinanceNamedStay(t, st, pid, "SUMMARY-NET", "2026-04-05", "2026-04-06")
+	payoutDate := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	payout := &FinanceBookingPayout{
+		PropertyID: pid, ReferenceNumber: "SUMMARY-NET", NetCents: 10000,
+		PayoutDate: payoutDate, NamedStayID: sql.NullInt64{Int64: stay.ID, Valid: true},
+	}
+	if err := st.CreateBookingPayout(ctx, payout); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `UPDATE finance_bookings SET has_payout_data = 1 WHERE property_id = ? AND reference_number = ?`, pid, payout.ReferenceNumber); err != nil {
+		t.Fatal(err)
+	}
+	created, err := st.GetBookingPayoutByReference(ctx, pid, payout.ReferenceNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertBookingFinanceTransaction(ctx, pid, created.ID, payout.ReferenceNumber, payout.NetCents, payoutDate, categoryIDByCode(t, st, pid, "booking_income"), "SUMMARY-PAYOUT"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tx := range []*FinanceTransaction{
+		{PropertyID: pid, TransactionDate: payoutDate, Direction: "incoming", AmountCents: 2000, SourceType: "manual"},
+		{PropertyID: pid, TransactionDate: payoutDate, Direction: "outgoing", AmountCents: 3000, SourceType: "manual"},
+	} {
+		if _, err := st.CreateFinanceTransaction(ctx, tx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	summary, err := st.ComputeFinanceSummary(ctx, pid, "2026-04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.MonthlyPropertyIncomeCents != 10000 || summary.MonthlyIncomingCents != 12000 || summary.MonthlyOutgoingCents != 3000 || summary.MonthlyNetCents != 9000 {
+		t.Fatalf("summary=%+v, want payout Net 10000 plus other incoming 2000 minus outgoing 3000", summary)
+	}
+	if summary.TotalIncomingCents != 12000 || summary.TotalOutgoingCents != 3000 {
+		t.Fatalf("lifetime totals=%d/%d, want 12000/3000", summary.TotalIncomingCents, summary.TotalOutgoingCents)
 	}
 }
 
@@ -685,6 +729,9 @@ func TestUpsertBookingFinanceTransaction_UsesCanonicalDirections(t *testing.T) {
 		NamedStayID:     sql.NullInt64{Int64: stay.ID, Valid: true},
 	}
 	if err := st.CreateBookingPayout(ctx, payout); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(ctx, `UPDATE finance_bookings SET has_payout_data = 1 WHERE property_id = ? AND reference_number = ?`, pid, payout.ReferenceNumber); err != nil {
 		t.Fatal(err)
 	}
 	created, err := st.GetBookingPayoutByReference(ctx, pid, payout.ReferenceNumber)
@@ -709,7 +756,7 @@ func TestUpsertBookingFinanceTransaction_UsesCanonicalDirections(t *testing.T) {
 		t.Fatal(err)
 	}
 	if summary.MonthlyIncomingCents != 12345 || summary.MonthlyPropertyIncomeCents != 12345 {
-		t.Fatalf("summary incoming=%d property_income=%d, want 12345", summary.MonthlyIncomingCents, summary.MonthlyPropertyIncomeCents)
+		t.Fatalf("summary incoming=%d property_income=%d, want canonical payout Net 12345", summary.MonthlyIncomingCents, summary.MonthlyPropertyIncomeCents)
 	}
 }
 
